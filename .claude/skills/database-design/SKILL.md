@@ -83,7 +83,7 @@ The latest row per `messageId` says whether the message is bookmarked; no rows m
 
 ## Identifiers are generated in application code
 
-SQLite has no `gen_random_uuid()`. Primary keys are `text` columns declared `primaryKey().notNull()` with **no default**, and the value comes from `crypto.randomUUID()` in the insert helper. A migration never invents an id-generating default, and no insert site may omit the id.
+SQLite has no `gen_random_uuid()`. Primary keys are `text` columns declared `primaryKey().notNull()` with **no default**, and the value comes from `newId()` in the insert helper — a monotonic UUIDv7, so ids issued by one process sort in issue order. That is what keeps the latest-event-wins `id desc` tie-break deterministic when two events land in the same millisecond; `crypto.randomUUID()` would decide those ties by chance. A migration never invents an id-generating default, and no insert site may omit the id.
 
 ## Timestamps are ISO-8601 UTC text
 
