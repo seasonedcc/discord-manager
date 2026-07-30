@@ -173,11 +173,13 @@ describe('sendMessage', () => {
     expect(skips[0].reason).toBe('channel_not_found')
   })
 
-  it('records the failure and surfaces it when Discord refuses', async () => {
+  it('reports a refused send as failed without repeating what Discord said', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
 
-    const result = await sendMessage(refusingTransport('Missing Permissions'))(
+    const result = await fromSuccess(
+      sendMessage(refusingTransport('Missing Permissions'))
+    )(
       { channelId: channel.id, content: 'this will not land' },
       await ownerContext({ guildId: guild.id })
     )
@@ -193,11 +195,15 @@ describe('sendMessage', () => {
       .where('messageSendRequests.channelId', '=', channel.id)
       .execute()
 
-    expect(result.success).toBe(false)
-    if (result.success) throw new Error('expected a failure')
-    expect(result.errors[0].message).toBe('Missing Permissions')
+    expect(result.send).toMatchObject({
+      requestId: failures[0].messageSendRequestId,
+      status: 'failed',
+      ...messageSendStatusCopy.failed,
+    })
     expect(failures).toHaveLength(1)
     expect(failures[0].errorMessage).toBe('Missing Permissions')
+    expect(JSON.stringify(result)).not.toContain('Missing Permissions')
+    expect(JSON.stringify(result)).not.toContain('errorMessage')
   })
 
   it('fails when no channel with that id was ever ingested', async () => {

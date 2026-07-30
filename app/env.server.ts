@@ -10,6 +10,7 @@ const environmentSchema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1),
   DISCORD_OWNER_USER_ID: z.string().min(1),
   DISCORD_GUILD_ID: z.string().min(1),
+  DISCORD_API_BASE_URL: z.string().default('https://discord.com/api'),
 })
 
 const getEnvironment = makeTypedEnv(environmentSchema, { transform: camelKeys })

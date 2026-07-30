@@ -13,7 +13,9 @@ const postThroughDiscord: MessageSendTransport = async ({
   discordChannelId,
   replyToDiscordMessageId,
 }) => {
-  const rest = new REST().setToken(env().discordBotToken)
+  const rest = new REST({ api: env().discordApiBaseUrl }).setToken(
+    env().discordBotToken
+  )
 
   const message = (await rest.post(Routes.channelMessages(discordChannelId), {
     body: {

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "discord-manager": {
+      "command": "pnpm",
+      "args": ["run", "mcp"]
+    }
+  }
+}

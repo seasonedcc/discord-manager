@@ -53,7 +53,7 @@ const messageSendStatusCopy = {
   failed: {
     summary: 'Discord rejected the message, so it was never posted.',
     nextAction:
-      'Give the bot Send Messages permission in that channel, then send it again.',
+      'Give the bot Send Messages permission in that channel, check that DISCORD_BOT_TOKEN is still valid, then send it again.',
   },
   pending: {
     summary: 'The message is on its way to Discord.',
