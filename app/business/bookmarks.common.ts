@@ -59,7 +59,6 @@ const snoozeBookmarkSchema = z.object({
 
 export {
   addBookmarkByLinkSchema,
-  bookmarkListLimit,
   listBookmarksSchema,
   resolveBookmarkSchema,
   snoozeBookmarkSchema,
