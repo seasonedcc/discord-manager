@@ -129,6 +129,36 @@ describe('addBookmarkByLink', () => {
     expect(additions).toHaveLength(2)
   })
 
+  it('bookmarks a link copied from the canary client', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    const { bookmark } = await fromSuccess(addBookmarkByLink)(
+      {
+        messageLink: `https://canary.discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
+      },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmark.messageId).toBe(message.id)
+  })
+
+  it('bookmarks a link copied from the old discordapp.com host', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    const { bookmark } = await fromSuccess(addBookmarkByLink)(
+      {
+        messageLink: `https://discordapp.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
+      },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmark.messageId).toBe(message.id)
+  })
+
   it('rejects anything that is not a Discord message link', async () => {
     const guild = await createGuild()
 
@@ -141,11 +171,11 @@ describe('addBookmarkByLink', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'Use a Discord message link that looks like https://discord.com/channels/<server>/<channel>/<message>'
+      'That is not a Discord message link. Right-click the message in Discord, choose Copy Message Link, and pass that — it looks like https://discord.com/channels/<server>/<channel>/<message>.'
     )
   })
 
-  it('rejects a link whose ids are not snowflakes', async () => {
+  it('tells a link with the right shape but the wrong ids apart', async () => {
     const guild = await createGuild()
 
     const result = await addBookmarkByLink(
@@ -157,7 +187,7 @@ describe('addBookmarkByLink', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'Use a Discord message link that looks like https://discord.com/channels/<server>/<channel>/<message>'
+      'That message link carries something other than Discord ids. Copy it again from Discord without editing the numbers.'
     )
   })
 
@@ -181,7 +211,7 @@ describe('addBookmarkByLink', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'That link points at a different Discord server than this deployment manages'
+      'That link points at a different Discord server than this deployment manages. Pick a message from the server this deployment manages.'
     )
   })
 
