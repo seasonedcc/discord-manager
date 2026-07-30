@@ -6,7 +6,7 @@ import { ownerContext, ownerContextSchema } from '~/business/auth.server'
 import { db } from '~/db/db.server'
 import type { DB } from '~/db/types'
 import { newId } from '~/framework/db.server'
-import { makeJob } from '~/framework/scheduler.server'
+import { makeCronJob, makeJob } from '~/framework/scheduler.server'
 import {
   type BackfilledMessage,
   type FetchChannelHistory,
@@ -14,6 +14,7 @@ import {
   backfillPageSize,
   bookmarkReactionEmoji,
   discordHistoryBeginningSnowflake,
+  gatewayHeartbeatIntervalMinutes,
   skipped,
 } from './ingestion.common'
 
@@ -49,6 +50,8 @@ const recordChannelSnapshotSchema = observedChannelSchema
 const recordGatewayConnectionSchema = z.object({})
 
 const recordGatewayDisconnectionSchema = z.object({})
+
+const recordGatewayHeartbeatSchema = z.object({})
 
 const recordIncomingMessageSchema = z.object({
   author: observedAuthorSchema,
@@ -448,6 +451,19 @@ const recordGatewayDisconnection = applySchema(
   }
 })
 
+const recordGatewayHeartbeat = applySchema(
+  recordGatewayHeartbeatSchema,
+  ingestionContextSchema
+)(async () => {
+  const heartbeat = await db()
+    .insertInto('gatewayHeartbeats')
+    .values({ id: newId() })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+
+  return { gatewayHeartbeatId: heartbeat.id, outcome: 'recorded' as const }
+})
+
 const recordIncomingMessage = applySchema(
   recordIncomingMessageSchema,
   ingestionContextSchema
@@ -776,6 +792,14 @@ const backfillChannel = makeJob(
   }
 )
 
+const beatGatewayHeartbeat = makeCronJob(
+  'beatGatewayHeartbeat',
+  gatewayHeartbeatIntervalMinutes * 60_000,
+  async () => {
+    await fromSuccess(recordGatewayHeartbeat)({}, ownerContext())
+  }
+)
+
 const backfillIngestedChannels = makeJob(
   'backfillIngestedChannels',
   async ({
@@ -797,6 +821,7 @@ const backfillIngestedChannels = makeJob(
 export {
   backfillChannel,
   backfillIngestedChannels,
+  beatGatewayHeartbeat,
   listBackfillableChannels,
   listBackfillableChannelsSchema,
   recordChannelRemoval,
@@ -807,6 +832,8 @@ export {
   recordGatewayConnectionSchema,
   recordGatewayDisconnection,
   recordGatewayDisconnectionSchema,
+  recordGatewayHeartbeat,
+  recordGatewayHeartbeatSchema,
   recordIncomingMessage,
   recordIncomingMessageSchema,
   recordMessageDeletion,

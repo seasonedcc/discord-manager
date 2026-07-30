@@ -35,8 +35,11 @@ const backfillStallThresholdMinutes = 15
 
 const discordHistoryBeginningSnowflake = '0'
 
-// A dropped shard reconnects well inside five minutes, so a disconnection still
-// standing after that means nothing is bringing the link back on its own.
+const gatewayHeartbeatIntervalMinutes = 1
+
+// A dropped shard reconnects well inside five minutes, and the daemon writes a
+// heartbeat every minute, so five minutes of silence means nothing is bringing
+// the link back on its own — or the daemon itself is gone.
 const gatewaySilenceThresholdMinutes = 5
 
 function gatewaySilenceStartedAt(observedAt: string) {
@@ -46,22 +49,23 @@ function gatewaySilenceStartedAt(observedAt: string) {
 }
 
 function deriveGatewayActivity({
-  lastConnectedAt,
+  lastAliveAt,
   lastDisconnectedAt,
   observedAt,
 }: {
-  lastConnectedAt: string | null
+  lastAliveAt: string | null
   lastDisconnectedAt: string | null
   observedAt: string
 }): GatewayActivity {
-  if (!lastConnectedAt) return 'never'
-  if (!lastDisconnectedAt || lastDisconnectedAt <= lastConnectedAt) {
-    return 'receiving'
-  }
+  if (!lastAliveAt) return 'never'
 
-  return lastDisconnectedAt < gatewaySilenceStartedAt(observedAt)
-    ? 'quiet'
-    : 'receiving'
+  const silenceStartedAt = gatewaySilenceStartedAt(observedAt)
+  const newestSignal =
+    lastDisconnectedAt && lastDisconnectedAt > lastAliveAt
+      ? lastDisconnectedAt
+      : lastAliveAt
+
+  return newestSignal < silenceStartedAt ? 'quiet' : 'receiving'
 }
 
 function skipped(reason: IngestionSkipReason) {
@@ -75,6 +79,7 @@ export {
   bookmarkReactionEmoji,
   deriveGatewayActivity,
   discordHistoryBeginningSnowflake,
+  gatewayHeartbeatIntervalMinutes,
   gatewaySilenceThresholdMinutes,
   skipped,
 }

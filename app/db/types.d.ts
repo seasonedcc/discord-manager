@@ -129,6 +129,11 @@ export interface GatewayDisconnections {
   id: string;
 }
 
+export interface GatewayHeartbeats {
+  createdAt: Generated<string>;
+  id: string;
+}
+
 export interface Guilds {
   createdAt: Generated<string>;
   discordGuildId: string;
@@ -225,6 +230,7 @@ export interface DB {
   channelTopicClearings: ChannelTopicClearings;
   gatewayConnections: GatewayConnections;
   gatewayDisconnections: GatewayDisconnections;
+  gatewayHeartbeats: GatewayHeartbeats;
   guilds: Guilds;
   memberDetailRevisions: MemberDetailRevisions;
   members: Members;

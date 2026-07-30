@@ -46,14 +46,12 @@ const gatewayActivityCopy = {
       'Run the ingest daemon with pnpm run ingest, and check DISCORD_BOT_TOKEN and DISCORD_GUILD_ID if it cannot connect.',
   },
   quiet: {
-    summary:
-      'The bot dropped off Discord long enough that nothing is bringing the connection back on its own.',
+    summary: 'The bot has been off Discord for more than five minutes.',
     nextAction:
-      'Restart the ingest daemon with pnpm run ingest, then read this status again.',
+      'Check that the ingest daemon is still running, and start it again with pnpm run ingest.',
   },
   receiving: {
-    summary:
-      'The bot is connected to Discord and recording messages as they arrive.',
+    summary: 'The bot was connected and recording as of moments ago.',
     nextAction: 'Nothing to fix — catch up on messages whenever you like.',
   },
 } satisfies Record<GatewayActivity, IngestionGuidance>

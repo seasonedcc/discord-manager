@@ -59,10 +59,32 @@ describe('readIngestionStatus', () => {
 
     expect(ingestion.gateway).toEqual({
       activity: 'receiving',
+      lastAliveAt: '2099-06-03T00:00:00.000Z',
       lastConnectedAt: '2099-06-03T00:00:00.000Z',
       lastDisconnectedAt: '2099-06-02T00:00:00.000Z',
       ...gatewayActivityCopy.receiving,
     })
+  })
+
+  it('reads a heartbeat newer than the connection as the newest sign of life', async () => {
+    const guild = await createGuild()
+
+    await db()
+      .insertInto('gatewayConnections')
+      .values({ id: newId(), createdAt: '2099-06-03T00:00:00.000Z' })
+      .execute()
+    await db()
+      .insertInto('gatewayHeartbeats')
+      .values({ id: newId(), createdAt: '2099-06-04T00:00:00.000Z' })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.gateway.lastAliveAt).toBe('2099-06-04T00:00:00.000Z')
+    expect(ingestion.gateway.lastConnectedAt).toBe('2099-06-03T00:00:00.000Z')
   })
 
   it('counts the furthest a backfill walked, not whichever progress row it read last', async () => {

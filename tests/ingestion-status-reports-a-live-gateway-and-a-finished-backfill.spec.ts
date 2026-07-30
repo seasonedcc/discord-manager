@@ -21,6 +21,7 @@ type IngestionStatus = {
     }
     gateway: {
       activity: string
+      lastAliveAt: string | null
       lastConnectedAt: string | null
       lastDisconnectedAt: string | null
       nextAction: string
@@ -44,9 +45,10 @@ test('ingestion status reports a live gateway and a finished backfill', async ()
   assert.ok(
     ingestion.gateway.lastDisconnectedAt <= ingestion.gateway.lastConnectedAt
   )
+  assert.equal(ingestion.gateway.lastAliveAt, ingestion.gateway.lastConnectedAt)
   assert.equal(
     ingestion.gateway.summary,
-    'The bot is connected to Discord and recording messages as they arrive.'
+    'The bot was connected and recording as of moments ago.'
   )
   assert.equal(
     ingestion.gateway.nextAction,

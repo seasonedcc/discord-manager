@@ -149,6 +149,18 @@ export async function up(db: Kysely<any>): Promise<void> {
     .execute()
 
   await db.schema
+    .createTable('gatewayHeartbeats')
+    .addColumn('id', 'text', (col) => col.primaryKey().notNull())
+    .addColumn('createdAt', 'text', (col) => col.notNull().defaultTo(nowIso))
+    .execute()
+
+  await db.schema
+    .createIndex('gatewayHeartbeatsCreatedAtIndex')
+    .on('gatewayHeartbeats')
+    .columns(['createdAt desc'])
+    .execute()
+
+  await db.schema
     .createTable('gatewayDisconnections')
     .addColumn('id', 'text', (col) => col.primaryKey().notNull())
     .addColumn('createdAt', 'text', (col) => col.notNull().defaultTo(nowIso))
@@ -163,6 +175,7 @@ export async function up(db: Kysely<any>): Promise<void> {
 
 export async function down(db: Kysely<any>): Promise<void> {
   await db.schema.dropTable('gatewayDisconnections').execute()
+  await db.schema.dropTable('gatewayHeartbeats').execute()
   await db.schema.dropTable('gatewayConnections').execute()
   await db.schema.dropTable('backfillRunFailures').execute()
   await db.schema.dropTable('backfillRunCompletions').execute()

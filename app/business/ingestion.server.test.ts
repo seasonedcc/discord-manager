@@ -13,6 +13,7 @@ import {
   recordChannelSnapshot,
   recordGatewayConnection,
   recordGatewayDisconnection,
+  recordGatewayHeartbeat,
   recordIncomingMessage,
   recordMessageDeletion,
   recordMessageEdit,
@@ -595,6 +596,25 @@ describe('recordGatewayDisconnection', () => {
       .execute()
 
     expect(disconnections).toHaveLength(1)
+  })
+})
+
+describe('recordGatewayHeartbeat', () => {
+  it('records that the daemon is still alive', async () => {
+    const guild = await createGuild()
+
+    const result = await fromSuccess(recordGatewayHeartbeat)(
+      {},
+      ownerContextFor(guild)
+    )
+
+    const heartbeats = await db()
+      .selectFrom('gatewayHeartbeats')
+      .selectAll()
+      .where('id', '=', result.gatewayHeartbeatId)
+      .execute()
+
+    expect(heartbeats).toHaveLength(1)
   })
 })
 

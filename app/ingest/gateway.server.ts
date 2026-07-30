@@ -173,6 +173,13 @@ function registerGatewayListeners(
     await handleGatewayDisconnected()
   })
 
+  client.on(Events.ShardReady, async () => {
+    await handleGatewayConnected({
+      channels: observableChannels(client),
+      fetchChannelHistory,
+    })
+  })
+
   client.on(Events.ShardResume, async () => {
     await handleGatewayConnected({
       channels: observableChannels(client),
