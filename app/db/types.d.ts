@@ -149,6 +149,13 @@ export interface MessageSendFailures {
   messageSendRequestId: string;
 }
 
+export interface MessageSendRequestReplyTargets {
+  createdAt: Generated<string>;
+  id: string;
+  replyToMessageId: string;
+  requestId: string;
+}
+
 export interface MessageSendRequests {
   channelId: string;
   content: string;
@@ -184,6 +191,7 @@ export interface DB {
   messages: Messages;
   messageSendDeliveries: MessageSendDeliveries;
   messageSendFailures: MessageSendFailures;
+  messageSendRequestReplyTargets: MessageSendRequestReplyTargets;
   messageSendRequests: MessageSendRequests;
   messageSendSkips: MessageSendSkips;
 }

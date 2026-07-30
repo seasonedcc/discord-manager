@@ -1,5 +1,7 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { ownerCaps } from '~/business/auth.server'
 import { db } from '~/db/db.server'
+import { env } from '~/env.server'
 import { newId } from '~/framework/db.server'
 
 type ChannelAttributes = {
@@ -20,14 +22,50 @@ type MessageAttributes = {
   channelId?: string
   authorMemberId?: string
   content?: string
+  discordMessageId?: string
   discordCreatedAt?: string
+}
+
+type BookmarkedMessageAttributes = MessageAttributes & {
+  source?: 'reaction' | 'mcp'
+  bookmarkedAt?: string
+}
+
+type OwnerContextAttributes = {
+  guildId?: string
+  discordUserId?: string
+}
+
+const smallestSnowflake = 100000000000000000n
+const snowflakeRange = 900000000000000000n
+
+function snowflake() {
+  const entropy = randomBytes(8).readBigUInt64BE() % snowflakeRange
+
+  return (smallestSnowflake + entropy).toString()
 }
 
 async function createGuild() {
   return await db()
     .insertInto('guilds')
-    .values({ id: newId(), discordGuildId: randomUUID() })
+    .values({ id: newId(), discordGuildId: snowflake() })
     .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
+async function configuredGuild() {
+  const discordGuildId = env().discordGuildId
+
+  await db()
+    .insertInto('guilds')
+    .values({ id: newId(), discordGuildId })
+    .onConflict((oc) => oc.doNothing())
+    .execute()
+
+  return await db()
+    .selectFrom('guilds')
+    .selectAll()
+    .where('discordGuildId', '=', discordGuildId)
     .executeTakeFirstOrThrow()
 }
 
@@ -49,7 +87,7 @@ async function createChannel({
         .values({
           id: newId(),
           guildId: resolvedGuildId,
-          discordChannelId: randomUUID(),
+          discordChannelId: snowflake(),
         })
         .returningAll()
         .executeTakeFirstOrThrow()
@@ -80,7 +118,7 @@ async function createMember({
     .execute(async (trx) => {
       const member = await trx
         .insertInto('members')
-        .values({ id: newId(), discordUserId: randomUUID() })
+        .values({ id: newId(), discordUserId: snowflake() })
         .returningAll()
         .executeTakeFirstOrThrow()
 
@@ -97,6 +135,7 @@ async function createMessage({
   channelId,
   authorMemberId,
   content = `content-${randomUUID()}`,
+  discordMessageId = snowflake(),
   discordCreatedAt = new Date().toISOString(),
 }: MessageAttributes = {}) {
   const resolvedChannelId = channelId ?? (await createChannel()).id
@@ -111,7 +150,7 @@ async function createMessage({
           id: newId(),
           channelId: resolvedChannelId,
           authorMemberId: resolvedAuthorMemberId,
-          discordMessageId: randomUUID(),
+          discordMessageId,
           discordCreatedAt,
         })
         .returningAll()
@@ -126,4 +165,51 @@ async function createMessage({
     })
 }
 
-export { createChannel, createGuild, createMember, createMessage }
+async function createBookmarkedMessage({
+  source = 'reaction',
+  bookmarkedAt = new Date().toISOString(),
+  ...messageAttributes
+}: BookmarkedMessageAttributes = {}) {
+  const message = await createMessage(messageAttributes)
+
+  await db()
+    .insertInto('bookmarkAdditions')
+    .values({
+      id: newId(),
+      messageId: message.id,
+      source,
+      createdAt: bookmarkedAt,
+    })
+    .execute()
+
+  return message
+}
+
+async function ownerContext({
+  guildId,
+  discordUserId = snowflake(),
+}: OwnerContextAttributes = {}) {
+  const guild = guildId
+    ? await db()
+        .selectFrom('guilds')
+        .select('discordGuildId')
+        .where('id', '=', guildId)
+        .executeTakeFirstOrThrow()
+    : await configuredGuild()
+
+  return {
+    owner: { discordUserId, guildId: guild.discordGuildId },
+    ...ownerCaps(),
+  }
+}
+
+export {
+  configuredGuild,
+  createBookmarkedMessage,
+  createChannel,
+  createGuild,
+  createMember,
+  createMessage,
+  ownerContext,
+  snowflake,
+}
