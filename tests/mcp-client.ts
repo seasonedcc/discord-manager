@@ -95,6 +95,9 @@ async function startDiscordDouble() {
   const { port } = server.address() as AddressInfo
 
   return {
+    acceptSendsTo(discordChannelId: string) {
+      refusedChannelIds.delete(discordChannelId)
+    },
     baseUrl: `http://127.0.0.1:${port}`,
     refuseSendsTo(discordChannelId: string) {
       refusedChannelIds.add(discordChannelId)
