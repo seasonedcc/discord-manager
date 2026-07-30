@@ -1,6 +1,8 @@
 import { fromSuccess, isContextError, isInputError } from 'composable-functions'
 import type { MessageSendTransport } from '~/business/sending.common'
 import {
+  TransportRejectedError,
+  messageSendFailureCopy,
   messageSendSkipCopy,
   messageSendStallThresholdMinutes,
   messageSendStatusCopy,
@@ -30,6 +32,14 @@ function recordingTransport(discordMessageId = snowflake()) {
 }
 
 function refusingTransport(message: string) {
+  const transport: MessageSendTransport = async () => {
+    throw new TransportRejectedError(message)
+  }
+
+  return transport
+}
+
+function unreachableTransport(message: string) {
   const transport: MessageSendTransport = async () => {
     throw new Error(message)
   }
@@ -61,10 +71,66 @@ describe('sendMessage', () => {
         replyToDiscordMessageId: null,
       },
     ])
-    expect(send.status).toBe('delivered')
-    expect(send.summary).toBe(messageSendStatusCopy.delivered.summary)
+    expect(send).toMatchObject({
+      status: 'delivered',
+      jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${discordMessageId}`,
+      requestedAt: expect.any(String),
+      ...messageSendStatusCopy.delivered,
+    })
     expect(deliveries).toHaveLength(1)
     expect(deliveries[0].discordMessageId).toBe(discordMessageId)
+  })
+
+  it('never calls a delivered message a send failure when the store refuses it', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const transport: MessageSendTransport = async () => ({
+      discordMessageId: {} as unknown as string,
+    })
+
+    const result = await sendMessage(transport)(
+      { channelId: channel.id, content: 'delivered, then unrecordable' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    const failures = await db()
+      .selectFrom('messageSendFailures')
+      .innerJoin(
+        'messageSendRequests',
+        'messageSendRequests.id',
+        'messageSendFailures.messageSendRequestId'
+      )
+      .selectAll('messageSendFailures')
+      .where('messageSendRequests.channelId', '=', channel.id)
+      .execute()
+
+    expect(result.success).toBe(false)
+    expect(failures).toHaveLength(0)
+  })
+
+  it('classifies an unreachable Discord apart from a refusal', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+
+    const { send } = await fromSuccess(
+      sendMessage(unreachableTransport('fetch failed'))
+    )(
+      { channelId: channel.id, content: 'nobody answered' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    const failures = await db()
+      .selectFrom('messageSendFailures')
+      .selectAll()
+      .where('messageSendRequestId', '=', send.requestId)
+      .execute()
+
+    expect(send).toMatchObject({
+      status: 'failed',
+      ...messageSendFailureCopy.unreachable,
+    })
+    expect(failures).toHaveLength(1)
+    expect(failures[0].kind).toBe('unreachable')
   })
 
   it('records the reply target and passes it to the transport', async () => {
@@ -198,9 +264,10 @@ describe('sendMessage', () => {
     expect(result.send).toMatchObject({
       requestId: failures[0].messageSendRequestId,
       status: 'failed',
-      ...messageSendStatusCopy.failed,
+      ...messageSendFailureCopy.rejected,
     })
     expect(failures).toHaveLength(1)
+    expect(failures[0].kind).toBe('rejected')
     expect(failures[0].errorMessage).toBe('Missing Permissions')
     expect(JSON.stringify(result)).not.toContain('Missing Permissions')
     expect(JSON.stringify(result)).not.toContain('errorMessage')
@@ -283,9 +350,31 @@ describe('readMessageSendStatus', () => {
       requestId: send.requestId,
       status: 'delivered',
       discordMessageId,
+      jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${discordMessageId}`,
       reason: null,
       ...messageSendStatusCopy.delivered,
     })
+  })
+
+  it('reads a send issued before the configured server changed', async () => {
+    const guild = await createGuild()
+    const otherGuild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const { transport } = recordingTransport()
+
+    const { send } = await fromSuccess(sendMessage(transport))(
+      { channelId: channel.id, content: 'issued before the change' },
+      context
+    )
+
+    const status = await fromSuccess(readMessageSendStatus)(
+      { requestId: send.requestId },
+      await ownerContext({ guildId: otherGuild.id })
+    )
+
+    expect(status.send.requestId).toBe(send.requestId)
+    expect(status.send.status).toBe('delivered')
   })
 
   it('reads a skipped send with the reason and its guidance', async () => {
@@ -334,10 +423,30 @@ describe('readMessageSendStatus', () => {
 
     expect(status.send).toMatchObject({
       status: 'failed',
-      ...messageSendStatusCopy.failed,
+      ...messageSendFailureCopy.rejected,
     })
     expect(JSON.stringify(status)).not.toContain('errorMessage')
     expect(JSON.stringify(status)).not.toContain('Missing Permissions')
+  })
+
+  it('reads an unreachable Discord with its own guidance', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+
+    const { send } = await fromSuccess(
+      sendMessage(unreachableTransport('socket hang up'))
+    )({ channelId: channel.id, content: 'nobody answered' }, context)
+
+    const status = await fromSuccess(readMessageSendStatus)(
+      { requestId: send.requestId },
+      context
+    )
+
+    expect(status.send).toMatchObject({
+      status: 'failed',
+      ...messageSendFailureCopy.unreachable,
+    })
   })
 
   it('reads a request with no outcome yet as pending', async () => {

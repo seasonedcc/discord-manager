@@ -22,9 +22,9 @@ type SendStatus = {
   }
 }
 
-const refusalSummary = 'Discord rejected the message, so it was never posted.'
+const refusalSummary = 'Discord refused the message, so it was never posted.'
 const refusalNextAction =
-  'Give the bot Send Messages permission in that channel, check that DISCORD_BOT_TOKEN is still valid, then send it again.'
+  'Give the bot Send Messages (and Send Messages in Threads) in that channel and check DISCORD_BOT_TOKEN, then send it again.'
 
 test('a send Discord refuses comes back as guidance, not vendor noise', async () => {
   const { channels } = fixtures()

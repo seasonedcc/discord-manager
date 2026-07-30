@@ -187,6 +187,7 @@ export interface MessageSendFailures {
   createdAt: Generated<string>;
   errorMessage: string;
   id: string;
+  kind: string;
   messageSendRequestId: string;
 }
 

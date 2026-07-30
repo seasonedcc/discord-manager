@@ -3,6 +3,7 @@ import { sql } from 'kysely'
 
 const nowIso = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
 const messageSendSkipReason = sql`reason in ('channel_not_found', 'channel_not_in_guild', 'empty_content')`
+const messageSendFailureKind = sql`kind in ('rejected', 'unreachable')`
 
 export async function up(db: Kysely<any>): Promise<void> {
   await db.schema
@@ -42,6 +43,9 @@ export async function up(db: Kysely<any>): Promise<void> {
     .addColumn('id', 'text', (col) => col.primaryKey().notNull())
     .addColumn('messageSendRequestId', 'text', (col) =>
       col.notNull().references('messageSendRequests.id')
+    )
+    .addColumn('kind', 'text', (col) =>
+      col.notNull().check(messageSendFailureKind)
     )
     .addColumn('errorMessage', 'text', (col) => col.notNull())
     .addColumn('createdAt', 'text', (col) => col.notNull().defaultTo(nowIso))
