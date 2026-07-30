@@ -32,6 +32,21 @@ async function aWorkdayOfConversation({
     discordCreatedAt: clock.at(11),
   })
 
+  const replyPing = await feed.postMessage({
+    author: maya,
+    channel: engineering,
+    content: 'Reading it now — I will leave comments before lunch.',
+    discordCreatedAt: clock.at(11.5),
+    mentioning: [owner],
+  })
+
+  const suppressedPing = await feed.postMessage({
+    author: maya,
+    channel: engineering,
+    content: 'Comments are in, nothing blocking.',
+    discordCreatedAt: clock.at(11.8),
+  })
+
   const corrected = await feed.editMessage(
     await feed.postMessage({
       author: maya,
@@ -51,7 +66,7 @@ async function aWorkdayOfConversation({
     })
   )
 
-  return { corrected, mention, offsite, withdrawn }
+  return { corrected, mention, offsite, replyPing, suppressedPing, withdrawn }
 }
 
 export { aWorkdayOfConversation }

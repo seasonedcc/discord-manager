@@ -69,6 +69,7 @@ function backfilledMessage(
     content: `content-${randomUUID()}`,
     discordCreatedAt: new Date().toISOString(),
     discordMessageId: snowflake(),
+    mentionedDiscordUserIds: [],
     ...overrides,
   }
 }
@@ -114,6 +115,15 @@ function messageRevisionsOf(messageId: string) {
     .execute()
 }
 
+function mentionedUserIdsOf(messageRevisionId: string) {
+  return db()
+    .selectFrom('messageRevisionUserMentions')
+    .select('mentionedDiscordUserId')
+    .where('messageRevisionId', '=', messageRevisionId)
+    .orderBy('mentionedDiscordUserId', 'asc')
+    .execute()
+}
+
 describe('recordIncomingMessage', () => {
   it('records the channel, the author and the first revision of a new message', async () => {
     const guild = await createGuild()
@@ -129,6 +139,7 @@ describe('recordIncomingMessage', () => {
         content: 'the first thing said',
         discordCreatedAt: '2026-07-30T10:00:00.000Z',
         discordMessageId,
+        mentionedDiscordUserIds: [],
       },
       context
     )
@@ -157,6 +168,54 @@ describe('recordIncomingMessage', () => {
     expect(revisions[0].content).toBe('the first thing said')
   })
 
+  it('records every user Discord says the message mentions', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const pinged = snowflake()
+    const alsoPinged = snowflake()
+
+    const result = await fromSuccess(recordIncomingMessage)(
+      {
+        author: observedAuthor(),
+        channel: observedChannel(),
+        content: 'a reply that left the ping on',
+        discordCreatedAt: '2026-07-30T10:00:00.000Z',
+        discordMessageId: randomUUID(),
+        mentionedDiscordUserIds: [pinged, alsoPinged, pinged],
+      },
+      context
+    )
+
+    const revisions = await messageRevisionsOf(result.messageId)
+    const mentioned = await mentionedUserIdsOf(revisions[0].id)
+
+    expect(mentioned.map((row) => row.mentionedDiscordUserId)).toEqual(
+      [pinged, alsoPinged].sort()
+    )
+  })
+
+  it('records no mention when Discord says the message pinged nobody', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const quoted = snowflake()
+
+    const result = await fromSuccess(recordIncomingMessage)(
+      {
+        author: observedAuthor(),
+        channel: observedChannel(),
+        content: `a reply to <@${quoted}> with the ping suppressed`,
+        discordCreatedAt: '2026-07-30T10:00:00.000Z',
+        discordMessageId: randomUUID(),
+        mentionedDiscordUserIds: [],
+      },
+      context
+    )
+
+    const revisions = await messageRevisionsOf(result.messageId)
+
+    expect(await mentionedUserIdsOf(revisions[0].id)).toHaveLength(0)
+  })
+
   it('re-observes an already ingested message without adding a revision', async () => {
     const guild = await createGuild()
     const context = ownerContextFor(guild)
@@ -166,6 +225,7 @@ describe('recordIncomingMessage', () => {
       content: 'said once',
       discordCreatedAt: '2026-07-30T10:00:00.000Z',
       discordMessageId: randomUUID(),
+      mentionedDiscordUserIds: [],
     }
 
     const first = await fromSuccess(recordIncomingMessage)(message, context)
@@ -196,6 +256,7 @@ describe('recordIncomingMessage', () => {
         content: 'one',
         discordCreatedAt: '2026-07-30T10:00:00.000Z',
         discordMessageId: randomUUID(),
+        mentionedDiscordUserIds: [],
       },
       context
     )
@@ -206,6 +267,7 @@ describe('recordIncomingMessage', () => {
         content: 'two',
         discordCreatedAt: '2026-07-30T10:01:00.000Z',
         discordMessageId: randomUUID(),
+        mentionedDiscordUserIds: [],
       },
       context
     )
@@ -216,6 +278,7 @@ describe('recordIncomingMessage', () => {
         content: 'three',
         discordCreatedAt: '2026-07-30T10:02:00.000Z',
         discordMessageId: randomUUID(),
+        mentionedDiscordUserIds: [],
       },
       context
     )
@@ -247,6 +310,7 @@ describe('recordIncomingMessage', () => {
         content: 'nothing lands',
         discordCreatedAt: '2026-07-30T10:00:00.000Z',
         discordMessageId: randomUUID(),
+        mentionedDiscordUserIds: [],
       },
       { ...ownerContextFor(guild), canReadMessages: false }
     )
@@ -268,7 +332,11 @@ describe('recordMessageEdit', () => {
     })
 
     const result = await fromSuccess(recordMessageEdit)(
-      { content: 'after the edit', discordMessageId: message.discordMessageId },
+      {
+        content: 'after the edit',
+        discordMessageId: message.discordMessageId,
+        mentionedDiscordUserIds: [],
+      },
       context
     )
 
@@ -282,11 +350,74 @@ describe('recordMessageEdit', () => {
     )
   })
 
+  it('attaches the mention set Discord stamped on the edit to the new revision', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      content: 'nobody is named here',
+    })
+    const pinged = snowflake()
+
+    await fromSuccess(recordMessageEdit)(
+      {
+        content: `now it names <@${pinged}>`,
+        discordMessageId: message.discordMessageId,
+        mentionedDiscordUserIds: [pinged],
+      },
+      context
+    )
+
+    const [first, second] = await messageRevisionsOf(message.id)
+
+    expect(await mentionedUserIdsOf(first.id)).toHaveLength(0)
+    expect(
+      (await mentionedUserIdsOf(second.id)).map(
+        (row) => row.mentionedDiscordUserId
+      )
+    ).toEqual([pinged])
+  })
+
+  it('leaves the new revision unmentioned when the edit took the ping away', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const pinged = snowflake()
+    const message = await createMessage({
+      channelId: channel.id,
+      content: `please look <@${pinged}>`,
+      mentionedDiscordUserIds: [pinged],
+    })
+
+    await fromSuccess(recordMessageEdit)(
+      {
+        content: 'never mind, sorted it myself',
+        discordMessageId: message.discordMessageId,
+        mentionedDiscordUserIds: [],
+      },
+      context
+    )
+
+    const [first, second] = await messageRevisionsOf(message.id)
+
+    expect(
+      (await mentionedUserIdsOf(first.id)).map(
+        (row) => row.mentionedDiscordUserId
+      )
+    ).toEqual([pinged])
+    expect(await mentionedUserIdsOf(second.id)).toHaveLength(0)
+  })
+
   it('skips an edit of a message this deployment never ingested', async () => {
     const guild = await createGuild()
 
     const result = await fromSuccess(recordMessageEdit)(
-      { content: 'nowhere to land', discordMessageId: randomUUID() },
+      {
+        content: 'nowhere to land',
+        discordMessageId: randomUUID(),
+        mentionedDiscordUserIds: [],
+      },
       ownerContextFor(guild)
     )
 
@@ -305,6 +436,7 @@ describe('recordMessageEdit', () => {
       {
         content: 'from the wrong server',
         discordMessageId: message.discordMessageId,
+        mentionedDiscordUserIds: [],
       },
       ownerContextFor(anotherGuild)
     )
@@ -1104,6 +1236,55 @@ describe('runChannelBackfill', () => {
     expect(telemetry.progress[0].storedMessageCount).toBe(2)
     expect(telemetry.completions[0].fetchedMessageCount).toBe(2)
     expect(telemetry.completions[0].storedMessageCount).toBe(2)
+  })
+
+  it('records the mentions Discord stamped on the history it walked', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const pinged = snowflake()
+    const pinging = backfilledMessage({ mentionedDiscordUserIds: [pinged] })
+    const silent = backfilledMessage({ mentionedDiscordUserIds: [] })
+    const history = fakeChannelHistory([[pinging, silent]])
+
+    await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      context
+    )
+
+    const mentioned = await db()
+      .selectFrom('messages')
+      .innerJoin(
+        'messageRevisions',
+        'messageRevisions.messageId',
+        'messages.id'
+      )
+      .innerJoin(
+        'messageRevisionUserMentions',
+        'messageRevisionUserMentions.messageRevisionId',
+        'messageRevisions.id'
+      )
+      .select([
+        'messages.discordMessageId',
+        'messageRevisionUserMentions.mentionedDiscordUserId',
+      ])
+      .where('messages.channelId', '=', channel.id)
+      .execute()
+
+    expect(mentioned).toEqual([
+      {
+        discordMessageId: pinging.discordMessageId,
+        mentionedDiscordUserId: pinged,
+      },
+    ])
+    expect(
+      mentioned.filter(
+        ({ discordMessageId }) => discordMessageId === silent.discordMessageId
+      )
+    ).toHaveLength(0)
   })
 
   it('asks Discord for history after the newest message already stored', async () => {

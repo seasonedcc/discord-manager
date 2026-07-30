@@ -37,6 +37,7 @@ type ObservedMessageReference = {
 
 type ObservedEditedMessage = ObservedMessageReference & {
   content: string
+  mentionedDiscordUserIds: string[]
 }
 
 type ObservedReaction = ObservedMessageReference & {
@@ -61,6 +62,7 @@ async function handleMessageEdit(message: ObservedEditedMessage) {
     {
       content: message.content,
       discordMessageId: message.discordMessageId,
+      mentionedDiscordUserIds: message.mentionedDiscordUserIds,
     },
     ownerContext()
   )
@@ -240,6 +242,7 @@ function registerGatewayListeners(
       content: message.content,
       discordCreatedAt: message.createdAt.toISOString(),
       discordMessageId: message.id,
+      mentionedDiscordUserIds: [...message.mentions.users.keys()],
     })
   })
 
@@ -252,6 +255,7 @@ function registerGatewayListeners(
       content: message.content,
       discordGuildId: message.guildId,
       discordMessageId: message.id,
+      mentionedDiscordUserIds: [...message.mentions.users.keys()],
     })
   })
 

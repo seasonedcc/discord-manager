@@ -205,6 +205,13 @@ export interface MessageRevisions {
   messageId: string;
 }
 
+export interface MessageRevisionUserMentions {
+  createdAt: Generated<string>;
+  id: string;
+  mentionedDiscordUserId: string;
+  messageRevisionId: string;
+}
+
 export interface Messages {
   authorMemberId: string;
   channelId: string;
@@ -234,6 +241,13 @@ export interface MessageSendRequestReplyTargets {
   id: string;
   replyToMessageId: string;
   requestId: string;
+}
+
+export interface MessageSendRequestRetries {
+  createdAt: Generated<string>;
+  id: string;
+  requestId: string;
+  retriedRequestId: string;
 }
 
 export interface MessageSendRequests {
@@ -281,10 +295,12 @@ export interface DB {
   members: Members;
   messageDeletions: MessageDeletions;
   messageRevisions: MessageRevisions;
+  messageRevisionUserMentions: MessageRevisionUserMentions;
   messages: Messages;
   messageSendDeliveries: MessageSendDeliveries;
   messageSendFailures: MessageSendFailures;
   messageSendRequestReplyTargets: MessageSendRequestReplyTargets;
+  messageSendRequestRetries: MessageSendRequestRetries;
   messageSendRequests: MessageSendRequests;
   messageSendSkips: MessageSendSkips;
 }

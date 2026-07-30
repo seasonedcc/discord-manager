@@ -283,6 +283,121 @@ describe('listMentions', () => {
     expect(mentions.truncated).toBe(false)
   })
 
+  it('keeps a reply Discord says pinged the owner even when its text names nobody', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const replyPing = await createMessage({
+      channelId: channel.id,
+      content: 'on it — shipping this afternoon',
+      discordCreatedAt: '2099-10-01T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-10-01T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      replyPing.id,
+    ])
+  })
+
+  it('leaves out a reply whose sender suppressed the ping', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+
+    await createMessage({
+      channelId: channel.id,
+      content: 'on it — shipping this afternoon',
+      discordCreatedAt: '2099-10-02T00:00:00.000Z',
+      mentionedDiscordUserIds: [],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-10-02T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages).toHaveLength(0)
+  })
+
+  it('answers once for a message both its mentions and its text name the owner', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const bothWays = await createMessage({
+      channelId: channel.id,
+      content: `<@${context.owner.discordUserId}> can you take this?`,
+      discordCreatedAt: '2099-10-03T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-10-03T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      bothWays.id,
+    ])
+  })
+
+  it('drops a reply Discord says pinged the owner once the message is deleted', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const replyPing = await createMessage({
+      channelId: channel.id,
+      content: 'on it',
+      discordCreatedAt: '2099-10-04T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    await db()
+      .insertInto('messageDeletions')
+      .values({ id: newId(), messageId: replyPing.id })
+      .execute()
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-10-04T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages).toHaveLength(0)
+  })
+
+  it('forgets a ping once an edit took it out of the mention set', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      content: 'on it — shipping this afternoon',
+      discordCreatedAt: '2099-10-05T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    await db()
+      .insertInto('messageRevisions')
+      .values({
+        id: newId(),
+        messageId: message.id,
+        content: 'never mind, sorted it myself',
+        createdAt: '2099-10-06T00:00:00.000Z',
+      })
+      .execute()
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-10-05T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages).toHaveLength(0)
+  })
+
   it('follows the newest revision when an edit adds the mention', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })

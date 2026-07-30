@@ -1,8 +1,15 @@
-import { fromSuccess, isContextError, isInputError } from 'composable-functions'
+import {
+  InputError,
+  fromSuccess,
+  isContextError,
+  isInputError,
+} from 'composable-functions'
 import type { MessageSendTransport } from '~/business/sending.common'
 import {
   TransportRejectedError,
   messageSendFailureCopy,
+  messageSendRetryChainRefusalCopy,
+  messageSendRetryRefusalCopy,
   messageSendSkipCopy,
   messageSendStallThresholdMinutes,
   messageSendStatusCopy,
@@ -46,6 +53,100 @@ function unreachableTransport(message: string) {
 
   return transport
 }
+
+async function sendingGround() {
+  const guild = await createGuild()
+  const context = await ownerContext({ guildId: guild.id })
+  const channel = await createChannel({ guildId: guild.id })
+
+  return { channel, context, guild }
+}
+
+async function issueRequestWithoutOutcome({
+  channelId,
+  createdAt,
+}: {
+  channelId: string
+  createdAt?: string
+}) {
+  return await db()
+    .insertInto('messageSendRequests')
+    .values({
+      id: newId(),
+      channelId,
+      content: 'nobody ever finished this',
+      ...(createdAt === undefined ? {} : { createdAt }),
+    })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+}
+
+async function sendsInEveryState() {
+  const { channel, context, guild } = await sendingGround()
+  const lostChannel = await createChannel({ guildId: guild.id })
+  const foreignChannel = await createChannel()
+
+  await db()
+    .insertInto('channelRemovals')
+    .values({ id: newId(), channelId: lostChannel.id })
+    .execute()
+
+  const issue = async (
+    transport: MessageSendTransport,
+    content: string,
+    channelId = channel.id
+  ) => {
+    const { send } = await fromSuccess(sendMessage(transport))(
+      { channelId, content },
+      context
+    )
+
+    return send.requestId
+  }
+
+  const stalledAt = new Date(
+    Date.now() - (messageSendStallThresholdMinutes + 1) * 60_000
+  ).toISOString()
+
+  return {
+    channel,
+    context,
+    sends: {
+      delivered: await issue(recordingTransport().transport, 'this one landed'),
+      pending: (await issueRequestWithoutOutcome({ channelId: channel.id })).id,
+      refused: await issue(
+        refusingTransport('Missing Permissions'),
+        'Discord said no'
+      ),
+      'skipped for a channel in another server': await issue(
+        recordingTransport().transport,
+        'wrong server',
+        foreignChannel.id
+      ),
+      'skipped for a channel the bot lost': await issue(
+        recordingTransport().transport,
+        'anybody there',
+        lostChannel.id
+      ),
+      'skipped for empty content': await issue(
+        recordingTransport().transport,
+        '   '
+      ),
+      stalled: (
+        await issueRequestWithoutOutcome({
+          channelId: channel.id,
+          createdAt: stalledAt,
+        })
+      ).id,
+      unanswered: await issue(
+        unreachableTransport('socket hang up'),
+        'nobody answered'
+      ),
+    },
+  }
+}
+
+const retryableStates = ['refused', 'skipped for empty content']
 
 describe('sendMessage', () => {
   it('posts through the transport and records the delivery', async () => {
@@ -327,6 +428,348 @@ describe('sendMessage', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isContextError(result.errors[0])).toBe(true)
   })
+
+  it('links a retry to the send Discord refused', async () => {
+    const { channel, context } = await sendingGround()
+
+    const refused = await fromSuccess(
+      sendMessage(refusingTransport('Missing Permissions'))
+    )({ channelId: channel.id, content: 'this will not land' }, context)
+
+    const { send } = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )(
+      {
+        channelId: channel.id,
+        content: 'this will land',
+        retryOfRequestId: refused.send.requestId,
+      },
+      context
+    )
+
+    const links = await db()
+      .selectFrom('messageSendRequestRetries')
+      .selectAll()
+      .where('retriedRequestId', '=', refused.send.requestId)
+      .execute()
+
+    expect(send.status).toBe('delivered')
+    expect(links).toHaveLength(1)
+    expect(links[0].requestId).toBe(send.requestId)
+  })
+
+  it('retries a send that was skipped for having no visible text', async () => {
+    const { channel, context } = await sendingGround()
+
+    const skipped = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )({ channelId: channel.id, content: '   ' }, context)
+
+    const { send } = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )(
+      {
+        channelId: channel.id,
+        content: 'the text I meant to write',
+        retryOfRequestId: skipped.send.requestId,
+      },
+      context
+    )
+
+    expect(send.status).toBe('delivered')
+  })
+
+  it('refuses to retry a message that is already live in the channel', async () => {
+    const { channel, context } = await sendingGround()
+
+    const delivered = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )({ channelId: channel.id, content: 'this one landed' }, context)
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'this one landed',
+        retryOfRequestId: delivered.send.requestId,
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    const [error] = result.errors
+    if (!(error instanceof InputError)) {
+      throw new Error('expected an input error')
+    }
+    expect(error.message).toBe(messageSendRetryRefusalCopy.delivered)
+    expect(error.path).toEqual(['retryOfRequestId'])
+  })
+
+  it('refuses to retry a send Discord never answered', async () => {
+    const { channel, context } = await sendingGround()
+
+    const unanswered = await fromSuccess(
+      sendMessage(unreachableTransport('socket hang up'))
+    )({ channelId: channel.id, content: 'nobody answered' }, context)
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'nobody answered',
+        retryOfRequestId: unanswered.send.requestId,
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(result.errors[0].message).toBe(
+      messageSendRetryRefusalCopy.unreachable
+    )
+  })
+
+  it('refuses to retry a send nothing was ever recorded for', async () => {
+    const { channel, context } = await sendingGround()
+    const stalled = await issueRequestWithoutOutcome({
+      channelId: channel.id,
+      createdAt: new Date(
+        Date.now() - (messageSendStallThresholdMinutes + 1) * 60_000
+      ).toISOString(),
+    })
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'nobody ever finished this',
+        retryOfRequestId: stalled.id,
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(result.errors[0].message).toBe(messageSendRetryRefusalCopy.stalled)
+  })
+
+  it('refuses to retry a send that is still on its way', async () => {
+    const { channel, context } = await sendingGround()
+    const pending = await issueRequestWithoutOutcome({ channelId: channel.id })
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'still going',
+        retryOfRequestId: pending.id,
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(result.errors[0].message).toBe(messageSendRetryRefusalCopy.pending)
+  })
+
+  it('refuses to retry a send skipped for a channel the bot lost', async () => {
+    const { channel, context, guild } = await sendingGround()
+    const lostChannel = await createChannel({ guildId: guild.id })
+
+    await db()
+      .insertInto('channelRemovals')
+      .values({ id: newId(), channelId: lostChannel.id })
+      .execute()
+
+    const skipped = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )({ channelId: lostChannel.id, content: 'anybody there' }, context)
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'anybody there',
+        retryOfRequestId: skipped.send.requestId,
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(result.errors[0].message).toBe(
+      messageSendRetryRefusalCopy.channel_not_found
+    )
+  })
+
+  it('refuses to retry a send skipped for a channel in another server', async () => {
+    const { channel, context } = await sendingGround()
+    const foreignChannel = await createChannel()
+
+    const skipped = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )({ channelId: foreignChannel.id, content: 'wrong server' }, context)
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'wrong server',
+        retryOfRequestId: skipped.send.requestId,
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(result.errors[0].message).toBe(
+      messageSendRetryRefusalCopy.channel_not_in_guild
+    )
+  })
+
+  it('refuses a second retry once the first retry is live in the channel', async () => {
+    const { channel, context } = await sendingGround()
+
+    const refused = await fromSuccess(
+      sendMessage(refusingTransport('Missing Permissions'))
+    )({ channelId: channel.id, content: 'this will not land' }, context)
+
+    await fromSuccess(sendMessage(recordingTransport().transport))(
+      {
+        channelId: channel.id,
+        content: 'this will land',
+        retryOfRequestId: refused.send.requestId,
+      },
+      context
+    )
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'this will land',
+        retryOfRequestId: refused.send.requestId,
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(result.errors[0].message).toBe(
+      messageSendRetryChainRefusalCopy.delivered
+    )
+  })
+
+  it('refuses a second retry while the first retry is still on its way', async () => {
+    const { channel, context } = await sendingGround()
+
+    const refused = await fromSuccess(
+      sendMessage(refusingTransport('Missing Permissions'))
+    )({ channelId: channel.id, content: 'this will not land' }, context)
+
+    const inFlight = await issueRequestWithoutOutcome({ channelId: channel.id })
+
+    await db()
+      .insertInto('messageSendRequestRetries')
+      .values({
+        id: newId(),
+        requestId: inFlight.id,
+        retriedRequestId: refused.send.requestId,
+      })
+      .execute()
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'this will land',
+        retryOfRequestId: refused.send.requestId,
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(result.errors[0].message).toBe(
+      messageSendRetryChainRefusalCopy.pending
+    )
+  })
+
+  it('lets the chain continue when the first retry was refused too', async () => {
+    const { channel, context } = await sendingGround()
+
+    const refused = await fromSuccess(
+      sendMessage(refusingTransport('Missing Permissions'))
+    )({ channelId: channel.id, content: 'this will not land' }, context)
+
+    await fromSuccess(sendMessage(refusingTransport('Missing Permissions')))(
+      {
+        channelId: channel.id,
+        content: 'this will not land either',
+        retryOfRequestId: refused.send.requestId,
+      },
+      context
+    )
+
+    const { send } = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )(
+      {
+        channelId: channel.id,
+        content: 'third time lucky',
+        retryOfRequestId: refused.send.requestId,
+      },
+      context
+    )
+
+    expect(send.status).toBe('delivered')
+  })
+
+  it('fails when the send being retried was never issued', async () => {
+    const { channel, context } = await sendingGround()
+
+    const result = await sendMessage(recordingTransport().transport)(
+      {
+        channelId: channel.id,
+        content: 'retrying a ghost',
+        retryOfRequestId: newId(),
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    const [error] = result.errors
+    if (!(error instanceof InputError)) {
+      throw new Error('expected an input error')
+    }
+    expect(error.message).toBe(
+      'No send with that request id was ever issued, so there is nothing to retry.'
+    )
+    expect(error.path).toEqual(['retryOfRequestId'])
+  })
+
+  it('records no send request at all when it refuses the retry', async () => {
+    const { channel, context } = await sendingGround()
+    const retryChannel = await createChannel({ guildId: channel.guildId })
+
+    const delivered = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )({ channelId: channel.id, content: 'this one landed' }, context)
+
+    const { requests, transport } = recordingTransport()
+
+    await sendMessage(transport)(
+      {
+        channelId: retryChannel.id,
+        content: 'this one landed',
+        retryOfRequestId: delivered.send.requestId,
+      },
+      context
+    )
+
+    const recorded = await db()
+      .selectFrom('messageSendRequests')
+      .selectAll()
+      .where('channelId', '=', retryChannel.id)
+      .execute()
+
+    expect(requests).toHaveLength(0)
+    expect(recorded).toHaveLength(0)
+  })
 })
 
 describe('readMessageSendStatus', () => {
@@ -423,8 +866,12 @@ describe('readMessageSendStatus', () => {
 
     expect(status.send).toMatchObject({
       status: 'failed',
+      canRetry: true,
+      retryOfRequestId: null,
+      retries: [],
       ...messageSendFailureCopy.rejected,
     })
+    expect(JSON.stringify(status)).toContain('canRetry')
     expect(JSON.stringify(status)).not.toContain('errorMessage')
     expect(JSON.stringify(status)).not.toContain('Missing Permissions')
   })
@@ -526,5 +973,147 @@ describe('readMessageSendStatus', () => {
     expect(result.success).toBe(false)
     if (result.success) throw new Error('expected a failure')
     expect(isContextError(result.errors[0])).toBe(true)
+  })
+
+  it('offers no retry for a message already live in the channel', async () => {
+    const { channel, context } = await sendingGround()
+
+    const delivered = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )({ channelId: channel.id, content: 'this one landed' }, context)
+
+    const status = await fromSuccess(readMessageSendStatus)(
+      { requestId: delivered.send.requestId },
+      context
+    )
+
+    expect(status.send.canRetry).toBe(false)
+  })
+
+  it('offers no retry for a send nothing was ever recorded for', async () => {
+    const { channel, context } = await sendingGround()
+    const stalled = await issueRequestWithoutOutcome({
+      channelId: channel.id,
+      createdAt: new Date(
+        Date.now() - (messageSendStallThresholdMinutes + 1) * 60_000
+      ).toISOString(),
+    })
+
+    const status = await fromSuccess(readMessageSendStatus)(
+      { requestId: stalled.id },
+      context
+    )
+
+    expect(status.send.status).toBe('stalled')
+    expect(status.send.canRetry).toBe(false)
+  })
+
+  it('shows the send a retry was made for and the retries made for a send', async () => {
+    const { channel, context } = await sendingGround()
+
+    const refused = await fromSuccess(
+      sendMessage(refusingTransport('Missing Permissions'))
+    )({ channelId: channel.id, content: 'this will not land' }, context)
+
+    const retry = await fromSuccess(
+      sendMessage(recordingTransport().transport)
+    )(
+      {
+        channelId: channel.id,
+        content: 'this will land',
+        retryOfRequestId: refused.send.requestId,
+      },
+      context
+    )
+
+    const retried = await fromSuccess(readMessageSendStatus)(
+      { requestId: refused.send.requestId },
+      context
+    )
+    const retrying = await fromSuccess(readMessageSendStatus)(
+      { requestId: retry.send.requestId },
+      context
+    )
+
+    expect(retried.send.retryOfRequestId).toBe(null)
+    expect(retried.send.retries).toEqual([
+      { requestId: retry.send.requestId, status: 'delivered' },
+    ])
+    expect(retried.send.canRetry).toBe(false)
+    expect(retrying.send.retryOfRequestId).toBe(refused.send.requestId)
+    expect(retrying.send.retries).toEqual([])
+  })
+
+  it('stops offering a retry while a retry of that send is still on its way', async () => {
+    const { channel, context } = await sendingGround()
+
+    const refused = await fromSuccess(
+      sendMessage(refusingTransport('Missing Permissions'))
+    )({ channelId: channel.id, content: 'this will not land' }, context)
+
+    const offered = await fromSuccess(readMessageSendStatus)(
+      { requestId: refused.send.requestId },
+      context
+    )
+
+    const inFlight = await issueRequestWithoutOutcome({ channelId: channel.id })
+
+    await db()
+      .insertInto('messageSendRequestRetries')
+      .values({
+        id: newId(),
+        requestId: inFlight.id,
+        retriedRequestId: refused.send.requestId,
+      })
+      .execute()
+
+    const blocked = await fromSuccess(readMessageSendStatus)(
+      { requestId: refused.send.requestId },
+      context
+    )
+
+    expect(offered.send.canRetry).toBe(true)
+    expect(offered.send.nextAction).toBe(
+      messageSendFailureCopy.rejected.nextAction
+    )
+    expect(blocked.send.canRetry).toBe(false)
+    expect(blocked.send.nextAction).toBe(
+      messageSendRetryChainRefusalCopy.pending
+    )
+    expect(blocked.send.retries).toEqual([
+      { requestId: inFlight.id, status: 'pending' },
+    ])
+  })
+
+  it('never says a send can be retried when the guard would refuse it', async () => {
+    const { channel, context, sends } = await sendsInEveryState()
+    const readings: Record<string, boolean> = {}
+    const guardVerdicts: Record<string, boolean> = {}
+
+    for (const [state, requestId] of Object.entries(sends)) {
+      const status = await fromSuccess(readMessageSendStatus)(
+        { requestId },
+        context
+      )
+      const guarded = await sendMessage(recordingTransport().transport)(
+        {
+          channelId: channel.id,
+          content: `retrying the send that is ${state}`,
+          retryOfRequestId: requestId,
+        },
+        context
+      )
+
+      readings[state] = status.send.canRetry
+      guardVerdicts[state] = guarded.success
+    }
+
+    expect(readings).toEqual(guardVerdicts)
+    expect(
+      Object.entries(readings)
+        .filter(([, canRetry]) => canRetry)
+        .map(([state]) => state)
+        .sort()
+    ).toEqual(retryableStates)
   })
 })

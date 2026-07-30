@@ -29,6 +29,8 @@ const bookmarkReactionContextSchema = ownerContextSchema.extend({
   canManageBookmarks: z.literal(true),
 })
 
+const mentionedDiscordUserIdsSchema = z.array(z.string().min(1))
+
 const observedAuthorSchema = z.object({
   discordUserId: z.string().min(1),
   displayName: z.string().min(1),
@@ -74,6 +76,7 @@ const recordIncomingMessageSchema = z.object({
   content: z.string(),
   discordCreatedAt: z.string().min(1),
   discordMessageId: z.string().min(1),
+  mentionedDiscordUserIds: mentionedDiscordUserIdsSchema,
 })
 
 const recordMessageDeletionSchema = z.object({
@@ -83,6 +86,7 @@ const recordMessageDeletionSchema = z.object({
 const recordMessageEditSchema = z.object({
   content: z.string(),
   discordMessageId: z.string().min(1),
+  mentionedDiscordUserIds: mentionedDiscordUserIdsSchema,
 })
 
 const recordOwnerBookmarkReactionSchema = z.object({
@@ -375,6 +379,40 @@ async function findOrCreateMember(
   return record
 }
 
+async function insertRevisionWithMentions(
+  trx: Transaction<DB>,
+  values: {
+    content: string
+    mentionedDiscordUserIds: string[]
+    messageId: string
+  }
+) {
+  const revision = await trx
+    .insertInto('messageRevisions')
+    .values({
+      content: values.content,
+      id: newId(),
+      messageId: values.messageId,
+    })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+
+  const mentioned = [...new Set(values.mentionedDiscordUserIds)]
+
+  if (mentioned.length > 0) {
+    await trx
+      .insertInto('messageRevisionUserMentions')
+      .values(
+        mentioned.map((mentionedDiscordUserId) => ({
+          id: newId(),
+          mentionedDiscordUserId,
+          messageRevisionId: revision.id,
+        }))
+      )
+      .execute()
+  }
+}
+
 async function insertMessageWithFirstRevision(
   trx: Transaction<DB>,
   values: {
@@ -383,6 +421,7 @@ async function insertMessageWithFirstRevision(
     content: string
     discordCreatedAt: string
     discordMessageId: string
+    mentionedDiscordUserIds: string[]
   }
 ) {
   const inserted = await trx
@@ -408,10 +447,11 @@ async function insertMessageWithFirstRevision(
     return { messageId: existing.id, outcome: 'already_ingested' as const }
   }
 
-  await trx
-    .insertInto('messageRevisions')
-    .values({ content: values.content, id: newId(), messageId: inserted.id })
-    .execute()
+  await insertRevisionWithMentions(trx, {
+    content: values.content,
+    mentionedDiscordUserIds: values.mentionedDiscordUserIds,
+    messageId: inserted.id,
+  })
 
   return { messageId: inserted.id, outcome: 'recorded' as const }
 }
@@ -566,6 +606,7 @@ const recordIncomingMessage = applySchema(
         content: input.content,
         discordCreatedAt: input.discordCreatedAt,
         discordMessageId: input.discordMessageId,
+        mentionedDiscordUserIds: input.mentionedDiscordUserIds,
       })
     })
 })
@@ -573,7 +614,7 @@ const recordIncomingMessage = applySchema(
 const recordMessageEdit = applySchema(
   recordMessageEditSchema,
   ingestionContextSchema
-)(async ({ content, discordMessageId }, context) => {
+)(async ({ content, discordMessageId, mentionedDiscordUserIds }, context) => {
   const message = await findIngestedMessage(
     discordMessageId,
     context.owner.guildId
@@ -582,9 +623,14 @@ const recordMessageEdit = applySchema(
   if (!message) return skipped('message_not_ingested')
 
   await db()
-    .insertInto('messageRevisions')
-    .values({ content, id: newId(), messageId: message.id })
-    .execute()
+    .transaction()
+    .execute((trx) =>
+      insertRevisionWithMentions(trx, {
+        content,
+        mentionedDiscordUserIds,
+        messageId: message.id,
+      })
+    )
 
   return { messageId: message.id, outcome: 'recorded' as const }
 })
@@ -869,6 +915,7 @@ async function storeBackfilledPage(
           content: message.content,
           discordCreatedAt: message.discordCreatedAt,
           discordMessageId: message.discordMessageId,
+          mentionedDiscordUserIds: message.mentionedDiscordUserIds,
         })
 
         if (stored.outcome === 'recorded') storedMessageCount += 1

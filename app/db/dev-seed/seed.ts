@@ -13,6 +13,8 @@ import {
   recordIncomingMessage,
   recordOwnerBookmarkReaction,
 } from '~/business/ingestion.server'
+import { TransportRejectedError } from '~/business/sending.common'
+import { sendMessage } from '~/business/sending.server'
 import { db } from '~/db/db.server'
 
 if (existsSync('.env')) process.loadEnvFile()
@@ -105,16 +107,25 @@ async function postMessage({
   channel,
   content,
   discordCreatedAt,
+  mentionedDiscordUserIds = [],
 }: {
   author: { discordUserId: string; displayName: string; username: string }
   channel: Awaited<ReturnType<typeof observeChannel | typeof observeThread>>
   content: string
   discordCreatedAt: string
+  mentionedDiscordUserIds?: string[]
 }) {
   const discordMessageId = nextDiscordId()
 
   await fromSuccess(recordIncomingMessage)(
-    { author, channel, content, discordCreatedAt, discordMessageId },
+    {
+      author,
+      channel,
+      content,
+      discordCreatedAt,
+      discordMessageId,
+      mentionedDiscordUserIds,
+    },
     context
   )
 
@@ -173,6 +184,15 @@ const awaitingAnAnswer = await postMessage({
   channel: engineering,
   content: `<@${context.owner.discordUserId}> can you review the release notes today?`,
   discordCreatedAt: secondsAfterTheAnchor(3),
+  mentionedDiscordUserIds: [context.owner.discordUserId],
+})
+
+await postMessage({
+  author: maya,
+  channel: engineering,
+  content: 'Reading them now — I will leave comments before lunch.',
+  discordCreatedAt: secondsAfterTheAnchor(4),
+  mentionedDiscordUserIds: [context.owner.discordUserId],
 })
 
 await fromSuccess(recordOwnerBookmarkReaction)(
@@ -210,7 +230,7 @@ await postMessage({
   author: maya,
   channel: retiredThread,
   content: 'Hotfix is out — nothing left to do here.',
-  discordCreatedAt: secondsAfterTheAnchor(4),
+  discordCreatedAt: secondsAfterTheAnchor(5),
 })
 
 await fromSuccess(recordChannelArchiving)(
@@ -218,8 +238,26 @@ await fromSuccess(recordChannelArchiving)(
   context
 )
 
+const engineeringChannel = await db()
+  .selectFrom('channels')
+  .select('id')
+  .where('discordChannelId', '=', engineering.discordChannelId)
+  .executeTakeFirstOrThrow()
+
+const refusedSend = await fromSuccess(
+  sendMessage(async () => {
+    throw new TransportRejectedError('Missing Permissions')
+  })
+)(
+  {
+    channelId: engineeringChannel.id,
+    content: 'Reminder: the deploy checklist is in the handbook now.',
+  },
+  context
+)
+
 await db().destroy()
 
 console.log(
-  'Seeded a development server: two channels, an archived thread, four messages, one mention of you, and two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later. Start the MCP server with pnpm run mcp and ask your assistant to list the channels.'
+  `Seeded a development server: two channels, an archived thread, five messages, one mention of you, one reply that pinged you without naming you, two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later — and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to list the channels, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
 )

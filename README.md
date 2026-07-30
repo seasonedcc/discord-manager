@@ -9,10 +9,10 @@ Each person runs their own bot and their own local stack. Nothing is shared, not
 ## What you get
 
 - **Catch-up digests** — everything posted since a moment in time, across the server or in one channel, each message with a jump link. Long stretches come back 200 messages at a time, so your assistant can walk a busy week in order.
-- **Mention triage** — the messages that name you, ready for an assistant to sort by what actually needs you.
+- **Mention triage** — the messages that pinged you, exactly as Discord counts a ping, ready for an assistant to sort by what actually needs you.
 - **Bookmarks without Nitro** — react to any message with 🔖 and your bot records a bookmark; remove the reaction and it's gone. Your assistant can also bookmark by message link, resolve, and snooze — privately, with no reaction anyone can see. Only *your* reactions count, so a whole team of bots coexists in one server without crosstalk.
 - **Bookmarks that know why they're there** — every bookmark is filed under a reason you manage, so *"what am I on the hook to answer?"* is a different question from *"what should I read on the train?"*. A 🔖 reaction can't carry intent, so those land in your *Inbox* for your assistant to sort.
-- **Draft and send** — messages posted to any channel as your bot, optionally as a reply, with a status trail for every send.
+- **Draft and send** — messages posted to any channel as your bot, optionally as a reply, with a status trail for every send. When a send comes back refused, your assistant can retry it as a linked second attempt, and the retry is refused outright unless the first one provably never reached the channel — so a message you asked for once can never turn up twice.
 - **Ingestion health** — whether the bot is still receiving from Discord and how far its history backfills have got, as plain readings with a concrete next action.
 
 Everything is stored locally in SQLite as an append-only event history: edits are revisions, deletions are events, and nothing is ever erased — a bookmarked message survives the author's edit.
@@ -87,7 +87,7 @@ pnpm run db:migrate
 pnpm run db:seed:dev
 ```
 
-The seed only ever runs against a freshly created, empty database, and sending will fail with demo credentials — everything that reads works.
+The seed only ever runs against a freshly created, empty database, and sending will fail with demo credentials — everything that reads works. It leaves one refused send behind so you can see `messages_send_status` offer a retry.
 
 ## The tools
 
@@ -95,7 +95,7 @@ The seed only ever runs against a freshly created, empty database, and sending w
 | --- | --- |
 | `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them — and for threads, whether Discord has archived them, archived ones last |
 | `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time |
-| `mentions_list` | The messages whose text names you since a moment in time |
+| `mentions_list` | The messages that pinged you since a moment in time — someone naming you, plus replies to you the sender left the ping on |
 | `bookmarks_add` | A bookmark from a Discord message link, filed under the reason you pick |
 | `bookmarks_list` | The bookmarks still waiting on you, each with its reason, snoozed ones and single-reason views on request |
 | `bookmarks_resolve` | A bookmark cleared, leaving any reaction in Discord untouched |
@@ -105,8 +105,8 @@ The seed only ever runs against a freshly created, empty database, and sending w
 | `bookmark_reasons_add` | A reason of your own, on top of the ones you started with |
 | `bookmark_reasons_edit` | A reason reworded, on every bookmark already carrying it |
 | `bookmark_reasons_retire` | A reason taken out of circulation, without disturbing the bookmarks that carry it |
-| `messages_send` | A message posted to a channel as your bot, optionally as a reply |
-| `messages_send_status` | Where a send ended up — delivered, skipped, failed, still on its way, or stalled when nothing was ever recorded |
+| `messages_send` | A message posted to a channel as your bot, optionally as a reply, or as a guarded retry of an earlier send |
+| `messages_send_status` | Where a send ended up — delivered, skipped, failed, still on its way, or stalled when nothing was ever recorded — whether it can be retried, and every attempt already made at it |
 | `ingestion_status` | Whether the bot is receiving from Discord, and how far backfills have got |
 
 ## Good to know

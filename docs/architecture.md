@@ -139,6 +139,11 @@ Events (all with `(parentId, createdAt desc)` indexes):
 - `member_detail_revisions` — username, displayName.
 - `message_revisions` — full content snapshot; the first revision lands with ingestion,
   one more per observed edit. Never an `editedAt` column.
+- `message_revision_user_mentions` — zero or more rows per revision, one per user
+  Discord's own `mentions` array says that revision pinged. The set belongs to the
+  revision rather than the message because an edit can change it, so the current set is
+  the rows of the latest revision — an edit that drops the ping leaves the new revision
+  with no rows at all, which is a fact one table can state without a sentinel.
 - `message_deletions` — existence is state.
 - `bookmark_additions` / `bookmark_removals` — reversible pair; newest of the two latest
   wins. Both carry `source` (`reaction` or `mcp`) so a public un-react and a private MCP
@@ -180,8 +185,8 @@ Assigning Inbox is allowed — sending a bookmark back to be sorted again is leg
 Every Discord API operation family gets its own request + outcome tables and its own
 skip-reason enum; no shared framework, no shared enums:
 
-- `message_send_requests` / `...reply_targets` / `...deliveries` / `...failures` (with a
-  `kind` of `rejected` or `unreachable`) / `...skips` — MCP sends.
+- `message_send_requests` / `...reply_targets` / `...retries` / `...deliveries` /
+  `...failures` (with a `kind` of `rejected` or `unreachable`) / `...skips` — MCP sends.
 - `backfill_runs` / `backfill_run_progress` / `...completions` / `...failures` — REST
   history backfills. Each channel's newest run gives a state, and the reading rolls those
   states up worst-first into counts, the names of the channels whose newest run failed,
@@ -193,6 +198,35 @@ skip-reason enum; no shared framework, no shared enums:
 
 Owner-facing status is always mapped copy from exhaustive typed maps in `.common.ts`
 (summary + nextAction per reason), never raw vendor text — pinned by serialization tests.
+
+### Guarded send retries
+
+A second attempt at a send is a new `message_send_requests` row plus one
+`message_send_request_retries` row linking it to the request it retries, so the attempts at
+one message form a chain the store can read in both directions. Nothing about a request is
+ever mutated; the chain is derived from those link rows.
+
+One predicate in `sending.server.ts` decides whether a request may be retried, and the
+status reader and the send both call it — the reader returns it as `canRetry`, the send
+re-evaluates it and throws an `InputError` naming where the attempt stands. They cannot
+disagree, and a unit test asserts that property across every status. When a later attempt
+is what blocks a retry, the status reading's next action becomes that refusal, so the
+reading never points at a path the send would reject.
+
+The predicate answers two questions, both of which must pass. First, did the attempt
+provably never reach the channel? Only a skip and a Discord-refused failure prove that;
+delivered, pending, stalled and a Discord we could not reach all leave the outcome unknown,
+and retrying an unknown outcome is how a message gets posted twice. Second, could another
+attempt do anything different? A skip qualifies only when the condition that caused it can
+change — empty text can be written, a channel the bot lost can never come back, because
+`channel_removals` is one-way. The same live-risk test walks the chain: a linked retry that
+might itself be live blocks any further attempt, while one that provably never posted
+leaves the chain open.
+
+The predicate runs inside the transaction that writes the new request and its link row, so
+two racing retries of one request cannot both pass. That transaction writes before it reads
+so it holds SQLite's write lock from its first statement — a read-first transaction takes a
+snapshot and its later writes fail outright when the ingest daemon commits in between.
 
 ## Authorization
 
@@ -210,8 +244,8 @@ contains zero authorization — tools call business functions with the real cont
 `bookmarks_list` (optional limit, snoozed, reason filter), `bookmarks_add` (by message
 link + reason), `bookmarks_resolve`, `bookmarks_snooze`, `bookmarks_set_reason`,
 `bookmark_reasons_list`, `bookmark_reasons_add`, `bookmark_reasons_edit`,
-`bookmark_reasons_retire`, `messages_send` (channel, content, optional reply),
-`messages_send_status` (by request id), `ingestion_status`.
+`bookmark_reasons_retire`, `messages_send` (channel, content, optional reply, optional
+retry of an earlier request), `messages_send_status` (by request id), `ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the
 business functions' own exported schemas, dates cross the boundary as ISO strings. The
@@ -258,6 +292,26 @@ what collects the messages posted just before it went quiet, and drops out of ev
 sweep. A revived thread re-enters the sweep and its gap is filled. A thread that was never
 archived is always swept. At a millisecond tie the thread is swept again, which costs one
 REST call and loses nothing.
+
+### Mentions mean what Discord means
+
+Discord stamps every message payload — gateway and REST alike — with the `mentions` array
+of users that message pinged. That array is richer than any text match: it carries the
+author of a replied-to message when the sender left the reply ping on, and leaves them out
+when the sender switched it off, a distinction `<@id>` text matching cannot see at all.
+
+- Ingestion passes the array through as plain data (`mentionedDiscordUserIds`), so the
+  business layer stays discord.js-free. The gateway reads `message.mentions.users` on
+  `messageCreate` and `messageUpdate`; the REST backfill reads the same collection off the
+  fetched messages and threads it through `fetchChannelHistory`'s page shape.
+- The recorder writes the mention rows in the same transaction as the revision they belong
+  to, so a message and its mention set are never briefly out of step.
+- `listMentions` returns the union of two conditions: a mention row on the message's latest
+  revision naming the owner, or the latest revision's text carrying `<@id>`/`<@!id>`. The
+  second half is what keeps messages ingested before mention rows existed findable; a
+  single OR over one query means a message matching both ways still comes back once.
+- Role mentions and `@everyone`/`@here` are deliberately excluded. No role tracking exists,
+  and a broadcast ping is not personal triage. `mentions_list`'s description says so.
 
 ## Scheduling
 

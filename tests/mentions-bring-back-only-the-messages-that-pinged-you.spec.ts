@@ -13,7 +13,7 @@ type Digest = {
   truncated: boolean
 }
 
-test('mentions bring back only the messages that name you', async () => {
+test('mentions bring back only the messages that pinged you', async () => {
   const { channels, clock, messages } = fixtures()
   const session = await openMcpSession()
 
