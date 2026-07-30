@@ -1,4 +1,4 @@
-import { applySchema } from 'composable-functions'
+import { InputError, applySchema } from 'composable-functions'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -138,9 +138,23 @@ const catchUpSince = applySchema(
     guildId: context.owner.guildId,
   })
 
-  return await readDigest(
-    channelId ? query.where('messages.channelId', '=', channelId) : query
-  )
+  if (!channelId) return await readDigest(query)
+
+  const channel = await db()
+    .selectFrom('channels')
+    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+    .select('channels.id')
+    .where('channels.id', '=', channelId)
+    .where('guilds.discordGuildId', '=', context.owner.guildId)
+    .executeTakeFirst()
+
+  if (!channel) {
+    throw new InputError('That channel has not been ingested yet', [
+      'channelId',
+    ])
+  }
+
+  return await readDigest(query.where('messages.channelId', '=', channel.id))
 })
 
 const listMentions = applySchema(

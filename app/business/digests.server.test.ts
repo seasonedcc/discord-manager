@@ -1,4 +1,4 @@
-import { fromSuccess, isContextError } from 'composable-functions'
+import { fromSuccess, isContextError, isInputError } from 'composable-functions'
 import { digestMessageLimit } from '~/business/digests.common'
 import { catchUpSince, listMentions } from '~/business/digests.server'
 import { db } from '~/db/db.server'
@@ -150,6 +150,40 @@ describe('catchUpSince', () => {
     )
 
     expect(digest.messages.map(({ id }) => id)).toEqual([wanted.id])
+  })
+
+  it('fails when the requested channel was never ingested', async () => {
+    const guild = await createGuild()
+
+    const result = await catchUpSince(
+      { since: '2099-01-01T00:00:00.000Z', channelId: newId() },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(isInputError(result.errors[0])).toBe(true)
+    expect(result.errors[0].message).toBe(
+      'That channel has not been ingested yet'
+    )
+  })
+
+  it('fails when the requested channel belongs to another Discord server', async () => {
+    const guild = await createGuild()
+    const otherGuild = await createGuild()
+    const otherChannel = await createChannel({ guildId: otherGuild.id })
+
+    const result = await catchUpSince(
+      { since: '2099-01-01T00:00:00.000Z', channelId: otherChannel.id },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(isInputError(result.errors[0])).toBe(true)
+    expect(result.errors[0].message).toBe(
+      'That channel has not been ingested yet'
+    )
   })
 
   it('caps the digest and says it was truncated', async () => {
