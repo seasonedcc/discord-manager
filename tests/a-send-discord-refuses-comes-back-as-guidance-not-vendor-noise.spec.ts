@@ -24,7 +24,7 @@ type SendStatus = {
 
 const refusalSummary = 'Discord refused the message, so it was never posted.'
 const refusalNextAction =
-  'Give the bot Send Messages (and Send Messages in Threads) in that channel and check DISCORD_BOT_TOKEN, then send it again.'
+  "Give the bot Send Messages (and Send Messages in Threads) in that channel and check DISCORD_BOT_TOKEN, then send it again with `retryOfRequestId` set to this send's request id."
 
 test('a send Discord refuses comes back as guidance, not vendor noise', async () => {
   const { channels } = fixtures()

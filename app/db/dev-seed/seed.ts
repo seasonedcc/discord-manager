@@ -8,6 +8,8 @@ import {
   recordIncomingMessage,
   recordOwnerBookmarkReaction,
 } from '~/business/ingestion.server'
+import { TransportRejectedError } from '~/business/sending.common'
+import { sendMessage } from '~/business/sending.server'
 import { db } from '~/db/db.server'
 
 if (existsSync('.env')) process.loadEnvFile()
@@ -160,8 +162,26 @@ await fromSuccess(recordOwnerBookmarkReaction)(
   context
 )
 
+const engineeringChannel = await db()
+  .selectFrom('channels')
+  .select('id')
+  .where('discordChannelId', '=', engineering.discordChannelId)
+  .executeTakeFirstOrThrow()
+
+const refusedSend = await fromSuccess(
+  sendMessage(async () => {
+    throw new TransportRejectedError('Missing Permissions')
+  })
+)(
+  {
+    channelId: engineeringChannel.id,
+    content: 'Reminder: the deploy checklist is in the handbook now.',
+  },
+  context
+)
+
 await db().destroy()
 
 console.log(
-  'Seeded a development server: two channels, three messages, one mention of you, and one bookmark. Start the MCP server with pnpm run mcp and ask your assistant to list the channels.'
+  `Seeded a development server: two channels, three messages, one mention of you, one bookmark, and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to list the channels, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
 )
