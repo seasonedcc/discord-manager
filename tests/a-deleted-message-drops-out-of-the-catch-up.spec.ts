@@ -4,7 +4,7 @@ import { fixtures } from './seed'
 import { test } from './spec'
 
 type Digest = {
-  messages: { discordMessageId: string; id: string }[]
+  messages: { discordMessageId: string; messageId: string }[]
 }
 
 test('a deleted message drops out of the catch-up', async () => {
@@ -17,11 +17,14 @@ test('a deleted message drops out of the catch-up', async () => {
   })
 
   assert.equal(
-    digest.messages.filter(({ id }) => id === messages.offsite.id).length,
+    digest.messages.filter(({ messageId }) => messageId === messages.offsite.id)
+      .length,
     1
   )
   assert.equal(
-    digest.messages.filter(({ id }) => id === messages.withdrawn.id).length,
+    digest.messages.filter(
+      ({ messageId }) => messageId === messages.withdrawn.id
+    ).length,
     0
   )
 })

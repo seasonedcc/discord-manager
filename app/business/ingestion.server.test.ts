@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { fromSuccess, isContextError, isInputError } from 'composable-functions'
 import { ownerCaps, ownerContext } from '~/business/auth.server'
 import { newId } from '~/framework/db.server'
-import { createChannel, createGuild, createMessage } from '~/test/fixtures'
+import {
+  createChannel,
+  createGuild,
+  createMessage,
+  snowflake,
+} from '~/test/fixtures'
 import { db, describe, expect, it, vi } from '~/test/prelude'
 import type { BackfilledMessage, FetchChannelHistory } from './ingestion.common'
 import {
@@ -13,6 +18,7 @@ import {
   recordChannelSnapshot,
   recordGatewayConnection,
   recordGatewayDisconnection,
+  recordGatewayHeartbeat,
   recordIncomingMessage,
   recordMessageDeletion,
   recordMessageEdit,
@@ -59,7 +65,7 @@ function backfilledMessage(
     author: observedAuthor(),
     content: `content-${randomUUID()}`,
     discordCreatedAt: new Date().toISOString(),
-    discordMessageId: randomUUID(),
+    discordMessageId: snowflake(),
     ...overrides,
   }
 }
@@ -346,10 +352,52 @@ describe('recordMessageDeletion', () => {
   })
 })
 
+function channelAttributeRowsOf(channelId: string) {
+  return Promise.all([
+    db()
+      .selectFrom('channelTopicChanges')
+      .select('topic')
+      .where('channelId', '=', channelId)
+      .execute(),
+    db()
+      .selectFrom('channelTopicClearings')
+      .select('id')
+      .where('channelId', '=', channelId)
+      .execute(),
+    db()
+      .selectFrom('channelCategoryChanges')
+      .select('category')
+      .where('channelId', '=', channelId)
+      .execute(),
+    db()
+      .selectFrom('channelCategoryClearings')
+      .select('id')
+      .where('channelId', '=', channelId)
+      .execute(),
+    db()
+      .selectFrom('channelPositionChanges')
+      .select('position')
+      .where('channelId', '=', channelId)
+      .execute(),
+  ]).then(
+    ([topics, topicClearings, categories, categoryClearings, positions]) => ({
+      categories,
+      categoryClearings,
+      positions,
+      topicClearings,
+      topics,
+    })
+  )
+}
+
 describe('recordChannelSnapshot', () => {
-  it('reads an absent topic and category as empty text', async () => {
+  it('records no attribute event for a channel that carries none', async () => {
     const guild = await createGuild()
-    const channel = observedChannel({ category: null, topic: null })
+    const channel = observedChannel({
+      category: undefined,
+      position: undefined,
+      topic: undefined,
+    })
 
     const result = await fromSuccess(recordChannelSnapshot)(
       channel,
@@ -361,14 +409,42 @@ describe('recordChannelSnapshot', () => {
       .selectAll()
       .where('channelId', '=', result.channelId)
       .execute()
+    const attributes = await channelAttributeRowsOf(result.channelId)
 
     expect(revisions).toHaveLength(1)
-    expect(revisions[0].topic).toBe('')
-    expect(revisions[0].category).toBe('')
     expect(revisions[0].isThread).toBe(0)
+    expect(attributes.topics).toHaveLength(0)
+    expect(attributes.topicClearings).toHaveLength(0)
+    expect(attributes.categories).toHaveLength(0)
+    expect(attributes.categoryClearings).toHaveLength(0)
+    expect(attributes.positions).toHaveLength(0)
   })
 
-  it('appends a revision only when the channel details changed', async () => {
+  it('records the attributes the channel does carry', async () => {
+    const guild = await createGuild()
+    const channel = observedChannel({
+      category: 'Company',
+      position: 4,
+      topic: 'where it happens',
+    })
+
+    const result = await fromSuccess(recordChannelSnapshot)(
+      channel,
+      ownerContextFor(guild)
+    )
+
+    const attributes = await channelAttributeRowsOf(result.channelId)
+
+    expect(attributes.topics.map(({ topic }) => topic)).toEqual([
+      'where it happens',
+    ])
+    expect(attributes.categories.map(({ category }) => category)).toEqual([
+      'Company',
+    ])
+    expect(attributes.positions.map(({ position }) => position)).toEqual([4])
+  })
+
+  it('appends a revision only when the name or the thread flag changed', async () => {
     const guild = await createGuild()
     const context = ownerContextFor(guild)
     const channel = observedChannel()
@@ -392,9 +468,52 @@ describe('recordChannelSnapshot', () => {
     )
   })
 
-  it('records a thread as a channel of its own', async () => {
+  it('appends an attribute event only when that attribute changed', async () => {
     const guild = await createGuild()
-    const thread = observedChannel({ isThread: true, position: 0 })
+    const context = ownerContextFor(guild)
+    const channel = observedChannel({ category: 'Company', topic: 'first' })
+
+    const first = await fromSuccess(recordChannelSnapshot)(channel, context)
+    await fromSuccess(recordChannelSnapshot)(channel, context)
+    await fromSuccess(recordChannelSnapshot)(
+      { ...channel, topic: 'second' },
+      context
+    )
+
+    const attributes = await channelAttributeRowsOf(first.channelId)
+
+    expect(attributes.topics.map(({ topic }) => topic).sort()).toEqual([
+      'first',
+      'second',
+    ])
+    expect(attributes.categories).toHaveLength(1)
+  })
+
+  it('records a clearing when an attribute the channel had is gone', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = observedChannel({ category: 'Company', topic: 'for now' })
+
+    const first = await fromSuccess(recordChannelSnapshot)(channel, context)
+    await fromSuccess(recordChannelSnapshot)(
+      { ...channel, category: undefined, topic: undefined },
+      context
+    )
+    await fromSuccess(recordChannelSnapshot)(
+      { ...channel, category: undefined, topic: undefined },
+      context
+    )
+
+    const attributes = await channelAttributeRowsOf(first.channelId)
+
+    expect(attributes.topics).toHaveLength(1)
+    expect(attributes.topicClearings).toHaveLength(1)
+    expect(attributes.categoryClearings).toHaveLength(1)
+  })
+
+  it('records a thread as a channel of its own, with no position', async () => {
+    const guild = await createGuild()
+    const thread = observedChannel({ isThread: true, position: undefined })
 
     const result = await fromSuccess(recordChannelSnapshot)(
       thread,
@@ -406,8 +525,10 @@ describe('recordChannelSnapshot', () => {
       .selectAll()
       .where('channelId', '=', result.channelId)
       .executeTakeFirstOrThrow()
+    const attributes = await channelAttributeRowsOf(result.channelId)
 
     expect(revision.isThread).toBe(1)
+    expect(attributes.positions).toHaveLength(0)
   })
 })
 
@@ -480,6 +601,25 @@ describe('recordGatewayDisconnection', () => {
       .execute()
 
     expect(disconnections).toHaveLength(1)
+  })
+})
+
+describe('recordGatewayHeartbeat', () => {
+  it('records that the daemon is still alive', async () => {
+    const guild = await createGuild()
+
+    const result = await fromSuccess(recordGatewayHeartbeat)(
+      {},
+      ownerContextFor(guild)
+    )
+
+    const heartbeats = await db()
+      .selectFrom('gatewayHeartbeats')
+      .selectAll()
+      .where('id', '=', result.gatewayHeartbeatId)
+      .execute()
+
+    expect(heartbeats).toHaveLength(1)
   })
 })
 
@@ -822,6 +962,27 @@ describe('runChannelBackfill', () => {
     expect(telemetry.completions).toHaveLength(0)
   })
 
+  it('records a failure, not a completion, when it stops at the page limit', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const fetchChannelHistory: FetchChannelHistory = async () =>
+      Array.from({ length: 100 }).map(() => backfilledMessage())
+
+    const result = await fromSuccess(runChannelBackfill)(
+      { channelId: channel.id, fetchChannelHistory },
+      ownerContextFor(guild)
+    )
+
+    const telemetry = await backfillTelemetryOf(result.backfillRunId)
+
+    expect(result.outcome).toBe('stopped_at_the_page_limit')
+    expect(telemetry.completions).toHaveLength(0)
+    expect(telemetry.failures).toHaveLength(1)
+    expect(telemetry.failures[0].errorMessage).toBe(
+      'Stopped at the page limit before reaching the newest messages'
+    )
+  })
+
   it('refuses a channel this deployment has not ingested', async () => {
     const guild = await createGuild()
     const channel = await createChannel()
@@ -839,7 +1000,7 @@ describe('runChannelBackfill', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'That channel has not been ingested yet'
+      'No channel with that id has been ingested. List the channels to pick one.'
     )
 
     const runs = await db()
@@ -907,6 +1068,10 @@ describe('listBackfillableChannels', () => {
 })
 
 describe('backfillIngestedChannels', () => {
+  it('asks the scheduler to keep only one waiting sweep', () => {
+    expect(backfillIngestedChannels.dedupe).toBe(true)
+  })
+
   it('enqueues one backfill per channel the bot still sees', async () => {
     const guild = await configuredGuild()
     const channel = await createChannel({ guildId: guild.id })

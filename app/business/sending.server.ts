@@ -3,12 +3,13 @@ import { sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
+  type MessageSendFailureKind,
   type MessageSendSkipReason,
   type MessageSendStatus,
   type MessageSendTransport,
-  messageSendSkipCopy,
+  TransportRejectedError,
+  messageSendGuidance,
   messageSendStallThresholdMinutes,
-  messageSendStatusCopy,
   readMessageSendStatusSchema,
   sendMessageSchema,
 } from '~/business/sending.common'
@@ -18,6 +19,22 @@ import { newId } from '~/framework/db.server'
 const sendingContextSchema = ownerContextSchema.extend({
   canSendMessages: z.literal(true),
 })
+
+function jumpUrl({
+  discordChannelId,
+  discordGuildId,
+  discordMessageId,
+}: {
+  discordChannelId: string
+  discordGuildId: string
+  discordMessageId: string
+}) {
+  return `https://discord.com/channels/${discordGuildId}/${discordChannelId}/${discordMessageId}`
+}
+
+function failureKindOf(error: unknown): MessageSendFailureKind {
+  return error instanceof TransportRejectedError ? 'rejected' : 'unreachable'
+}
 
 function skipReasonFor({
   channel,
@@ -120,42 +137,30 @@ function sendMessage(transport: MessageSendTransport) {
       return {
         send: {
           requestId: request.id,
+          requestedAt: request.createdAt,
           status: 'skipped' as const,
           reason,
-          ...messageSendSkipCopy[reason],
+          ...messageSendGuidance({ kind: null, reason, status: 'skipped' }),
         },
       }
     }
 
+    let posted: { discordMessageId: string }
+
     try {
-      const { discordMessageId } = await transport({
+      posted = await transport({
         content,
         discordChannelId: channel.discordChannelId,
         replyToDiscordMessageId: replyTarget?.discordMessageId ?? null,
       })
-
-      await db()
-        .insertInto('messageSendDeliveries')
-        .values({
-          id: newId(),
-          messageSendRequestId: request.id,
-          discordMessageId,
-        })
-        .execute()
-
-      return {
-        send: {
-          requestId: request.id,
-          status: 'delivered' as const,
-          discordMessageId,
-          ...messageSendStatusCopy.delivered,
-        },
-      }
     } catch (error) {
+      const kind = failureKindOf(error)
+
       await db()
         .insertInto('messageSendFailures')
         .values({
           id: newId(),
+          kind,
           messageSendRequestId: request.id,
           errorMessage: error instanceof Error ? error.message : String(error),
         })
@@ -164,10 +169,39 @@ function sendMessage(transport: MessageSendTransport) {
       return {
         send: {
           requestId: request.id,
+          requestedAt: request.createdAt,
           status: 'failed' as const,
-          ...messageSendStatusCopy.failed,
+          ...messageSendGuidance({ kind, reason: null, status: 'failed' }),
         },
       }
+    }
+
+    await db()
+      .insertInto('messageSendDeliveries')
+      .values({
+        id: newId(),
+        messageSendRequestId: request.id,
+        discordMessageId: posted.discordMessageId,
+      })
+      .execute()
+
+    return {
+      send: {
+        requestId: request.id,
+        requestedAt: request.createdAt,
+        status: 'delivered' as const,
+        discordMessageId: posted.discordMessageId,
+        jumpUrl: jumpUrl({
+          discordChannelId: channel.discordChannelId,
+          discordGuildId: channel.discordGuildId,
+          discordMessageId: posted.discordMessageId,
+        }),
+        ...messageSendGuidance({
+          kind: null,
+          reason: null,
+          status: 'delivered',
+        }),
+      },
     }
   })
 }
@@ -175,7 +209,7 @@ function sendMessage(transport: MessageSendTransport) {
 const readMessageSendStatus = applySchema(
   readMessageSendStatusSchema,
   sendingContextSchema
-)(async ({ requestId }, context) => {
+)(async ({ requestId }) => {
   const outcomeEvents = db()
     .selectFrom('messageSendDeliveries')
     .select([
@@ -251,6 +285,29 @@ const readMessageSendStatus = applySchema(
     .where('rowNumber', '=', 1)
     .as('latestDeliveries')
 
+  const rankedFailures = db()
+    .selectFrom('messageSendFailures')
+    .select((eb) => [
+      'messageSendRequestId',
+      'kind',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy('messageSendRequestId')
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('rankedFailures')
+
+  const latestFailures = db()
+    .selectFrom(rankedFailures)
+    .select(['messageSendRequestId', 'kind'])
+    .where('rowNumber', '=', 1)
+    .as('latestFailures')
+
   const rankedSkips = db()
     .selectFrom('messageSendSkips')
     .select((eb) => [
@@ -293,12 +350,22 @@ const readMessageSendStatus = applySchema(
       'latestSkips.messageSendRequestId',
       'messageSendRequests.id'
     )
+    .leftJoin(
+      latestFailures,
+      'latestFailures.messageSendRequestId',
+      'messageSendRequests.id'
+    )
     .where('messageSendRequests.id', '=', requestId)
-    .where('guilds.discordGuildId', '=', context.owner.guildId)
     .select((eb) => [
       'messageSendRequests.id as requestId',
       'messageSendRequests.createdAt as requestedAt',
       'latestDeliveries.discordMessageId',
+      'channels.discordChannelId',
+      'guilds.discordGuildId',
+      eb
+        .ref('latestFailures.kind')
+        .$castTo<MessageSendFailureKind | null>()
+        .as('kind'),
       eb
         .ref('latestSkips.reason')
         .$castTo<MessageSendSkipReason | null>()
@@ -320,12 +387,19 @@ const readMessageSendStatus = applySchema(
     ])
   }
 
+  const { discordChannelId, discordGuildId, ...send } = row
+
   return {
     send: {
-      ...row,
-      ...(row.status === 'skipped' && row.reason
-        ? messageSendSkipCopy[row.reason]
-        : messageSendStatusCopy[row.status]),
+      ...send,
+      jumpUrl: send.discordMessageId
+        ? jumpUrl({
+            discordChannelId,
+            discordGuildId,
+            discordMessageId: send.discordMessageId,
+          })
+        : null,
+      ...messageSendGuidance(row),
     },
   }
 })

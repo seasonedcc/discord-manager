@@ -25,6 +25,11 @@ const parityExemptions: ParityExemption[] = [
       'A scheduler job the ingest daemon runs on startup and after every reconnect. The owner reads what it produced through ingestion_status.',
   },
   {
+    functionName: 'ingestion.beatGatewayHeartbeat',
+    reason:
+      'A scheduler job the ingest daemon ticks every minute so its liveness is on the record. The owner reads it through ingestion_status.',
+  },
+  {
     functionName: 'ingestion.listBackfillableChannels',
     reason:
       'Tells the daemon which channels its backfill sweep should visit. The owner-facing channel listing is channels_list.',
@@ -48,6 +53,11 @@ const parityExemptions: ParityExemption[] = [
     functionName: 'ingestion.recordGatewayDisconnection',
     reason:
       'Records the link of the daemon to Discord dropping. The owner reads the resulting activity through ingestion_status.',
+  },
+  {
+    functionName: 'ingestion.recordGatewayHeartbeat',
+    reason:
+      'Records the daemon liveness signal; the owner reads it through ingestion_status.',
   },
   {
     functionName: 'ingestion.recordIncomingMessage',

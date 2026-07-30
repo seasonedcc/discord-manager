@@ -129,6 +129,36 @@ describe('addBookmarkByLink', () => {
     expect(additions).toHaveLength(2)
   })
 
+  it('bookmarks a link copied from the canary client', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    const { bookmark } = await fromSuccess(addBookmarkByLink)(
+      {
+        messageLink: `https://canary.discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
+      },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmark.messageId).toBe(message.id)
+  })
+
+  it('bookmarks a link copied from the old discordapp.com host', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    const { bookmark } = await fromSuccess(addBookmarkByLink)(
+      {
+        messageLink: `https://discordapp.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
+      },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmark.messageId).toBe(message.id)
+  })
+
   it('rejects anything that is not a Discord message link', async () => {
     const guild = await createGuild()
 
@@ -141,11 +171,11 @@ describe('addBookmarkByLink', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'Use a Discord message link that looks like https://discord.com/channels/<server>/<channel>/<message>'
+      'That is not a Discord message link. Right-click the message in Discord, choose Copy Message Link, and pass that — it looks like https://discord.com/channels/<server>/<channel>/<message>.'
     )
   })
 
-  it('rejects a link whose ids are not snowflakes', async () => {
+  it('tells a link with the right shape but the wrong ids apart', async () => {
     const guild = await createGuild()
 
     const result = await addBookmarkByLink(
@@ -157,7 +187,7 @@ describe('addBookmarkByLink', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'Use a Discord message link that looks like https://discord.com/channels/<server>/<channel>/<message>'
+      'That message link carries something other than Discord ids. Copy it again from Discord without editing the numbers.'
     )
   })
 
@@ -181,7 +211,7 @@ describe('addBookmarkByLink', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'That link points at a different Discord server than this deployment manages'
+      'That link points at a different Discord server than this deployment manages. Pick a message from the server this deployment manages.'
     )
   })
 
@@ -305,7 +335,7 @@ describe('resolveBookmark', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'That message is not in the server this deployment manages'
+      'No message with that id has been ingested. List your bookmarks or catch up to pick one.'
     )
   })
 })
@@ -345,7 +375,57 @@ describe('snoozeBookmark', () => {
     expect(result.success).toBe(false)
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
-    expect(result.errors[0].message).toBe('Pick a snooze time in the future')
+    expect(result.errors[0].message).toBe(
+      'That snooze time has already passed. Pick a moment in the future, such as tomorrow morning.'
+    )
+  })
+
+  it('fails when the message was never bookmarked', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    const result = await snoozeBookmark(
+      { messageId: message.id, until: '2099-12-31T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    const snoozes = await db()
+      .selectFrom('bookmarkSnoozes')
+      .selectAll()
+      .where('messageId', '=', message.id)
+      .execute()
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(isInputError(result.errors[0])).toBe(true)
+    expect(result.errors[0].message).toBe(
+      'That message is not bookmarked, so there is nothing to snooze'
+    )
+    expect(snoozes).toHaveLength(0)
+  })
+
+  it('fails when the bookmark was already resolved', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createBookmarkedMessage({
+      channelId: channel.id,
+      bookmarkedAt: '2020-01-01T00:00:00.000Z',
+    })
+    const context = await ownerContext({ guildId: guild.id })
+
+    await fromSuccess(resolveBookmark)({ messageId: message.id }, context)
+
+    const result = await snoozeBookmark(
+      { messageId: message.id, until: '2099-12-31T00:00:00.000Z' },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(result.errors[0].message).toBe(
+      'That message is not bookmarked, so there is nothing to snooze'
+    )
   })
 
   it('fails when the message belongs to another Discord server', async () => {
@@ -363,7 +443,7 @@ describe('snoozeBookmark', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'That message is not in the server this deployment manages'
+      'No message with that id has been ingested. List your bookmarks or catch up to pick one.'
     )
   })
 })
@@ -580,6 +660,30 @@ describe('listBookmarks', () => {
       newer.id,
       older.id,
     ])
+  })
+
+  it('brings back at most the asked-for number and says it was truncated', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    await createBookmarkedMessage({
+      channelId: channel.id,
+      bookmarkedAt: '2099-03-01T00:00:00.000Z',
+    })
+    const newer = await createBookmarkedMessage({
+      channelId: channel.id,
+      bookmarkedAt: '2099-03-02T00:00:00.000Z',
+    })
+    const context = await ownerContext({ guildId: guild.id })
+
+    const capped = await fromSuccess(listBookmarks)({ limit: 1 }, context)
+    const whole = await fromSuccess(listBookmarks)({}, context)
+
+    expect(capped.bookmarks.map(({ messageId }) => messageId)).toEqual([
+      newer.id,
+    ])
+    expect(capped.truncated).toBe(true)
+    expect(whole.bookmarks).toHaveLength(2)
+    expect(whole.truncated).toBe(false)
   })
 
   it('only lists bookmarks from the configured server', async () => {

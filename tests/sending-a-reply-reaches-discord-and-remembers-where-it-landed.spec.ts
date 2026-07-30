@@ -7,8 +7,10 @@ import { test } from './spec'
 type Send = {
   send: {
     discordMessageId: string
+    jumpUrl: string
     nextAction: string
     requestId: string
+    requestedAt: string
     status: string
     summary: string
   }
@@ -17,6 +19,7 @@ type Send = {
 type SendStatus = {
   send: {
     discordMessageId: string | null
+    jumpUrl: string | null
     nextAction: string
     requestId: string
     requestedAt: string
@@ -26,7 +29,7 @@ type SendStatus = {
 }
 
 test('sending a reply reaches Discord and remembers where it landed', async () => {
-  const { channels, messages } = fixtures()
+  const { channels, guild, messages } = fixtures()
   const session = await openMcpSession()
 
   const content = `On it — reviewing the checklist now (${randomUUID()})`
@@ -54,14 +57,20 @@ test('sending a reply reaches Discord and remembers where it landed', async () =
     messages.mention.discordMessageId
   )
   assert.equal(send.discordMessageId, session.discord.sends[0].discordMessageId)
+  assert.equal(
+    send.jumpUrl,
+    `https://discord.com/channels/${guild.discordGuildId}/${channels.engineering.discordChannelId}/${send.discordMessageId}`
+  )
 
   const status = await session.call<SendStatus>('messages_send_status', {
     requestId: send.requestId,
   })
 
   assert.equal(status.send.requestId, send.requestId)
+  assert.equal(status.send.requestedAt, send.requestedAt)
   assert.equal(status.send.status, 'delivered')
   assert.equal(status.send.discordMessageId, send.discordMessageId)
+  assert.equal(status.send.jumpUrl, send.jumpUrl)
   assert.equal(status.send.summary, 'The message is live in the channel.')
   assert.equal(
     status.send.nextAction,

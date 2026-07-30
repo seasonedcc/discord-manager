@@ -10,7 +10,7 @@ type BookmarkList = {
 }
 
 type ResolvedBookmark = {
-  bookmark: { messageId: string; resolvedAt: string; source: string }
+  bookmark: { messageId: string; resolvedAt: string; resolvedVia: string }
 }
 
 test('resolving a bookmark clears it from the list', async () => {
@@ -31,7 +31,7 @@ test('resolving a bookmark clears it from the list', async () => {
   })
 
   assert.equal(resolved.bookmark.messageId, message.id)
-  assert.equal(resolved.bookmark.source, 'mcp')
+  assert.equal(resolved.bookmark.resolvedVia, 'mcp')
 
   const { bookmarks } = await session.call<BookmarkList>('bookmarks_list')
 

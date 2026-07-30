@@ -7,7 +7,7 @@ type Digest = {
   messages: {
     channelName: string
     content: string
-    id: string
+    messageId: string
     jumpUrl: string
   }[]
   truncated: boolean
@@ -20,7 +20,9 @@ test('mentions bring back only the messages that name you', async () => {
   const digest = await session.call<Digest>('mentions_list', {
     since: clock.at(5),
   })
-  const mention = digest.messages.filter(({ id }) => id === messages.mention.id)
+  const mention = digest.messages.filter(
+    ({ messageId }) => messageId === messages.mention.id
+  )
 
   assert.equal(mention.length, 1)
   assert.equal(mention[0].content, messages.mention.content)
@@ -29,11 +31,14 @@ test('mentions bring back only the messages that name you', async () => {
   assert.equal(digest.truncated, false)
 
   assert.equal(
-    digest.messages.filter(({ id }) => id === messages.offsite.id).length,
+    digest.messages.filter(({ messageId }) => messageId === messages.offsite.id)
+      .length,
     0
   )
   assert.equal(
-    digest.messages.filter(({ id }) => id === messages.corrected.id).length,
+    digest.messages.filter(
+      ({ messageId }) => messageId === messages.corrected.id
+    ).length,
     0
   )
 })

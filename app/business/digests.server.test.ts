@@ -36,7 +36,7 @@ describe('catchUpSince', () => {
       await ownerContext({ guildId: guild.id })
     )
 
-    expect(digest.messages.map(({ id }) => id)).toEqual([
+    expect(digest.messages.map(({ messageId }) => messageId)).toEqual([
       atCutoff.id,
       afterCutoff.id,
     ])
@@ -71,7 +71,7 @@ describe('catchUpSince', () => {
 
     expect(digest.messages).toEqual([
       {
-        id: message.id,
+        messageId: message.id,
         discordMessageId: message.discordMessageId,
         discordCreatedAt: '2099-02-01T00:00:00.000Z',
         channelId: channel.id,
@@ -106,7 +106,7 @@ describe('catchUpSince', () => {
       await ownerContext({ guildId: guild.id })
     )
 
-    expect(digest.messages.map(({ id }) => id)).toEqual([kept.id])
+    expect(digest.messages.map(({ messageId }) => messageId)).toEqual([kept.id])
   })
 
   it('narrows the digest to one channel when asked', async () => {
@@ -127,7 +127,9 @@ describe('catchUpSince', () => {
       await ownerContext({ guildId: guild.id })
     )
 
-    expect(digest.messages.map(({ id }) => id)).toEqual([wanted.id])
+    expect(digest.messages.map(({ messageId }) => messageId)).toEqual([
+      wanted.id,
+    ])
   })
 
   it('only reads messages from the configured server', async () => {
@@ -149,7 +151,9 @@ describe('catchUpSince', () => {
       await ownerContext({ guildId: guild.id })
     )
 
-    expect(digest.messages.map(({ id }) => id)).toEqual([wanted.id])
+    expect(digest.messages.map(({ messageId }) => messageId)).toEqual([
+      wanted.id,
+    ])
   })
 
   it('fails when the requested channel was never ingested', async () => {
@@ -164,7 +168,7 @@ describe('catchUpSince', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'That channel has not been ingested yet'
+      'No channel with that id has been ingested. List the channels to pick one.'
     )
   })
 
@@ -182,7 +186,7 @@ describe('catchUpSince', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'That channel has not been ingested yet'
+      'No channel with that id has been ingested. List the channels to pick one.'
     )
   })
 
@@ -272,7 +276,7 @@ describe('listMentions', () => {
       context
     )
 
-    expect(mentions.messages.map(({ id }) => id)).toEqual([
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
       plainMention.id,
       nicknameMention.id,
     ])
@@ -304,7 +308,9 @@ describe('listMentions', () => {
       context
     )
 
-    expect(mentions.messages.map(({ id }) => id)).toEqual([message.id])
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      message.id,
+    ])
   })
 
   it('drops a mention once the message is deleted', async () => {

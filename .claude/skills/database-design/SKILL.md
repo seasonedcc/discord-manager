@@ -53,7 +53,7 @@ message_deletions             -- event: the message was deleted
 
 Slice mutable state into event tables **per cohesive concern** — fields that change together through one observed action share one table.
 
-- A "revision" table snapshots **all** fields of its concern per change, never a diff, so reading current state needs only the latest row. `channel_detail_revisions` carries name, topic, category, `isThread`, and position together because one Discord channel-update event reports them together.
+- A "revision" table snapshots **all** fields of its concern per change, never a diff, so reading current state needs only the latest row. `channel_detail_revisions` carries the name and `isThread` together because every channel always has both; the optional ones — topic, category, position — are their own event tables (see *No nullable columns*).
 - Separately-actioned state changes each get their own narrow event table: `message_deletions`, `channel_removals`, `bookmark_snoozes`.
 - Not per-field (table explosion, N-way joins to assemble current state), and not forced whole-entity (couples unrelated concerns).
 
@@ -84,6 +84,8 @@ The latest row per `messageId` says whether the message is bookmarked; no rows m
 ## Identifiers are generated in application code
 
 SQLite has no `gen_random_uuid()`. Primary keys are `text` columns declared `primaryKey().notNull()` with **no default**, and the value comes from `newId()` in the insert helper — a monotonic UUIDv7, so ids issued by one process sort in issue order. That is what keeps the latest-event-wins `id desc` tie-break deterministic when two events land in the same millisecond; `crypto.randomUUID()` would decide those ties by chance. A migration never invents an id-generating default, and no insert site may omit the id.
+
+The guarantee stops at the process boundary. Two processes writing to the same reversible pair within one millisecond leave the winner undefined, because neither knows the other's sequence. That is accepted, not a gap to close: the daemon is the only gateway writer, MCP writes are transactional, and no ordering machinery exists here (see *One writer, no ordering machinery*).
 
 ## Timestamps are ISO-8601 UTC text
 
@@ -198,7 +200,9 @@ message_revisions
   created_at  text not null
 ```
 
-"Optional" attributes are not nullable columns either: model them as their own event table with zero-or-more rows per parent. A message's topic, a channel's category, and a bookmark's snooze are all this shape.
+"Optional" attributes are not nullable columns either: model them as their own event table with zero-or-more rows per parent. A channel's topic, its category, its position, and a bookmark's snooze are all this shape — no rows means the parent never had one.
+
+When such an attribute can be **cleared after being set**, one table cannot say so without a sentinel value, and a sentinel is a lie the schema will keep telling. Model it as a reversible pair instead: `channel_topic_changes` carries the value, `channel_topic_clearings` carries nothing, and the newer of the two latest rows wins — a change row means the attribute is present, a clearing row or no rows at all means it is absent. Both tables get the usual `(parentId, createdAt desc)` index.
 
 ## No `updatedAt` columns
 
@@ -251,7 +255,7 @@ There is deliberately no reset script. Because the seed only builds onto an empt
 Three rules keep a section demo-ready and durable:
 
 - Compute every date relative to `now` in SQL (`strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')`), never a hardcoded calendar date, which rots.
-- Prerequisite lookups key on natural keys (a Discord channel id, a channel name), never on insertion order. Bulk-seeded rows share timestamps, so `orderBy('createdAt')` is undefined, and `orderBy('id')` is a coin flip too, because ids are random UUIDs.
+- Prerequisite lookups key on natural keys (a Discord channel id, a channel name), never on insertion order. Bulk-seeded rows share timestamps, so `orderBy('createdAt')` is undefined; `orderBy('id')` does resolve, but only to the order the seed happened to write in, so the day a later section inserts earlier in the pipeline that lookup silently returns a different row.
 - Sections drive real business functions, not raw inserts, so the seed exercises the same validation the product does.
 
 The timestamp tie also decides read order. Sibling rows inserted in one transaction share that transaction's clock to the millisecond, so any derivation ordering them by `createdAt` falls through to its id tiebreak and reshuffles on every reseed — which flips digest output nondeterministically. When a seeded reading's row order matters, stagger the siblings' `createdAt` with small now-relative offsets; never change the product query's ordering to compensate.

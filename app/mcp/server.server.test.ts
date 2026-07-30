@@ -35,6 +35,34 @@ describe('listTools', () => {
       required: ['since'],
     })
   })
+
+  it('carries every field description through to the listed tool', () => {
+    const catchUp = listTools().find(({ name }) => name === 'messages_catch_up')
+    const properties = (catchUp?.inputSchema.properties ?? {}) as Record<
+      string,
+      { description?: string }
+    >
+
+    expect(properties.channelId?.description).toBe(
+      'Narrow the digest to one channel: the `channelId` from channels_list — not the Discord channel snowflake. Left out, the whole server is read.'
+    )
+    expect(properties.since?.description).toContain('ISO-8601')
+  })
+
+  it('describes every field of every tool it lists', () => {
+    const undescribed = listTools().flatMap(({ inputSchema, name }) =>
+      Object.entries(
+        (inputSchema.properties ?? {}) as Record<
+          string,
+          { description?: string }
+        >
+      )
+        .filter(([, field]) => (field.description ?? '').trim().length === 0)
+        .map(([field]) => `${name}.${field}`)
+    )
+
+    expect(undescribed).toEqual([])
+  })
 })
 
 describe('callTool', () => {

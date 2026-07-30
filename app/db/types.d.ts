@@ -59,15 +59,38 @@ export interface BookmarkSnoozes {
   until: string;
 }
 
-export interface ChannelDetailRevisions {
+export interface ChannelCategoryChanges {
   category: string;
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+}
+
+export interface ChannelCategoryClearings {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+}
+
+export interface ChannelDetailRevisions {
   channelId: string;
   createdAt: Generated<string>;
   id: string;
   isThread: number;
   name: string;
+}
+
+export interface ChannelPositionChanges {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
   position: number;
-  topic: string;
+}
+
+export interface ChannelPositionClearings {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
 }
 
 export interface ChannelRemovals {
@@ -83,12 +106,30 @@ export interface Channels {
   id: string;
 }
 
+export interface ChannelTopicChanges {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+  topic: string;
+}
+
+export interface ChannelTopicClearings {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+}
+
 export interface GatewayConnections {
   createdAt: Generated<string>;
   id: string;
 }
 
 export interface GatewayDisconnections {
+  createdAt: Generated<string>;
+  id: string;
+}
+
+export interface GatewayHeartbeats {
   createdAt: Generated<string>;
   id: string;
 }
@@ -146,6 +187,7 @@ export interface MessageSendFailures {
   createdAt: Generated<string>;
   errorMessage: string;
   id: string;
+  kind: string;
   messageSendRequestId: string;
 }
 
@@ -178,11 +220,18 @@ export interface DB {
   bookmarkAdditions: BookmarkAdditions;
   bookmarkRemovals: BookmarkRemovals;
   bookmarkSnoozes: BookmarkSnoozes;
+  channelCategoryChanges: ChannelCategoryChanges;
+  channelCategoryClearings: ChannelCategoryClearings;
   channelDetailRevisions: ChannelDetailRevisions;
+  channelPositionChanges: ChannelPositionChanges;
+  channelPositionClearings: ChannelPositionClearings;
   channelRemovals: ChannelRemovals;
   channels: Channels;
+  channelTopicChanges: ChannelTopicChanges;
+  channelTopicClearings: ChannelTopicClearings;
   gatewayConnections: GatewayConnections;
   gatewayDisconnections: GatewayDisconnections;
+  gatewayHeartbeats: GatewayHeartbeats;
   guilds: Guilds;
   memberDetailRevisions: MemberDetailRevisions;
   members: Members;

@@ -14,13 +14,17 @@ import {
 } from '~/business/ingestion.common'
 import { db } from '~/db/db.server'
 
+type ChannelBackfillState = Exclude<BackfillStatus, 'never'> | 'neverRan'
+
 const ingestionStatusContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
 })
 
 const backfillSilentSince = sql<string>`strftime('%Y-%m-%dT%H:%M:%fZ','now', ${`-${backfillStallThresholdMinutes} minutes`})`
 
-function newestEventAt(table: 'gatewayConnections' | 'gatewayDisconnections') {
+function newestEventAt(
+  table: 'gatewayConnections' | 'gatewayDisconnections' | 'gatewayHeartbeats'
+) {
   return db()
     .selectFrom(table)
     .select('createdAt')
@@ -30,25 +34,62 @@ function newestEventAt(table: 'gatewayConnections' | 'gatewayDisconnections') {
     .executeTakeFirst()
 }
 
-function newestRunPerChannel(guildId: string) {
-  return db()
-    .selectFrom('backfillRuns')
-    .innerJoin('channels', 'channels.id', 'backfillRuns.channelId')
-    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .where('guilds.discordGuildId', '=', guildId)
+function newestOf(instants: (string | null)[]) {
+  return instants.reduce<string | null>(
+    (newest, instant) =>
+      instant && (!newest || instant > newest) ? instant : newest,
+    null
+  )
+}
+
+function latestChannelNames() {
+  const ranked = db()
+    .selectFrom('channelDetailRevisions')
     .select((eb) => [
-      'backfillRuns.id',
-      'backfillRuns.createdAt as startedAt',
+      'channelId',
+      'name',
       eb.fn
         .agg<number>('row_number')
         .over((over) =>
           over
-            .partitionBy('backfillRuns.channelId')
-            .orderBy('backfillRuns.createdAt', 'desc')
-            .orderBy('backfillRuns.id', 'desc')
+            .partitionBy('channelId')
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
         )
         .as('rowNumber'),
     ])
+    .as('rankedNames')
+
+  return db()
+    .selectFrom(ranked)
+    .select(['channelId', 'name'])
+    .where('rowNumber', '=', 1)
+    .as('channelNames')
+}
+
+function newestRunPerChannel() {
+  const ranked = db()
+    .selectFrom('backfillRuns')
+    .select((eb) => [
+      'id',
+      'channelId',
+      'createdAt as startedAt',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy('channelId')
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('rankedRuns')
+
+  return db()
+    .selectFrom(ranked)
+    .select(['id', 'channelId', 'startedAt'])
+    .where('rowNumber', '=', 1)
     .as('newestRuns')
 }
 
@@ -65,16 +106,29 @@ function furthestProgressPerRun() {
     .as('furthestProgress')
 }
 
-function runFacts(guildId: string) {
+function channelBackfillStates(guildId: string) {
   return db()
-    .selectFrom(newestRunPerChannel(guildId))
+    .selectFrom('channels')
+    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+    .innerJoin(latestChannelNames(), 'channelNames.channelId', 'channels.id')
+    .leftJoin(newestRunPerChannel(), 'newestRuns.channelId', 'channels.id')
     .leftJoin(
       furthestProgressPerRun(),
       'furthestProgress.backfillRunId',
       'newestRuns.id'
     )
-    .where('newestRuns.rowNumber', '=', 1)
+    .where('guilds.discordGuildId', '=', guildId)
+    .where(({ exists, not, selectFrom }) =>
+      not(
+        exists(
+          selectFrom('channelRemovals')
+            .select('channelRemovals.id')
+            .whereRef('channelRemovals.channelId', '=', 'channels.id')
+        )
+      )
+    )
     .select((eb) => [
+      'channelNames.name',
       'newestRuns.startedAt',
       eb.fn
         .coalesce('furthestProgress.fetchedMessageCount', sql<number>`0`)
@@ -82,67 +136,67 @@ function runFacts(guildId: string) {
       eb.fn
         .coalesce('furthestProgress.storedMessageCount', sql<number>`0`)
         .as('storedMessageCount'),
-      eb.fn
-        .coalesce('furthestProgress.lastProgressAt', 'newestRuns.startedAt')
-        .as('lastHeardFromAt'),
-      eb
-        .exists(
-          eb
-            .selectFrom('backfillRunCompletions')
-            .select('backfillRunCompletions.id')
-            .whereRef(
-              'backfillRunCompletions.backfillRunId',
-              '=',
-              'newestRuns.id'
-            )
-        )
-        .$castTo<number>()
-        .as('completed'),
-      eb
-        .exists(
-          eb
-            .selectFrom('backfillRunFailures')
-            .select('backfillRunFailures.id')
-            .whereRef('backfillRunFailures.backfillRunId', '=', 'newestRuns.id')
-        )
-        .$castTo<number>()
-        .as('failed'),
-    ])
-    .as('runFacts')
-}
-
-function runStates(guildId: string) {
-  return db()
-    .selectFrom(runFacts(guildId))
-    .select((eb) => [
-      'startedAt',
-      'fetchedMessageCount',
-      'storedMessageCount',
       eb
         .case()
-        .when('failed', '=', 1)
+        .when('newestRuns.id', 'is', null)
+        .then('neverRan')
+        .when(
+          eb.exists(
+            eb
+              .selectFrom('backfillRunFailures')
+              .select('backfillRunFailures.id')
+              .whereRef(
+                'backfillRunFailures.backfillRunId',
+                '=',
+                'newestRuns.id'
+              )
+          )
+        )
         .then('failed')
-        .when('completed', '=', 1)
+        .when(
+          eb.exists(
+            eb
+              .selectFrom('backfillRunCompletions')
+              .select('backfillRunCompletions.id')
+              .whereRef(
+                'backfillRunCompletions.backfillRunId',
+                '=',
+                'newestRuns.id'
+              )
+          )
+        )
         .then('completed')
-        .when('lastHeardFromAt', '<', backfillSilentSince)
+        .when(
+          eb.fn.coalesce(
+            'furthestProgress.lastProgressAt',
+            'newestRuns.startedAt'
+          ),
+          '<',
+          backfillSilentSince
+        )
         .then('stalled')
         .else('running')
         .end()
-        .$castTo<BackfillStatus>()
+        .$castTo<ChannelBackfillState>()
         .as('state'),
     ])
-    .as('runStates')
 }
 
-function worstChannelState(channels: {
-  completed: number
-  failed: number
-  running: number
-  stalled: number
+function worstChannelState({
+  channels,
+  neverRanChannelCount,
+}: {
+  channels: {
+    completed: number
+    failed: number
+    running: number
+    stalled: number
+  }
+  neverRanChannelCount: number
 }): BackfillStatus {
   if (channels.failed > 0) return 'failed'
   if (channels.stalled > 0) return 'stalled'
-  if (channels.running > 0) return 'running'
+  if (channels.running > 0 || neverRanChannelCount > 0) return 'running'
   if (channels.completed > 0) return 'completed'
 
   return 'never'
@@ -154,53 +208,36 @@ const readIngestionStatus = applySchema(
 )(async (_input, context) => {
   const connection = await newestEventAt('gatewayConnections')
   const disconnection = await newestEventAt('gatewayDisconnections')
+  const heartbeat = await newestEventAt('gatewayHeartbeats')
 
-  const backfill = await db()
-    .selectFrom(runStates(context.owner.guildId))
-    .select((eb) => [
-      eb.fn
-        .count<number>('state')
-        .filterWhere('state', '=', 'completed')
-        .as('completed'),
-      eb.fn
-        .count<number>('state')
-        .filterWhere('state', '=', 'failed')
-        .as('failed'),
-      eb.fn
-        .count<number>('state')
-        .filterWhere('state', '=', 'running')
-        .as('running'),
-      eb.fn
-        .count<number>('state')
-        .filterWhere('state', '=', 'stalled')
-        .as('stalled'),
-      eb.fn
-        .coalesce(eb.fn.sum<number>('fetchedMessageCount'), sql<number>`0`)
-        .as('fetchedMessageCount'),
-      eb.fn
-        .coalesce(eb.fn.sum<number>('storedMessageCount'), sql<number>`0`)
-        .as('storedMessageCount'),
-      eb.fn.max('startedAt').$castTo<string | null>().as('lastRunStartedAt'),
-    ])
-    .executeTakeFirstOrThrow()
+  const states = await channelBackfillStates(context.owner.guildId).execute()
+  const channelsIn = (state: ChannelBackfillState) =>
+    states.filter((channel) => channel.state === state)
 
   const observedAt = new Date().toISOString()
   const lastConnectedAt = connection?.createdAt ?? null
   const lastDisconnectedAt = disconnection?.createdAt ?? null
+  const lastAliveAt = newestOf([lastConnectedAt, heartbeat?.createdAt ?? null])
   const activity = deriveGatewayActivity({
-    lastConnectedAt,
+    lastAliveAt,
     lastDisconnectedAt,
     observedAt,
   })
-  const { completed, failed, running, stalled, ...counts } = backfill
-  const channels = { completed, failed, running, stalled }
-  const status = worstChannelState(channels)
+  const channels = {
+    completed: channelsIn('completed').length,
+    failed: channelsIn('failed').length,
+    running: channelsIn('running').length,
+    stalled: channelsIn('stalled').length,
+  }
+  const neverRanChannelCount = channelsIn('neverRan').length
+  const status = worstChannelState({ channels, neverRanChannelCount })
 
   return {
     ingestion: {
       observedAt,
       gateway: {
         activity,
+        lastAliveAt,
         lastConnectedAt,
         lastDisconnectedAt,
         ...gatewayActivityCopy[activity],
@@ -208,7 +245,17 @@ const readIngestionStatus = applySchema(
       backfill: {
         status,
         channels,
-        ...counts,
+        neverRanChannelCount,
+        failedChannelNames: channelsIn('failed').map(({ name }) => name),
+        fetchedMessageCount: states.reduce(
+          (total, channel) => total + channel.fetchedMessageCount,
+          0
+        ),
+        storedMessageCount: states.reduce(
+          (total, channel) => total + channel.storedMessageCount,
+          0
+        ),
+        lastRunStartedAt: newestOf(states.map(({ startedAt }) => startedAt)),
         ...backfillStatusCopy[status],
       },
     },

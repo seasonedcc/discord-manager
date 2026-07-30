@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { type Client, Collection, Events } from 'discord.js'
 import { ownerContext } from '~/business/auth.server'
 import { backfillIngestedChannels } from '~/business/ingestion.server'
 import { newId } from '~/framework/db.server'
@@ -13,6 +14,7 @@ import {
   handleMessageEdit,
   handleReactionAdded,
   handleReactionRemoved,
+  registerGatewayListeners,
 } from './gateway.server'
 
 const configuredGuildId = ownerContext().owner.guildId
@@ -284,6 +286,32 @@ describe('handleGatewayConnected', () => {
       .execute()
 
     expect(ignored).toHaveLength(0)
+    expect(enqueue).toHaveBeenCalledWith({ fetchChannelHistory })
+
+    enqueue.mockRestore()
+  })
+})
+
+describe('registerGatewayListeners', () => {
+  it('treats a fresh identify like a resume, so the gaps still close', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, () => Promise<void>>()
+    const client = {
+      channels: { cache: new Collection() },
+      on: (event: string, handler: () => Promise<void>) => {
+        handlers.set(event, handler)
+      },
+    } as unknown as Client
+    const enqueue = vi
+      .spyOn(backfillIngestedChannels, 'enqueue')
+      .mockImplementation(() => {})
+    const fetchChannelHistory = async () => []
+
+    registerGatewayListeners(client, { fetchChannelHistory })
+
+    await handlers.get(Events.ShardReady)?.()
+
+    expect(handlers.has(Events.ShardResume)).toBe(true)
     expect(enqueue).toHaveBeenCalledWith({ fetchChannelHistory })
 
     enqueue.mockRestore()

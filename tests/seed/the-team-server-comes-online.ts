@@ -18,7 +18,14 @@ async function theTeamServerComesOnline() {
     topic: 'Where the product gets built',
   })
 
-  return { announcements, engineering }
+  const lobby = await feed.observeChannel({ name: 'lobby', position: 0 })
+  const releaseThread = await feed.observeChannel({
+    category: 'Teams',
+    isThread: true,
+    name: 'friday-release',
+  })
+
+  return { announcements, engineering, lobby, releaseThread }
 }
 
 export { theTeamServerComesOnline }

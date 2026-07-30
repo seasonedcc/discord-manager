@@ -12,7 +12,8 @@ import { db } from '~/db/db.server'
 import { newId } from '~/framework/db.server'
 
 const discordMessageLinkPattern =
-  /^https:\/\/discord\.com\/channels\/(\d{17,20})\/(\d{17,20})\/(\d{17,20})$/
+  /^https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/([^/]+)\/([^/]+)\/([^/]+)$/
+const discordSnowflakePattern = /^\d{17,20}$/
 
 const bookmarksContextSchema = ownerContextSchema.extend({
   canManageBookmarks: z.literal(true),
@@ -62,6 +63,13 @@ function latestBookmarkEvents() {
     .as('latestBookmarkEvents')
 }
 
+function unknownMessageError() {
+  return new InputError(
+    'No message with that id has been ingested. List your bookmarks or catch up to pick one.',
+    ['messageId']
+  )
+}
+
 function messagesInGuild(guildId: string) {
   return db()
     .selectFrom('messages')
@@ -88,16 +96,27 @@ const addBookmarkByLink = applySchema(
 
   if (!link) {
     throw new InputError(
-      'Use a Discord message link that looks like https://discord.com/channels/<server>/<channel>/<message>',
+      'That is not a Discord message link. Right-click the message in Discord, choose Copy Message Link, and pass that — it looks like https://discord.com/channels/<server>/<channel>/<message>.',
       ['messageLink']
     )
   }
 
-  const [, linkGuildId, , linkMessageId] = link
+  const [, linkGuildId, linkChannelId, linkMessageId] = link
+
+  if (
+    ![linkGuildId, linkChannelId, linkMessageId].every((id) =>
+      discordSnowflakePattern.test(id)
+    )
+  ) {
+    throw new InputError(
+      'That message link carries something other than Discord ids. Copy it again from Discord without editing the numbers.',
+      ['messageLink']
+    )
+  }
 
   if (linkGuildId !== context.owner.guildId) {
     throw new InputError(
-      'That link points at a different Discord server than this deployment manages',
+      'That link points at a different Discord server than this deployment manages. Pick a message from the server this deployment manages.',
       ['messageLink']
     )
   }
@@ -143,7 +162,7 @@ const addBookmarkByLink = applySchema(
 const listBookmarks = applySchema(
   listBookmarksSchema,
   bookmarksContextSchema
-)(async ({ includeSnoozed }, context) => {
+)(async ({ includeSnoozed, limit }, context) => {
   const rankedRevisions = db()
     .selectFrom('messageRevisions')
     .select((eb) => [
@@ -270,7 +289,8 @@ const listBookmarks = applySchema(
         .as('deletedUpstream'),
     ])
     .orderBy('latestBookmarkEvents.createdAt', 'desc')
-    .orderBy('messages.discordMessageId', 'desc')
+    .orderBy(sql`cast(messages.discord_message_id as integer)`, 'desc')
+    .limit(limit + 1)
 
   const rows = await (includeSnoozed
     ? query
@@ -278,11 +298,14 @@ const listBookmarks = applySchema(
   ).execute()
 
   return {
-    bookmarks: rows.map(({ discordGuildId, deletedUpstream, ...bookmark }) => ({
-      ...bookmark,
-      deletedUpstream: deletedUpstream === 1,
-      jumpUrl: `https://discord.com/channels/${discordGuildId}/${bookmark.discordChannelId}/${bookmark.discordMessageId}`,
-    })),
+    bookmarks: rows
+      .slice(0, limit)
+      .map(({ discordGuildId, deletedUpstream, ...bookmark }) => ({
+        ...bookmark,
+        deletedUpstream: deletedUpstream === 1,
+        jumpUrl: `https://discord.com/channels/${discordGuildId}/${bookmark.discordChannelId}/${bookmark.discordMessageId}`,
+      })),
+    truncated: rows.length > limit,
   }
 })
 
@@ -294,12 +317,7 @@ const resolveBookmark = applySchema(
     .where('messages.id', '=', messageId)
     .executeTakeFirst()
 
-  if (!message) {
-    throw new InputError(
-      'That message is not in the server this deployment manages',
-      ['messageId']
-    )
-  }
+  if (!message) throw unknownMessageError()
 
   const state = await readBookmarkState(message.id)
 
@@ -319,7 +337,7 @@ const resolveBookmark = applySchema(
   return {
     bookmark: {
       messageId: message.id,
-      source: removal.source,
+      resolvedVia: removal.source,
       resolvedAt: removal.createdAt,
     },
   }
@@ -332,16 +350,23 @@ const snoozeBookmark = applySchema(
   const untilInstant = new Date(until).toISOString()
 
   if (untilInstant <= new Date().toISOString()) {
-    throw new InputError('Pick a snooze time in the future', ['until'])
+    throw new InputError(
+      'That snooze time has already passed. Pick a moment in the future, such as tomorrow morning.',
+      ['until']
+    )
   }
 
   const message = await messagesInGuild(context.owner.guildId)
     .where('messages.id', '=', messageId)
     .executeTakeFirst()
 
-  if (!message) {
+  if (!message) throw unknownMessageError()
+
+  const state = await readBookmarkState(message.id)
+
+  if (state?.bookmarked !== 1) {
     throw new InputError(
-      'That message is not in the server this deployment manages',
+      'That message is not bookmarked, so there is nothing to snooze',
       ['messageId']
     )
   }

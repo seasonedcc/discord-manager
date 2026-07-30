@@ -11,30 +11,40 @@ function minutesBefore(minutes: number) {
 }
 
 describe('deriveGatewayActivity', () => {
-  it('reads as never until the bot has connected once', () => {
+  it('reads as never until the bot has shown any sign of life', () => {
     expect(
       deriveGatewayActivity({
-        lastConnectedAt: null,
+        lastAliveAt: null,
         lastDisconnectedAt: null,
         observedAt,
       })
     ).toBe('never')
   })
 
-  it('reads as receiving while the newest event is a connection', () => {
+  it('reads as receiving while the bot was alive moments ago', () => {
     expect(
       deriveGatewayActivity({
-        lastConnectedAt: minutesBefore(1),
+        lastAliveAt: minutesBefore(1),
         lastDisconnectedAt: minutesBefore(90),
         observedAt,
       })
     ).toBe('receiving')
   })
 
+  it('reads as quiet once the newest sign of life outlasts the silence threshold', () => {
+    expect(
+      deriveGatewayActivity({
+        lastAliveAt: minutesBefore(gatewaySilenceThresholdMinutes + 1),
+        lastDisconnectedAt: null,
+        observedAt,
+      })
+    ).toBe('quiet')
+  })
+
   it('reads as receiving while a fresh disconnection can still heal itself', () => {
     expect(
       deriveGatewayActivity({
-        lastConnectedAt: minutesBefore(90),
+        lastAliveAt: minutesBefore(gatewaySilenceThresholdMinutes - 2),
         lastDisconnectedAt: minutesBefore(gatewaySilenceThresholdMinutes - 1),
         observedAt,
       })
@@ -44,10 +54,20 @@ describe('deriveGatewayActivity', () => {
   it('reads as quiet once a disconnection outlasts the silence threshold', () => {
     expect(
       deriveGatewayActivity({
-        lastConnectedAt: minutesBefore(90),
+        lastAliveAt: minutesBefore(90),
         lastDisconnectedAt: minutesBefore(gatewaySilenceThresholdMinutes + 1),
         observedAt,
       })
     ).toBe('quiet')
+  })
+
+  it('reads a heartbeat that landed after a disconnection as receiving', () => {
+    expect(
+      deriveGatewayActivity({
+        lastAliveAt: minutesBefore(1),
+        lastDisconnectedAt: minutesBefore(2),
+        observedAt,
+      })
+    ).toBe('receiving')
   })
 })

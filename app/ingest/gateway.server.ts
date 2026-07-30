@@ -137,13 +137,15 @@ async function handleGatewayDisconnected() {
 function observeChannel(channel: GuildBasedChannel): ObservedChannel {
   return {
     category:
-      channel.parent && 'name' in channel.parent ? channel.parent.name : '',
+      channel.parent && 'name' in channel.parent
+        ? channel.parent.name
+        : undefined,
     discordChannelId: channel.id,
     discordGuildId: channel.guildId,
     isThread: channel.isThread(),
     name: channel.name,
-    position: 'position' in channel ? channel.position : 0,
-    topic: 'topic' in channel ? channel.topic : '',
+    position: 'position' in channel ? channel.position : undefined,
+    topic: 'topic' in channel ? (channel.topic ?? undefined) : undefined,
   }
 }
 
@@ -169,6 +171,13 @@ function registerGatewayListeners(
 
   client.on(Events.ShardDisconnect, async () => {
     await handleGatewayDisconnected()
+  })
+
+  client.on(Events.ShardReady, async () => {
+    await handleGatewayConnected({
+      channels: observableChannels(client),
+      fetchChannelHistory,
+    })
   })
 
   client.on(Events.ShardResume, async () => {

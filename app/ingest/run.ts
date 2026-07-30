@@ -2,11 +2,13 @@ import { existsSync } from 'node:fs'
 import { Client, GatewayIntentBits, Partials } from 'discord.js'
 import type { BackfilledMessage } from '~/business/ingestion.common'
 import { jobs } from '~/business/jobs.server'
-import { env } from '~/env.server'
+import { env, requireEnvironment } from '~/env.server'
 import { makeSchedulerRunner } from '~/framework/scheduler.server'
 import { registerGatewayListeners } from './gateway.server'
 
 if (existsSync('.env')) process.loadEnvFile()
+
+requireEnvironment()
 
 function makeChannelHistoryFetcher(client: Client) {
   return async ({

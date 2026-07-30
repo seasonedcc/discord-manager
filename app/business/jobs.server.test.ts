@@ -1,5 +1,9 @@
 import { describe, expect, it } from '~/test/prelude'
-import { backfillStallThresholdMinutes } from './ingestion.common'
+import {
+  backfillStallThresholdMinutes,
+  gatewayHeartbeatIntervalMinutes,
+  gatewaySilenceThresholdMinutes,
+} from './ingestion.common'
 import { jobs } from './jobs.server'
 
 const maximumAttemptsPerJob = 5
@@ -18,11 +22,21 @@ function retrySpanMs({
 }
 
 describe('jobs', () => {
-  it('registers the jobs that reach Discord', () => {
+  it('registers the jobs the ingest daemon runs', () => {
     expect(jobs.map((job) => job.jobName)).toEqual([
       'backfillChannel',
       'backfillIngestedChannels',
+      'beatGatewayHeartbeat',
     ])
+  })
+
+  it('ticks the liveness heartbeat well inside the gateway silence window', () => {
+    const heartbeat = jobs.find((job) => job.jobName === 'beatGatewayHeartbeat')
+
+    expect(heartbeat?.intervalMs).toBe(gatewayHeartbeatIntervalMinutes * 60_000)
+    expect(heartbeat?.intervalMs).toBeLessThan(
+      gatewaySilenceThresholdMinutes * 60_000
+    )
   })
 
   it('caps every job that calls Discord at five attempts', () => {

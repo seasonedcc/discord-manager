@@ -3,11 +3,13 @@ import { getOrSetGlobal } from './globals'
 type JobRun<Payload> = (payload: Payload) => Promise<void>
 
 type JobOptions = {
+  dedupe?: boolean
   maxAttempts?: number
   retryDelayMs?: number
 }
 
 type Job<Payload> = {
+  dedupe: boolean
   enqueue: (payload: Payload) => void
   jobName: string
   maxAttempts: number
@@ -30,6 +32,7 @@ type RegisteredJob = {
 
 type QueuedTask = {
   attempt: number
+  dedupe: boolean
   invoke: () => Promise<void>
   jobName: string
   maxAttempts: number
@@ -84,6 +87,10 @@ function createSchedulerQueue() {
 
   return {
     enqueue(task: Omit<QueuedTask, 'attempt'>) {
+      const waiting = pending.some(({ jobName }) => jobName === task.jobName)
+
+      if (task.dedupe && waiting) return
+
       pending.push({ ...task, attempt: 1 })
       kick()
     },
@@ -106,12 +113,15 @@ function makeJob<Payload>(
   run: JobRun<Payload>,
   options: JobOptions = {}
 ): Job<Payload> {
+  const dedupe = options.dedupe ?? false
   const maxAttempts = options.maxAttempts ?? defaultMaxAttempts
   const retryDelayMs = options.retryDelayMs ?? defaultRetryDelayMs
 
   return {
+    dedupe,
     enqueue: (payload) =>
       schedulerQueue().enqueue({
+        dedupe,
         invoke: () => run(payload),
         jobName,
         maxAttempts,

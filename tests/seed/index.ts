@@ -21,7 +21,8 @@ async function feedEveryJourney() {
     priya: feed.member({ displayName: 'Priya Raman', username: 'priya' }),
   }
 
-  const { announcements, engineering } = await theTeamServerComesOnline()
+  const { announcements, engineering, lobby, releaseThread } =
+    await theTeamServerComesOnline()
   const { retiredStandup } = await aChannelLeavesTheBotsView()
   const channels = { announcements, engineering }
   const backfill = await historyArrivesThroughABackfill({
@@ -44,7 +45,7 @@ async function feedEveryJourney() {
   return {
     backfill,
     bookmarks,
-    channels: { ...channels, retiredStandup },
+    channels: { ...channels, lobby, releaseThread, retiredStandup },
     clock,
     guild,
     members,

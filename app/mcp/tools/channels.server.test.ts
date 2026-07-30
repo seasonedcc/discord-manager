@@ -25,7 +25,7 @@ describe('channels_list', () => {
 
     expect(isError).toBe(false)
     expect(payload.channels).toContainEqual(
-      expect.objectContaining({ id: channel.id, name: 'roadmap' })
+      expect.objectContaining({ channelId: channel.id, name: 'roadmap' })
     )
   })
 

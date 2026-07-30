@@ -11,7 +11,7 @@ type Digest = {
     content: string
     discordCreatedAt: string
     discordMessageId: string
-    id: string
+    messageId: string
     jumpUrl: string
   }[]
   truncated: boolean
@@ -24,7 +24,9 @@ test('catching up since a moment brings back what came after it', async () => {
   const digest = await session.call<Digest>('messages_catch_up', {
     since: clock.at(5),
   })
-  const offsite = digest.messages.filter(({ id }) => id === messages.offsite.id)
+  const offsite = digest.messages.filter(
+    ({ messageId }) => messageId === messages.offsite.id
+  )
 
   assert.equal(offsite.length, 1)
   assert.equal(offsite[0].content, messages.offsite.content)
@@ -52,13 +54,15 @@ test('catching up since a moment brings back what came after it', async () => {
   })
 
   assert.equal(
-    inEngineering.messages.filter(({ id }) => id === messages.mention.id)
-      .length,
+    inEngineering.messages.filter(
+      ({ messageId }) => messageId === messages.mention.id
+    ).length,
     1
   )
   assert.equal(
-    inEngineering.messages.filter(({ id }) => id === messages.offsite.id)
-      .length,
+    inEngineering.messages.filter(
+      ({ messageId }) => messageId === messages.offsite.id
+    ).length,
     0
   )
   assert.ok(

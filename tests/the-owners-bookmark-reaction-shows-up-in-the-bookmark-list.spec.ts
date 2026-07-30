@@ -4,6 +4,7 @@ import { fixtures } from './seed'
 import { test } from './spec'
 
 type BookmarkList = {
+  truncated: boolean
   bookmarks: {
     authorDisplayName: string
     channelName: string
@@ -21,8 +22,8 @@ test("the owner's bookmark reaction shows up in the bookmark list", async () => 
   const { bookmarks, channels } = fixtures()
   const session = await openMcpSession()
 
-  const { bookmarks: listed } =
-    await session.call<BookmarkList>('bookmarks_list')
+  const whole = await session.call<BookmarkList>('bookmarks_list')
+  const listed = whole.bookmarks
   const reacted = listed.filter(
     ({ messageId }) => messageId === bookmarks.bookmarked.id
   )
@@ -55,4 +56,12 @@ test("the owner's bookmark reaction shows up in the bookmark list", async () => 
     ).length,
     0
   )
+
+  assert.equal(whole.truncated, false)
+
+  const onlyOne = await session.call<BookmarkList>('bookmarks_list', {
+    limit: 1,
+  })
+
+  assert.equal(onlyOne.bookmarks.length, 1)
 })

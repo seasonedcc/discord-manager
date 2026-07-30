@@ -1,11 +1,12 @@
 import { InputError, applySchema, fromSuccess } from 'composable-functions'
 import type { Transaction } from 'kysely'
+import { sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContext, ownerContextSchema } from '~/business/auth.server'
 import { db } from '~/db/db.server'
 import type { DB } from '~/db/types'
 import { newId } from '~/framework/db.server'
-import { makeJob } from '~/framework/scheduler.server'
+import { makeCronJob, makeJob } from '~/framework/scheduler.server'
 import {
   type BackfilledMessage,
   type FetchChannelHistory,
@@ -13,8 +14,12 @@ import {
   backfillPageSize,
   bookmarkReactionEmoji,
   discordHistoryBeginningSnowflake,
+  gatewayHeartbeatIntervalMinutes,
   skipped,
 } from './ingestion.common'
+
+const pageLimitReachedMessage =
+  'Stopped at the page limit before reaching the newest messages'
 
 const ingestionContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
@@ -31,18 +36,12 @@ const observedAuthorSchema = z.object({
 })
 
 const observedChannelSchema = z.object({
-  category: z
-    .string()
-    .nullish()
-    .transform((value) => value ?? ''),
+  category: z.string().optional(),
   discordChannelId: z.string().min(1),
   isThread: z.boolean(),
   name: z.string().min(1),
-  position: z.number().int(),
-  topic: z
-    .string()
-    .nullish()
-    .transform((value) => value ?? ''),
+  position: z.number().int().optional(),
+  topic: z.string().optional(),
 })
 
 const recordChannelRemovalSchema = z.object({
@@ -54,6 +53,8 @@ const recordChannelSnapshotSchema = observedChannelSchema
 const recordGatewayConnectionSchema = z.object({})
 
 const recordGatewayDisconnectionSchema = z.object({})
+
+const recordGatewayHeartbeatSchema = z.object({})
 
 const recordIncomingMessageSchema = z.object({
   author: observedAuthorSchema,
@@ -103,6 +104,165 @@ async function findOrCreateGuild(trx: Transaction<DB>, discordGuildId: string) {
     .executeTakeFirstOrThrow()
 }
 
+async function currentChannelTopic(trx: Transaction<DB>, channelId: string) {
+  const events = trx
+    .selectFrom('channelTopicChanges')
+    .select((eb) => [
+      'createdAt',
+      'id',
+      eb.ref('topic').$castTo<string | null>().as('topic'),
+    ])
+    .where('channelId', '=', channelId)
+    .unionAll(
+      trx
+        .selectFrom('channelTopicClearings')
+        .select(['createdAt', 'id', sql<string | null>`null`.as('topic')])
+        .where('channelId', '=', channelId)
+    )
+
+  const newest = await trx
+    .selectFrom(events.as('topicEvents'))
+    .select('topic')
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst()
+
+  return newest?.topic ?? null
+}
+
+async function currentChannelCategory(trx: Transaction<DB>, channelId: string) {
+  const events = trx
+    .selectFrom('channelCategoryChanges')
+    .select((eb) => [
+      'createdAt',
+      'id',
+      eb.ref('category').$castTo<string | null>().as('category'),
+    ])
+    .where('channelId', '=', channelId)
+    .unionAll(
+      trx
+        .selectFrom('channelCategoryClearings')
+        .select(['createdAt', 'id', sql<string | null>`null`.as('category')])
+        .where('channelId', '=', channelId)
+    )
+
+  const newest = await trx
+    .selectFrom(events.as('categoryEvents'))
+    .select('category')
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst()
+
+  return newest?.category ?? null
+}
+
+async function currentChannelPosition(trx: Transaction<DB>, channelId: string) {
+  const events = trx
+    .selectFrom('channelPositionChanges')
+    .select((eb) => [
+      'createdAt',
+      'id',
+      eb.ref('position').$castTo<number | null>().as('position'),
+    ])
+    .where('channelId', '=', channelId)
+    .unionAll(
+      trx
+        .selectFrom('channelPositionClearings')
+        .select(['createdAt', 'id', sql<number | null>`null`.as('position')])
+        .where('channelId', '=', channelId)
+    )
+
+  const newest = await trx
+    .selectFrom(events.as('positionEvents'))
+    .select('position')
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst()
+
+  return newest?.position ?? null
+}
+
+async function recordChannelTopic(
+  trx: Transaction<DB>,
+  channelId: string,
+  topic: string | undefined
+) {
+  const current = await currentChannelTopic(trx, channelId)
+
+  if (topic === undefined) {
+    if (current === null) return
+
+    await trx
+      .insertInto('channelTopicClearings')
+      .values({ channelId, id: newId() })
+      .execute()
+
+    return
+  }
+
+  if (current === topic) return
+
+  await trx
+    .insertInto('channelTopicChanges')
+    .values({ channelId, id: newId(), topic })
+    .execute()
+}
+
+async function recordChannelCategory(
+  trx: Transaction<DB>,
+  channelId: string,
+  category: string | undefined
+) {
+  const current = await currentChannelCategory(trx, channelId)
+
+  if (category === undefined) {
+    if (current === null) return
+
+    await trx
+      .insertInto('channelCategoryClearings')
+      .values({ channelId, id: newId() })
+      .execute()
+
+    return
+  }
+
+  if (current === category) return
+
+  await trx
+    .insertInto('channelCategoryChanges')
+    .values({ category, channelId, id: newId() })
+    .execute()
+}
+
+async function recordChannelPosition(
+  trx: Transaction<DB>,
+  channelId: string,
+  position: number | undefined
+) {
+  const current = await currentChannelPosition(trx, channelId)
+
+  if (position === undefined) {
+    if (current === null) return
+
+    await trx
+      .insertInto('channelPositionClearings')
+      .values({ channelId, id: newId() })
+      .execute()
+
+    return
+  }
+
+  if (current === position) return
+
+  await trx
+    .insertInto('channelPositionChanges')
+    .values({ channelId, id: newId(), position })
+    .execute()
+}
+
 async function findOrCreateChannel(
   trx: Transaction<DB>,
   guildId: string,
@@ -126,7 +286,7 @@ async function findOrCreateChannel(
 
   const latestDetail = await trx
     .selectFrom('channelDetailRevisions')
-    .select(['category', 'isThread', 'name', 'position', 'topic'])
+    .select(['isThread', 'name'])
     .where('channelId', '=', record.id)
     .orderBy('createdAt', 'desc')
     .orderBy('id', 'desc')
@@ -134,28 +294,26 @@ async function findOrCreateChannel(
     .executeTakeFirst()
 
   const isThread = channel.isThread ? 1 : 0
-  const unchanged =
-    latestDetail &&
-    latestDetail.category === channel.category &&
-    latestDetail.isThread === isThread &&
-    latestDetail.name === channel.name &&
-    latestDetail.position === channel.position &&
-    latestDetail.topic === channel.topic
 
-  if (!unchanged) {
+  if (
+    !latestDetail ||
+    latestDetail.isThread !== isThread ||
+    latestDetail.name !== channel.name
+  ) {
     await trx
       .insertInto('channelDetailRevisions')
       .values({
-        category: channel.category,
         channelId: record.id,
         id: newId(),
         isThread,
         name: channel.name,
-        position: channel.position,
-        topic: channel.topic,
       })
       .execute()
   }
+
+  await recordChannelTopic(trx, record.id, channel.topic)
+  await recordChannelCategory(trx, record.id, channel.category)
+  await recordChannelPosition(trx, record.id, channel.position)
 
   return record
 }
@@ -294,6 +452,19 @@ const recordGatewayDisconnection = applySchema(
     gatewayDisconnectionId: disconnection.id,
     outcome: 'recorded' as const,
   }
+})
+
+const recordGatewayHeartbeat = applySchema(
+  recordGatewayHeartbeatSchema,
+  ingestionContextSchema
+)(async () => {
+  const heartbeat = await db()
+    .insertInto('gatewayHeartbeats')
+    .values({ id: newId() })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+
+  return { gatewayHeartbeatId: heartbeat.id, outcome: 'recorded' as const }
 })
 
 const recordIncomingMessage = applySchema(
@@ -449,17 +620,23 @@ function newestBackfillCursor(channelId: string) {
     .select('discordMessageId')
     .where('channelId', '=', channelId)
     .orderBy('discordCreatedAt', 'desc')
-    .orderBy('discordMessageId', 'desc')
+    .orderBy(sql`cast(discord_message_id as integer)`, 'desc')
     .orderBy('id', 'desc')
     .limit(1)
     .executeTakeFirst()
+}
+
+function bySnowflake(one: string, other: string) {
+  if (BigInt(one) === BigInt(other)) return 0
+
+  return BigInt(one) < BigInt(other) ? -1 : 1
 }
 
 function lastMessageOfPage(page: BackfilledMessage[]) {
   return [...page].sort(
     (one, other) =>
       one.discordCreatedAt.localeCompare(other.discordCreatedAt) ||
-      one.discordMessageId.localeCompare(other.discordMessageId)
+      bySnowflake(one.discordMessageId, other.discordMessageId)
   )[page.length - 1]
 }
 
@@ -502,9 +679,10 @@ const runChannelBackfill = applySchema(
     .executeTakeFirst()
 
   if (!channel) {
-    throw new InputError('That channel has not been ingested yet', [
-      'channelId',
-    ])
+    throw new InputError(
+      'No channel with that id has been ingested. List the channels to pick one.',
+      ['channelId']
+    )
   }
 
   const run = await db()
@@ -515,6 +693,7 @@ const runChannelBackfill = applySchema(
 
   let fetchedMessageCount = 0
   let storedMessageCount = 0
+  let reachedTheNewestMessage = false
 
   try {
     const cursor = await newestBackfillCursor(channel.id)
@@ -528,7 +707,10 @@ const runChannelBackfill = applySchema(
         limit: backfillPageSize,
       })
 
-      if (messages.length === 0) break
+      if (messages.length === 0) {
+        reachedTheNewestMessage = true
+        break
+      }
 
       fetchedMessageCount += messages.length
       storedMessageCount += await storeBackfilledPage(channel.id, messages)
@@ -545,11 +727,17 @@ const runChannelBackfill = applySchema(
 
       const nextCursor = lastMessageOfPage(messages).discordMessageId
 
-      if (nextCursor === afterDiscordMessageId) break
+      if (nextCursor === afterDiscordMessageId) {
+        reachedTheNewestMessage = true
+        break
+      }
 
       afterDiscordMessageId = nextCursor
 
-      if (messages.length < backfillPageSize) break
+      if (messages.length < backfillPageSize) {
+        reachedTheNewestMessage = true
+        break
+      }
     }
   } catch (error) {
     await db()
@@ -562,6 +750,24 @@ const runChannelBackfill = applySchema(
       .execute()
 
     throw error
+  }
+
+  if (!reachedTheNewestMessage) {
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        backfillRunId: run.id,
+        errorMessage: pageLimitReachedMessage,
+        id: newId(),
+      })
+      .execute()
+
+    return {
+      backfillRunId: run.id,
+      fetchedMessageCount,
+      outcome: 'stopped_at_the_page_limit' as const,
+      storedMessageCount,
+    }
   }
 
   await db()
@@ -624,6 +830,14 @@ const backfillChannel = makeJob(
   }
 )
 
+const beatGatewayHeartbeat = makeCronJob(
+  'beatGatewayHeartbeat',
+  gatewayHeartbeatIntervalMinutes * 60_000,
+  async () => {
+    await fromSuccess(recordGatewayHeartbeat)({}, ownerContext())
+  }
+)
+
 const backfillIngestedChannels = makeJob(
   'backfillIngestedChannels',
   async ({
@@ -639,12 +853,14 @@ const backfillIngestedChannels = makeJob(
     for (const channel of channels) {
       backfillChannel.enqueue({ channelId: channel.id, fetchChannelHistory })
     }
-  }
+  },
+  { dedupe: true }
 )
 
 export {
   backfillChannel,
   backfillIngestedChannels,
+  beatGatewayHeartbeat,
   listBackfillableChannels,
   listBackfillableChannelsSchema,
   recordChannelRemoval,
@@ -655,6 +871,8 @@ export {
   recordGatewayConnectionSchema,
   recordGatewayDisconnection,
   recordGatewayDisconnectionSchema,
+  recordGatewayHeartbeat,
+  recordGatewayHeartbeatSchema,
   recordIncomingMessage,
   recordIncomingMessageSchema,
   recordMessageDeletion,

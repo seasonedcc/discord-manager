@@ -30,16 +30,30 @@ async function readAnchor() {
   return rows[0].anchor
 }
 
-async function guardAnEmptyDatabase() {
-  const guild = await db().selectFrom('guilds').select('id').executeTakeFirst()
-  const message = await db()
-    .selectFrom('messages')
-    .select('id')
-    .executeTakeFirst()
+async function applicationTables() {
+  const { rows } = await sql<{ name: string }>`
+    select name from sqlite_master
+    where type = 'table' and name not like 'kysely%'
+    order by name
+  `.execute(db())
 
-  if (guild || message) {
+  return rows.map(({ name }) => name)
+}
+
+async function guardAnEmptyDatabase() {
+  const populated: string[] = []
+
+  for (const table of await applicationTables()) {
+    const { rows } = await sql<{ present: number }>`
+      select exists(select 1 from ${sql.table(table)}) as present
+    `.execute(db())
+
+    if (rows[0]?.present) populated.push(table)
+  }
+
+  if (populated.length > 0) {
     console.error(
-      'This seed only runs on a freshly created, empty database. Point DATABASE_PATH at a new file, run pnpm run db:migrate, then seed it.'
+      `This seed only runs on a freshly created, empty database, but these tables already hold rows: ${populated.join(', ')}. Point DATABASE_PATH at a new file, run pnpm run db:migrate, then seed it.`
     )
     process.exit(1)
   }

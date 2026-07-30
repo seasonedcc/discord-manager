@@ -41,7 +41,7 @@ describe('messages_catch_up', () => {
     expect(payload.truncated).toBe(false)
     expect(payload.messages).toContainEqual(
       expect.objectContaining({
-        id: message.id,
+        messageId: message.id,
         content: 'the release is out',
       })
     )
@@ -81,7 +81,7 @@ describe('mentions_list', () => {
 
     expect(isError).toBe(false)
     expect(payload.messages).toContainEqual(
-      expect.objectContaining({ id: message.id })
+      expect.objectContaining({ messageId: message.id })
     )
   })
 

@@ -12,10 +12,11 @@ async function readTheStoreInstant() {
   return row.instant
 }
 
-// Two events written in the same millisecond tie on createdAt, and the
-// latest-event-wins tie-break is a random id, so the order the feed intended
-// would be decided by chance. Letting the store's own clock tick between
-// events keeps seeded history in the order it was fed, with no wall-clock wait.
+// Two events written in the same millisecond tie on createdAt, and every
+// reading that orders by it then falls through to whatever tie-break it has —
+// which is not the order the feed intended. Letting the store's own clock tick
+// between events keeps seeded history in the order it was fed, with no
+// wall-clock wait.
 async function waitForTheStoreClockToTick() {
   const before = await readTheStoreInstant()
   let instant = before
