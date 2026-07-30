@@ -9,7 +9,7 @@ Each person runs their own bot and their own local stack. Nothing is shared, not
 ## What you get
 
 - **Catch-up digests** — everything posted since a moment in time, across the server or in one channel, each message with a jump link. Long stretches come back 200 messages at a time, so your assistant can walk a busy week in order.
-- **Mention triage** — the messages that name you, ready for an assistant to sort by what actually needs you.
+- **Mention triage** — the messages that pinged you, exactly as Discord counts a ping, ready for an assistant to sort by what actually needs you.
 - **Bookmarks without Nitro** — react to any message with 🔖 and your bot records a bookmark; remove the reaction and it's gone. Your assistant can also bookmark by message link, resolve, and snooze — privately, with no reaction anyone can see. Only *your* reactions count, so a whole team of bots coexists in one server without crosstalk.
 - **Draft and send** — messages posted to any channel as your bot, optionally as a reply, with a status trail for every send.
 - **Ingestion health** — whether the bot is still receiving from Discord and how far its history backfills have got, as plain readings with a concrete next action.
@@ -94,7 +94,7 @@ The seed only ever runs against a freshly created, empty database, and sending w
 | --- | --- |
 | `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them — and for threads, whether Discord has archived them, archived ones last |
 | `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time |
-| `mentions_list` | The messages whose text names you since a moment in time |
+| `mentions_list` | The messages that pinged you since a moment in time — someone naming you, plus replies to you the sender left the ping on |
 | `bookmarks_add` | A bookmark from a Discord message link, exactly as reacting with 🔖 would |
 | `bookmarks_list` | The bookmarks still waiting on you, snoozed ones on request |
 | `bookmarks_resolve` | A bookmark cleared, leaving any reaction in Discord untouched |

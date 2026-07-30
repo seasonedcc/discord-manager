@@ -179,6 +179,13 @@ export interface MessageRevisions {
   messageId: string;
 }
 
+export interface MessageRevisionUserMentions {
+  createdAt: Generated<string>;
+  id: string;
+  mentionedDiscordUserId: string;
+  messageRevisionId: string;
+}
+
 export interface Messages {
   authorMemberId: string;
   channelId: string;
@@ -251,6 +258,7 @@ export interface DB {
   members: Members;
   messageDeletions: MessageDeletions;
   messageRevisions: MessageRevisions;
+  messageRevisionUserMentions: MessageRevisionUserMentions;
   messages: Messages;
   messageSendDeliveries: MessageSendDeliveries;
   messageSendFailures: MessageSendFailures;

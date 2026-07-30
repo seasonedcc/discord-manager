@@ -25,6 +25,7 @@ type MessageAttributes = {
   content?: string
   discordMessageId?: string
   discordCreatedAt?: string
+  mentionedDiscordUserIds?: string[]
 }
 
 type BookmarkedMessageAttributes = MessageAttributes & {
@@ -159,6 +160,7 @@ async function createMessage({
   content = `content-${randomUUID()}`,
   discordMessageId = snowflake(),
   discordCreatedAt = new Date().toISOString(),
+  mentionedDiscordUserIds = [],
 }: MessageAttributes = {}) {
   const resolvedChannelId = channelId ?? (await createChannel()).id
   const resolvedAuthorMemberId = authorMemberId ?? (await createMember()).id
@@ -178,10 +180,24 @@ async function createMessage({
         .returningAll()
         .executeTakeFirstOrThrow()
 
-      await trx
+      const revision = await trx
         .insertInto('messageRevisions')
         .values({ id: newId(), messageId: message.id, content })
-        .execute()
+        .returning('id')
+        .executeTakeFirstOrThrow()
+
+      if (mentionedDiscordUserIds.length > 0) {
+        await trx
+          .insertInto('messageRevisionUserMentions')
+          .values(
+            mentionedDiscordUserIds.map((mentionedDiscordUserId) => ({
+              id: newId(),
+              mentionedDiscordUserId,
+              messageRevisionId: revision.id,
+            }))
+          )
+          .execute()
+      }
 
       return message
     })

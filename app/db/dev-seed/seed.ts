@@ -94,16 +94,25 @@ async function postMessage({
   channel,
   content,
   discordCreatedAt,
+  mentionedDiscordUserIds = [],
 }: {
   author: { discordUserId: string; displayName: string; username: string }
   channel: Awaited<ReturnType<typeof observeChannel | typeof observeThread>>
   content: string
   discordCreatedAt: string
+  mentionedDiscordUserIds?: string[]
 }) {
   const discordMessageId = nextDiscordId()
 
   await fromSuccess(recordIncomingMessage)(
-    { author, channel, content, discordCreatedAt, discordMessageId },
+    {
+      author,
+      channel,
+      content,
+      discordCreatedAt,
+      discordMessageId,
+      mentionedDiscordUserIds,
+    },
     context
   )
 
@@ -162,6 +171,15 @@ await postMessage({
   channel: engineering,
   content: `<@${context.owner.discordUserId}> can you review the release notes today?`,
   discordCreatedAt: secondsAfterTheAnchor(3),
+  mentionedDiscordUserIds: [context.owner.discordUserId],
+})
+
+await postMessage({
+  author: maya,
+  channel: engineering,
+  content: 'Reading them now — I will leave comments before lunch.',
+  discordCreatedAt: secondsAfterTheAnchor(4),
+  mentionedDiscordUserIds: [context.owner.discordUserId],
 })
 
 await fromSuccess(recordOwnerBookmarkReaction)(
@@ -182,7 +200,7 @@ await postMessage({
   author: maya,
   channel: retiredThread,
   content: 'Hotfix is out — nothing left to do here.',
-  discordCreatedAt: secondsAfterTheAnchor(4),
+  discordCreatedAt: secondsAfterTheAnchor(5),
 })
 
 await fromSuccess(recordChannelArchiving)(
@@ -193,5 +211,5 @@ await fromSuccess(recordChannelArchiving)(
 await db().destroy()
 
 console.log(
-  'Seeded a development server: two channels, an archived thread, four messages, one mention of you, and one bookmark. Start the MCP server with pnpm run mcp and ask your assistant to list the channels.'
+  'Seeded a development server: two channels, an archived thread, five messages, one mention of you, one reply that pinged you without naming you, and one bookmark. Start the MCP server with pnpm run mcp and ask your assistant to list the channels.'
 )

@@ -126,11 +126,13 @@ async function postMessage({
   channel,
   content,
   discordCreatedAt,
+  mentioning = [],
 }: {
   author: SeededMember
   channel: SeededChannel
   content: string
   discordCreatedAt: string
+  mentioning?: SeededMember[]
 }): Promise<SeededMessage> {
   const discordMessageId = nextDiscordId()
   const { messageId } = await withADistinctInstant(
@@ -148,6 +150,9 @@ async function postMessage({
         content,
         discordCreatedAt,
         discordMessageId,
+        mentionedDiscordUserIds: mentioning.map(
+          (member) => member.discordUserId
+        ),
       },
       ownerContext()
     )
@@ -165,10 +170,20 @@ async function postMessage({
   }
 }
 
-async function editMessage(message: SeededMessage, content: string) {
+async function editMessage(
+  message: SeededMessage,
+  content: string,
+  mentioning: SeededMember[] = []
+) {
   await withADistinctInstant(
     fromSuccess(recordMessageEdit)(
-      { content, discordMessageId: message.discordMessageId },
+      {
+        content,
+        discordMessageId: message.discordMessageId,
+        mentionedDiscordUserIds: mentioning.map(
+          (member) => member.discordUserId
+        ),
+      },
       ownerContext()
     )
   )
@@ -233,16 +248,19 @@ function draftHistory({
   author,
   content,
   discordCreatedAt,
+  mentioning = [],
 }: {
   author: SeededMember
   content: string
   discordCreatedAt: string
+  mentioning?: SeededMember[]
 }): BackfilledMessage {
   return {
     author,
     content,
     discordCreatedAt,
     discordMessageId: nextDiscordId(),
+    mentionedDiscordUserIds: mentioning.map((member) => member.discordUserId),
   }
 }
 

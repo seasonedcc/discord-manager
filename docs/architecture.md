@@ -139,6 +139,11 @@ Events (all with `(parentId, createdAt desc)` indexes):
 - `member_detail_revisions` — username, displayName.
 - `message_revisions` — full content snapshot; the first revision lands with ingestion,
   one more per observed edit. Never an `editedAt` column.
+- `message_revision_user_mentions` — zero or more rows per revision, one per user
+  Discord's own `mentions` array says that revision pinged. The set belongs to the
+  revision rather than the message because an edit can change it, so the current set is
+  the rows of the latest revision — an edit that drops the ping leaves the new revision
+  with no rows at all, which is a fact one table can state without a sentinel.
 - `message_deletions` — existence is state.
 - `bookmark_additions` / `bookmark_removals` — reversible pair; newest of the two latest
   wins. Both carry `source` (`reaction` or `mcp`) so a public un-react and a private MCP
@@ -227,6 +232,26 @@ what collects the messages posted just before it went quiet, and drops out of ev
 sweep. A revived thread re-enters the sweep and its gap is filled. A thread that was never
 archived is always swept. At a millisecond tie the thread is swept again, which costs one
 REST call and loses nothing.
+
+### Mentions mean what Discord means
+
+Discord stamps every message payload — gateway and REST alike — with the `mentions` array
+of users that message pinged. That array is richer than any text match: it carries the
+author of a replied-to message when the sender left the reply ping on, and leaves them out
+when the sender switched it off, a distinction `<@id>` text matching cannot see at all.
+
+- Ingestion passes the array through as plain data (`mentionedDiscordUserIds`), so the
+  business layer stays discord.js-free. The gateway reads `message.mentions.users` on
+  `messageCreate` and `messageUpdate`; the REST backfill reads the same collection off the
+  fetched messages and threads it through `fetchChannelHistory`'s page shape.
+- The recorder writes the mention rows in the same transaction as the revision they belong
+  to, so a message and its mention set are never briefly out of step.
+- `listMentions` returns the union of two conditions: a mention row on the message's latest
+  revision naming the owner, or the latest revision's text carrying `<@id>`/`<@!id>`. The
+  second half is what keeps messages ingested before mention rows existed findable; a
+  single OR over one query means a message matching both ways still comes back once.
+- Role mentions and `@everyone`/`@here` are deliberately excluded. No role tracking exists,
+  and a broadcast ping is not personal triage. `mentions_list`'s description says so.
 
 ## Scheduling
 

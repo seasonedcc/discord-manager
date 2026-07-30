@@ -50,7 +50,10 @@ function observedChannel(
   }
 }
 
-function observedMessage(channel: ObservedChannel) {
+function observedMessage(
+  channel: ObservedChannel,
+  mentionedDiscordUserIds: string[] = []
+) {
   return {
     author: {
       discordUserId: randomUUID(),
@@ -61,6 +64,7 @@ function observedMessage(channel: ObservedChannel) {
     content: `content-${randomUUID()}`,
     discordCreatedAt: '2026-07-30T11:00:00.000Z',
     discordMessageId: randomUUID(),
+    mentionedDiscordUserIds,
   }
 }
 
@@ -115,6 +119,7 @@ describe('handleMessageEdit', () => {
       content: 'the corrected wording',
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
+      mentionedDiscordUserIds: [],
     })
 
     const revisions = await db()
@@ -389,12 +394,74 @@ describe('handleGatewayConnected', () => {
   })
 })
 
+type GatewayHandler = (...args: never[]) => Promise<void>
+
+function fire(
+  handlers: Map<string, GatewayHandler>,
+  event: string,
+  ...args: unknown[]
+) {
+  return handlers.get(event)?.(...(args as never[]))
+}
+
+function deliveredMessage({
+  content = `content-${randomUUID()}`,
+  discordMessageId = randomUUID(),
+  mentions = [],
+}: {
+  content?: string
+  discordMessageId?: string
+  mentions?: string[]
+} = {}) {
+  return {
+    author: {
+      displayName: `display-name-${randomUUID()}`,
+      id: randomUUID(),
+      username: `username-${randomUUID()}`,
+    },
+    channel: {
+      guildId: configuredGuildId,
+      id: randomUUID(),
+      isTextBased: () => true,
+      isThread: () => false,
+      name: `channel-${randomUUID()}`,
+      parent: null,
+    },
+    content,
+    createdAt: new Date('2026-07-30T11:00:00.000Z'),
+    guildId: configuredGuildId,
+    id: discordMessageId,
+    inGuild: () => true,
+    mentions: {
+      users: new Collection(mentions.map((userId) => [userId, { id: userId }])),
+    },
+    partial: false,
+  }
+}
+
+function mentionedUserIdsOf(discordMessageId: string) {
+  return db()
+    .selectFrom('messages')
+    .innerJoin('messageRevisions', 'messageRevisions.messageId', 'messages.id')
+    .innerJoin(
+      'messageRevisionUserMentions',
+      'messageRevisionUserMentions.messageRevisionId',
+      'messageRevisions.id'
+    )
+    .select('messageRevisionUserMentions.mentionedDiscordUserId')
+    .where('messages.discordMessageId', '=', discordMessageId)
+    .orderBy('messageRevisions.createdAt', 'desc')
+    .orderBy('messageRevisions.id', 'desc')
+    .execute()
+    .then((rows) => rows.map((row) => row.mentionedDiscordUserId))
+}
+
 function fakeGatewayClient({
   fetchActiveThreads,
   handlers,
 }: {
   fetchActiveThreads: () => Promise<{ threads: Collection<string, unknown> }>
-  handlers: Map<string, (client: Client) => Promise<void>>
+  handlers: Map<string, GatewayHandler>
 }) {
   return {
     channels: { cache: new Collection() },
@@ -403,7 +470,7 @@ function fakeGatewayClient({
         [configuredGuildId, { channels: { fetchActiveThreads } }],
       ]),
     },
-    on: (event: string, handler: (client: Client) => Promise<void>) => {
+    on: (event: string, handler: GatewayHandler) => {
       handlers.set(event, handler)
     },
   } as unknown as Client
@@ -412,7 +479,7 @@ function fakeGatewayClient({
 describe('registerGatewayListeners', () => {
   it('treats a fresh identify like a resume, so the gaps still close', async () => {
     await configuredGuild()
-    const handlers = new Map<string, (client: Client) => Promise<void>>()
+    const handlers = new Map<string, GatewayHandler>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -424,7 +491,7 @@ describe('registerGatewayListeners', () => {
 
     registerGatewayListeners(client, { fetchChannelHistory })
 
-    await handlers.get(Events.ShardReady)?.(client)
+    await fire(handlers, Events.ShardReady, client)
 
     expect(handlers.has(Events.ShardResume)).toBe(true)
     expect(enqueue).toHaveBeenCalledWith({ fetchChannelHistory })
@@ -440,7 +507,7 @@ describe('registerGatewayListeners', () => {
     await handleChannelSnapshot(stillActive)
     await handleChannelSnapshot(goneQuiet)
 
-    const handlers = new Map<string, (client: Client) => Promise<void>>()
+    const handlers = new Map<string, GatewayHandler>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({
         threads: new Collection([[stillActive.discordChannelId, {}]]),
@@ -453,7 +520,7 @@ describe('registerGatewayListeners', () => {
 
     registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
 
-    await handlers.get(Events.ShardResume)?.(client)
+    await fire(handlers, Events.ShardResume, client)
 
     expect(await channelArchivingsOf(goneQuiet.discordChannelId)).toHaveLength(
       1
@@ -471,7 +538,7 @@ describe('registerGatewayListeners', () => {
 
     await handleChannelSnapshot(thread)
 
-    const handlers = new Map<string, (client: Client) => Promise<void>>()
+    const handlers = new Map<string, GatewayHandler>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => {
         throw new Error('Missing Access')
@@ -485,12 +552,76 @@ describe('registerGatewayListeners', () => {
 
     registerGatewayListeners(client, { fetchChannelHistory })
 
-    await handlers.get(Events.ShardReady)?.(client)
+    await fire(handlers, Events.ShardReady, client)
 
     expect(enqueue).toHaveBeenCalledWith({ fetchChannelHistory })
     expect(await channelArchivingsOf(thread.discordChannelId)).toHaveLength(0)
 
     enqueue.mockRestore()
+  })
+
+  it('records the users Discord itself says a live message mentions', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const pinged = randomUUID()
+    const delivered = deliveredMessage({ mentions: [pinged] })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await mentionedUserIdsOf(delivered.id)).toEqual([pinged])
+  })
+
+  it('reads a live mention set from Discord, never from the message text', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const quoted = randomUUID()
+    const delivered = deliveredMessage({
+      content: `a reply to <@${quoted}> with the ping suppressed`,
+      mentions: [],
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await mentionedUserIdsOf(delivered.id)).toHaveLength(0)
+  })
+
+  it('records the mention set Discord stamped on an edited message', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const pinged = randomUUID()
+    const delivered = deliveredMessage({ mentions: [] })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+    await fire(
+      handlers,
+      Events.MessageUpdate,
+      delivered,
+      deliveredMessage({
+        content: 'now it pings somebody',
+        discordMessageId: delivered.id,
+        mentions: [pinged],
+      })
+    )
+
+    expect(await mentionedUserIdsOf(delivered.id)).toEqual([pinged])
   })
 })
 
