@@ -1,0 +1,153 @@
+import { existsSync } from 'node:fs'
+import { fromSuccess } from 'composable-functions'
+import { sql } from 'kysely'
+import { ownerContext } from '~/business/auth.server'
+import {
+  recordChannelSnapshot,
+  recordGatewayConnection,
+  recordIncomingMessage,
+  recordOwnerBookmarkReaction,
+} from '~/business/ingestion.server'
+import { db } from '~/db/db.server'
+
+if (existsSync('.env')) process.loadEnvFile()
+
+const context = ownerContext()
+
+let issuedIds = 0
+
+function nextDiscordId() {
+  issuedIds += 1
+
+  return `9${String(issuedIds).padStart(17, '0')}`
+}
+
+async function readAnchor() {
+  const { rows } = await sql<{
+    anchor: string
+  }>`select strftime('%Y-%m-%dT%H:%M:%fZ','now') as anchor`.execute(db())
+
+  return rows[0].anchor
+}
+
+async function guardAnEmptyDatabase() {
+  const guild = await db().selectFrom('guilds').select('id').executeTakeFirst()
+  const message = await db()
+    .selectFrom('messages')
+    .select('id')
+    .executeTakeFirst()
+
+  if (guild || message) {
+    console.error(
+      'This seed only runs on a freshly created, empty database. Point DATABASE_PATH at a new file, run pnpm run db:migrate, then seed it.'
+    )
+    process.exit(1)
+  }
+}
+
+async function observeChannel(channel: {
+  category: string
+  name: string
+  position: number
+  topic: string
+}) {
+  const observed = {
+    ...channel,
+    discordChannelId: nextDiscordId(),
+    isThread: false,
+  }
+
+  await fromSuccess(recordChannelSnapshot)(observed, context)
+
+  return observed
+}
+
+async function postMessage({
+  author,
+  channel,
+  content,
+  discordCreatedAt,
+}: {
+  author: { discordUserId: string; displayName: string; username: string }
+  channel: Awaited<ReturnType<typeof observeChannel>>
+  content: string
+  discordCreatedAt: string
+}) {
+  const discordMessageId = nextDiscordId()
+
+  await fromSuccess(recordIncomingMessage)(
+    { author, channel, content, discordCreatedAt, discordMessageId },
+    context
+  )
+
+  return { discordMessageId }
+}
+
+await guardAnEmptyDatabase()
+
+const anchor = await readAnchor()
+const secondsAfterTheAnchor = (seconds: number) =>
+  new Date(Date.parse(anchor) + seconds * 1000).toISOString()
+
+const maya = {
+  discordUserId: nextDiscordId(),
+  displayName: 'Maya Fischer',
+  username: 'maya',
+}
+const omar = {
+  discordUserId: nextDiscordId(),
+  displayName: 'Omar Duarte',
+  username: 'omar',
+}
+
+await fromSuccess(recordGatewayConnection)({}, context)
+
+const announcements = await observeChannel({
+  category: 'Company',
+  name: 'announcements',
+  position: 0,
+  topic: 'Where the whole team hears things first',
+})
+const engineering = await observeChannel({
+  category: 'Teams',
+  name: 'engineering',
+  position: 1,
+  topic: 'Where the product gets built',
+})
+
+await postMessage({
+  author: maya,
+  channel: announcements,
+  content: 'The team offsite is booked — the agenda is in the handbook.',
+  discordCreatedAt: secondsAfterTheAnchor(1),
+})
+
+const bookmarkWorthy = await postMessage({
+  author: omar,
+  channel: engineering,
+  content:
+    'The deploy checklist moved to the handbook — read it before Friday.',
+  discordCreatedAt: secondsAfterTheAnchor(2),
+})
+
+await postMessage({
+  author: omar,
+  channel: engineering,
+  content: `<@${context.owner.discordUserId}> can you review the release notes today?`,
+  discordCreatedAt: secondsAfterTheAnchor(3),
+})
+
+await fromSuccess(recordOwnerBookmarkReaction)(
+  {
+    discordMessageId: bookmarkWorthy.discordMessageId,
+    emoji: '🔖',
+    reactorDiscordUserId: context.owner.discordUserId,
+  },
+  context
+)
+
+await db().destroy()
+
+console.log(
+  'Seeded a development server: two channels, three messages, one mention of you, and one bookmark. Start the MCP server with pnpm run mcp and ask your assistant to list the channels.'
+)
