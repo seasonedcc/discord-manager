@@ -1,5 +1,6 @@
 import { ownerContext } from '~/business/auth.server'
 import { aChannelLeavesTheBotsView } from './a-channel-leaves-the-bots-view'
+import { aThreadArchivesWhileTheBotIsAway } from './a-thread-archives-while-the-bot-is-away'
 import { aWorkdayOfConversation } from './a-workday-of-conversation'
 import { readClock } from './clock'
 import { feed } from './feed'
@@ -41,11 +42,23 @@ async function feedEveryJourney() {
     messages,
     owner,
   })
+  const archiving = await aThreadArchivesWhileTheBotIsAway({
+    channels: { ...channels, releaseThread },
+    clock,
+    members,
+  })
 
   return {
+    archiving,
     backfill,
     bookmarks,
-    channels: { ...channels, lobby, releaseThread, retiredStandup },
+    channels: {
+      ...channels,
+      hotfixThread: archiving.hotfixThread,
+      lobby,
+      releaseThread,
+      retiredStandup,
+    },
     clock,
     guild,
     members,

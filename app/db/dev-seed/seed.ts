@@ -3,6 +3,7 @@ import { fromSuccess } from 'composable-functions'
 import { sql } from 'kysely'
 import { ownerContext } from '~/business/auth.server'
 import {
+  recordChannelArchiving,
   recordChannelSnapshot,
   recordGatewayConnection,
   recordIncomingMessage,
@@ -64,13 +65,25 @@ async function guardAnEmptyDatabase() {
 async function observeChannel(channel: {
   category: string
   name: string
-  position: number
-  topic: string
+  position?: number
+  topic?: string
 }) {
   const observed = {
     ...channel,
     discordChannelId: nextDiscordId(),
     isThread: false,
+  }
+
+  await fromSuccess(recordChannelSnapshot)(observed, context)
+
+  return observed
+}
+
+async function observeThread(thread: { category: string; name: string }) {
+  const observed = {
+    ...thread,
+    discordChannelId: nextDiscordId(),
+    isThread: true,
   }
 
   await fromSuccess(recordChannelSnapshot)(observed, context)
@@ -85,7 +98,7 @@ async function postMessage({
   discordCreatedAt,
 }: {
   author: { discordUserId: string; displayName: string; username: string }
-  channel: Awaited<ReturnType<typeof observeChannel>>
+  channel: Awaited<ReturnType<typeof observeChannel | typeof observeThread>>
   content: string
   discordCreatedAt: string
 }) {
@@ -162,6 +175,23 @@ await fromSuccess(recordOwnerBookmarkReaction)(
   context
 )
 
+const retiredThread = await observeThread({
+  category: 'Teams',
+  name: 'hotfix-thursday',
+})
+
+await postMessage({
+  author: maya,
+  channel: retiredThread,
+  content: 'Hotfix is out — nothing left to do here.',
+  discordCreatedAt: secondsAfterTheAnchor(4),
+})
+
+await fromSuccess(recordChannelArchiving)(
+  { discordChannelId: retiredThread.discordChannelId },
+  context
+)
+
 const engineeringChannel = await db()
   .selectFrom('channels')
   .select('id')
@@ -183,5 +213,5 @@ const refusedSend = await fromSuccess(
 await db().destroy()
 
 console.log(
-  `Seeded a development server: two channels, three messages, one mention of you, one bookmark, and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to list the channels, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
+  `Seeded a development server: two channels, an archived thread, four messages, one mention of you, one bookmark, and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to list the channels, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
 )

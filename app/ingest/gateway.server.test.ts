@@ -7,6 +7,7 @@ import { db, describe, expect, it, vi } from '~/test/prelude'
 import {
   type ObservedChannel,
   handleChannelRemoval,
+  handleChannelSnapshot,
   handleGatewayConnected,
   handleGatewayDisconnected,
   handleIncomingMessage,
@@ -150,6 +151,58 @@ describe('handleMessageDeletion', () => {
   })
 })
 
+function channelArchivingsOf(discordChannelId: string) {
+  return db()
+    .selectFrom('channelArchivings')
+    .innerJoin('channels', 'channels.id', 'channelArchivings.channelId')
+    .selectAll('channelArchivings')
+    .where('channels.discordChannelId', '=', discordChannelId)
+    .execute()
+}
+
+function channelUnarchivingsOf(discordChannelId: string) {
+  return db()
+    .selectFrom('channelUnarchivings')
+    .innerJoin('channels', 'channels.id', 'channelUnarchivings.channelId')
+    .selectAll('channelUnarchivings')
+    .where('channels.discordChannelId', '=', discordChannelId)
+    .execute()
+}
+
+describe('handleChannelSnapshot', () => {
+  it('records that Discord archived a thread the bot watches', async () => {
+    await configuredGuild()
+    const thread = observedChannel({ isThread: true })
+
+    await handleChannelSnapshot(thread)
+    await handleChannelSnapshot({ ...thread, archived: true })
+
+    expect(await channelArchivingsOf(thread.discordChannelId)).toHaveLength(1)
+  })
+
+  it('records the revival when an archived thread reports itself active', async () => {
+    await configuredGuild()
+    const thread = observedChannel({ archived: true, isThread: true })
+
+    await handleChannelSnapshot(thread)
+    await handleChannelSnapshot({ ...thread, archived: false })
+
+    expect(await channelUnarchivingsOf(thread.discordChannelId)).toHaveLength(1)
+  })
+
+  it('records no archived state for a channel Discord says nothing about', async () => {
+    await configuredGuild()
+    const channel = observedChannel()
+
+    await handleChannelSnapshot(channel)
+
+    expect(await channelArchivingsOf(channel.discordChannelId)).toHaveLength(0)
+    expect(await channelUnarchivingsOf(channel.discordChannelId)).toHaveLength(
+      0
+    )
+  })
+})
+
 describe('handleChannelRemoval', () => {
   it('records that a channel is gone from the server', async () => {
     await configuredGuild()
@@ -290,18 +343,80 @@ describe('handleGatewayConnected', () => {
 
     enqueue.mockRestore()
   })
+
+  it('archives the threads the server no longer lists as active before the sweep', async () => {
+    await configuredGuild()
+    const thread = observedChannel({ isThread: true })
+
+    await handleChannelSnapshot(thread)
+
+    const enqueue = vi
+      .spyOn(backfillIngestedChannels, 'enqueue')
+      .mockImplementation(() => {
+        throw new Error('the sweep was asked for')
+      })
+
+    await expect(
+      handleGatewayConnected({
+        activeThreadDiscordChannelIds: [],
+        channels: [],
+        fetchChannelHistory: async () => [],
+      })
+    ).rejects.toThrow('the sweep was asked for')
+
+    expect(await channelArchivingsOf(thread.discordChannelId)).toHaveLength(1)
+
+    enqueue.mockRestore()
+  })
+
+  it('still sweeps and marks nothing archived when the active threads are unknown', async () => {
+    await configuredGuild()
+    const thread = observedChannel({ isThread: true })
+
+    await handleChannelSnapshot(thread)
+
+    const enqueue = vi
+      .spyOn(backfillIngestedChannels, 'enqueue')
+      .mockImplementation(() => {})
+    const fetchChannelHistory = async () => []
+
+    await handleGatewayConnected({ channels: [], fetchChannelHistory })
+
+    expect(enqueue).toHaveBeenCalledWith({ fetchChannelHistory })
+    expect(await channelArchivingsOf(thread.discordChannelId)).toHaveLength(0)
+
+    enqueue.mockRestore()
+  })
 })
+
+function fakeGatewayClient({
+  fetchActiveThreads,
+  handlers,
+}: {
+  fetchActiveThreads: () => Promise<{ threads: Collection<string, unknown> }>
+  handlers: Map<string, (client: Client) => Promise<void>>
+}) {
+  return {
+    channels: { cache: new Collection() },
+    guilds: {
+      cache: new Collection([
+        [configuredGuildId, { channels: { fetchActiveThreads } }],
+      ]),
+    },
+    on: (event: string, handler: (client: Client) => Promise<void>) => {
+      handlers.set(event, handler)
+    },
+  } as unknown as Client
+}
 
 describe('registerGatewayListeners', () => {
   it('treats a fresh identify like a resume, so the gaps still close', async () => {
     await configuredGuild()
-    const handlers = new Map<string, () => Promise<void>>()
-    const client = {
-      channels: { cache: new Collection() },
-      on: (event: string, handler: () => Promise<void>) => {
-        handlers.set(event, handler)
-      },
-    } as unknown as Client
+    const handlers = new Map<string, (client: Client) => Promise<void>>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
     const enqueue = vi
       .spyOn(backfillIngestedChannels, 'enqueue')
       .mockImplementation(() => {})
@@ -309,10 +424,71 @@ describe('registerGatewayListeners', () => {
 
     registerGatewayListeners(client, { fetchChannelHistory })
 
-    await handlers.get(Events.ShardReady)?.()
+    await handlers.get(Events.ShardReady)?.(client)
 
     expect(handlers.has(Events.ShardResume)).toBe(true)
     expect(enqueue).toHaveBeenCalledWith({ fetchChannelHistory })
+
+    enqueue.mockRestore()
+  })
+
+  it('reads the active threads from Discord on every reconnect', async () => {
+    await configuredGuild()
+    const stillActive = observedChannel({ isThread: true })
+    const goneQuiet = observedChannel({ isThread: true })
+
+    await handleChannelSnapshot(stillActive)
+    await handleChannelSnapshot(goneQuiet)
+
+    const handlers = new Map<string, (client: Client) => Promise<void>>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({
+        threads: new Collection([[stillActive.discordChannelId, {}]]),
+      }),
+      handlers,
+    })
+    const enqueue = vi
+      .spyOn(backfillIngestedChannels, 'enqueue')
+      .mockImplementation(() => {})
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await handlers.get(Events.ShardResume)?.(client)
+
+    expect(await channelArchivingsOf(goneQuiet.discordChannelId)).toHaveLength(
+      1
+    )
+    expect(
+      await channelArchivingsOf(stillActive.discordChannelId)
+    ).toHaveLength(0)
+
+    enqueue.mockRestore()
+  })
+
+  it('sweeps without marking anything archived when Discord refuses the active threads', async () => {
+    await configuredGuild()
+    const thread = observedChannel({ isThread: true })
+
+    await handleChannelSnapshot(thread)
+
+    const handlers = new Map<string, (client: Client) => Promise<void>>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => {
+        throw new Error('Missing Access')
+      },
+      handlers,
+    })
+    const enqueue = vi
+      .spyOn(backfillIngestedChannels, 'enqueue')
+      .mockImplementation(() => {})
+    const fetchChannelHistory = async () => []
+
+    registerGatewayListeners(client, { fetchChannelHistory })
+
+    await handlers.get(Events.ShardReady)?.(client)
+
+    expect(enqueue).toHaveBeenCalledWith({ fetchChannelHistory })
+    expect(await channelArchivingsOf(thread.discordChannelId)).toHaveLength(0)
 
     enqueue.mockRestore()
   })

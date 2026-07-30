@@ -61,7 +61,7 @@ pnpm run db:migrate
 pnpm run ingest
 ```
 
-This is the long-running daemon: it connects to Discord's gateway, records everything as it happens, and backfills the history it missed while it was away — on startup and again after every reconnect. Keep it running however you keep things running (a terminal tab is fine to start).
+This is the long-running daemon: it connects to Discord's gateway, records everything as it happens, and backfills the history it missed while it was away — on startup and again after every reconnect. Threads Discord has archived get one last backfill each, so nothing said just before they went quiet is lost, and then they stop costing a request on every reconnect; post in one and it comes straight back. Keep it running however you keep things running (a terminal tab is fine to start).
 
 ### 5. Wire up your assistant
 
@@ -92,7 +92,7 @@ The seed only ever runs against a freshly created, empty database, and sending w
 
 | Tool | What you get |
 | --- | --- |
-| `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them |
+| `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them — and for threads, whether Discord has archived them, archived ones last |
 | `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time |
 | `mentions_list` | The messages whose text names you since a moment in time |
 | `bookmarks_add` | A bookmark from a Discord message link, exactly as reacting with 🔖 would |

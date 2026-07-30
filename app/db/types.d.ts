@@ -59,6 +59,12 @@ export interface BookmarkSnoozes {
   until: string;
 }
 
+export interface ChannelArchivings {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+}
+
 export interface ChannelCategoryChanges {
   category: string;
   channelId: string;
@@ -114,6 +120,12 @@ export interface ChannelTopicChanges {
 }
 
 export interface ChannelTopicClearings {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+}
+
+export interface ChannelUnarchivings {
   channelId: string;
   createdAt: Generated<string>;
   id: string;
@@ -227,6 +239,7 @@ export interface DB {
   bookmarkAdditions: BookmarkAdditions;
   bookmarkRemovals: BookmarkRemovals;
   bookmarkSnoozes: BookmarkSnoozes;
+  channelArchivings: ChannelArchivings;
   channelCategoryChanges: ChannelCategoryChanges;
   channelCategoryClearings: ChannelCategoryClearings;
   channelDetailRevisions: ChannelDetailRevisions;
@@ -236,6 +249,7 @@ export interface DB {
   channels: Channels;
   channelTopicChanges: ChannelTopicChanges;
   channelTopicClearings: ChannelTopicClearings;
+  channelUnarchivings: ChannelUnarchivings;
   gatewayConnections: GatewayConnections;
   gatewayDisconnections: GatewayDisconnections;
   gatewayHeartbeats: GatewayHeartbeats;

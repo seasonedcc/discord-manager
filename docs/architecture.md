@@ -132,6 +132,9 @@ Events (all with `(parentId, createdAt desc)` indexes):
   — the optional attributes, each a reversible pair: the newer of the two latest rows
   wins, and no rows at all means the channel never had one. A thread simply never gets a
   position row.
+- `channel_archivings` / `channel_unarchivings` — reversible pair; the newer of the two
+  latest rows says whether Discord currently has the thread archived, and no rows at all
+  means it never was. Only threads ever get rows.
 - `channel_removals` — existence is state (channel deleted/hidden from the bot).
 - `member_detail_revisions` — username, displayName.
 - `message_revisions` — full content snapshot; the first revision lands with ingestion,
@@ -221,12 +224,38 @@ partials for reactions on uncached messages). Handlers translate events to busin
 - messageUpdate → record revision (full snapshot)
 - messageDelete → record deletion
 - messageReactionAdd/Remove with 🔖 **by the configured owner only** → bookmark event
-- channel/thread create/update/delete → channel revisions/removals
+- channel/thread create/update/delete → channel revisions/removals, plus the archiving or
+  unarchiving event when a thread's archived state changed
 
 Startup runs a backfill per readable channel from the newest stored message forward, as a
 `backfill_runs` telemetry family with progress rows. A fresh identify (`shardReady`) and a
 resume (`shardResume`) both re-run the gap sweep; the sweep asks the scheduler to keep only
 one waiting copy of itself, so a reconnect storm queues one sweep rather than ten.
+
+### Archived threads and the one-final-sweep rule
+
+Discord archives a thread after inactivity and revives it the moment anyone posts. Removal
+is terminal and stays terminal, so an archived thread is still a channel the store knows —
+and without a second signal every reconnect would pay a REST backfill for every thread the
+bot ever saw. `channel_archivings` / `channel_unarchivings` carry that signal:
+
+- `recordChannelArchiving` and `recordChannelUnarchiving` append only on a transition,
+  driven by the `threadUpdate` / `threadCreate` snapshots the gateway observes live.
+- `reconcileThreadArchivings` covers the daemon's downtime. Every reconnect fetches the
+  guild's currently-active threads (`guild.channels.fetchActiveThreads()`, read fresh —
+  the channel cache does not reflect archived state) and reconciles: known non-removed
+  threads missing from that list are archived, archived threads back on it are unarchived.
+  It runs before the sweep is enqueued. A failed fetch degrades to the old behavior — the
+  connection is still recorded, the sweep still runs, and nothing is marked archived.
+- `listBackfillableChannels` skips a channel only when its latest archived-pair event is an
+  archiving **and** a `backfill_runs` row for that channel is newer than that archiving.
+
+That last rule is what keeps the change lossless. A thread that archives — whether observed
+live or discovered by reconciliation after downtime — is swept exactly once more, which is
+what collects the messages posted just before it went quiet, and drops out of every later
+sweep. A revived thread re-enters the sweep and its gap is filled. A thread that was never
+archived is always swept. At a millisecond tie the thread is swept again, which costs one
+REST call and loses nothing.
 
 ## Scheduling
 

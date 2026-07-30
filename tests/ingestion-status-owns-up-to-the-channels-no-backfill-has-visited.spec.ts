@@ -34,7 +34,8 @@ type IngestionStatus = {
 }
 
 test('ingestion status owns up to the channels no backfill has visited', async () => {
-  const { backfill, clock } = fixtures()
+  const { archiving, backfill, clock } = fixtures()
+  const [finalSweep] = archiving.finalSweep.runs
   const session = await openMcpSession()
 
   const { ingestion } = await session.call<IngestionStatus>('ingestion_status')
@@ -59,7 +60,7 @@ test('ingestion status owns up to the channels no backfill has visited', async (
 
   assert.equal(ingestion.backfill.status, 'running')
   assert.deepEqual(ingestion.backfill.channels, {
-    completed: 1,
+    completed: 2,
     failed: 0,
     running: 0,
     stalled: 0,
@@ -68,11 +69,11 @@ test('ingestion status owns up to the channels no backfill has visited', async (
   assert.deepEqual(ingestion.backfill.failedChannelNames, [])
   assert.equal(
     ingestion.backfill.fetchedMessageCount,
-    backfill.fetchedMessageCount
+    backfill.fetchedMessageCount + finalSweep.fetchedMessageCount
   )
   assert.equal(
     ingestion.backfill.storedMessageCount,
-    backfill.storedMessageCount
+    backfill.storedMessageCount + finalSweep.storedMessageCount
   )
   assert.ok(ingestion.backfill.lastRunStartedAt !== null)
   assert.equal(
