@@ -161,7 +161,13 @@ function sendMessage(transport: MessageSendTransport) {
         })
         .execute()
 
-      throw error
+      return {
+        send: {
+          requestId: request.id,
+          status: 'failed' as const,
+          ...messageSendStatusCopy.failed,
+        },
+      }
     }
   })
 }
