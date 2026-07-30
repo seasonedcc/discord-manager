@@ -5,13 +5,13 @@ import { test } from './spec'
 
 type ChannelList = {
   channels: {
-    category: string
+    category?: string
+    channelId: string
     discordChannelId: string
-    id: string
     isThread: boolean
     name: string
-    position: number
-    topic: string
+    position?: number
+    topic?: string
   }[]
 }
 
@@ -20,8 +20,10 @@ test('the channel list shows what the bot sees and forgets what it lost', async 
   const session = await openMcpSession()
 
   const { channels } = await session.call<ChannelList>('channels_list')
+  const placeOf = (channelId: string) =>
+    channels.findIndex((channel) => channel.channelId === channelId)
   const announcements = channels.filter(
-    ({ id }) => id === seeded.announcements.id
+    ({ channelId }) => channelId === seeded.announcements.id
   )
 
   assert.equal(announcements.length, 1)
@@ -36,16 +38,28 @@ test('the channel list shows what the bot sees and forgets what it lost', async 
   )
 
   assert.equal(
-    channels.filter(({ id }) => id === seeded.engineering.id).length,
+    channels.filter(({ channelId }) => channelId === seeded.engineering.id)
+      .length,
     1
   )
   assert.equal(
-    channels.filter(({ id }) => id === seeded.retiredStandup.id).length,
+    channels.filter(({ channelId }) => channelId === seeded.retiredStandup.id)
+      .length,
     0
   )
 
-  assert.ok(
-    channels.findIndex(({ id }) => id === seeded.announcements.id) <
-      channels.findIndex(({ id }) => id === seeded.engineering.id)
-  )
+  const lobby = channels[placeOf(seeded.lobby.id)]
+
+  assert.equal(Object.hasOwn(lobby, 'category'), false)
+  assert.equal(Object.hasOwn(lobby, 'topic'), false)
+  assert.equal(lobby.position, seeded.lobby.position)
+
+  const releaseThread = channels[placeOf(seeded.releaseThread.id)]
+
+  assert.equal(releaseThread.isThread, true)
+  assert.equal(Object.hasOwn(releaseThread, 'position'), false)
+
+  assert.ok(placeOf(seeded.lobby.id) < placeOf(seeded.announcements.id))
+  assert.ok(placeOf(seeded.announcements.id) < placeOf(seeded.engineering.id))
+  assert.ok(placeOf(seeded.engineering.id) < placeOf(seeded.releaseThread.id))
 })

@@ -1,5 +1,6 @@
 import { InputError, applySchema, fromSuccess } from 'composable-functions'
 import type { Transaction } from 'kysely'
+import { sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContext, ownerContextSchema } from '~/business/auth.server'
 import { db } from '~/db/db.server'
@@ -31,18 +32,12 @@ const observedAuthorSchema = z.object({
 })
 
 const observedChannelSchema = z.object({
-  category: z
-    .string()
-    .nullish()
-    .transform((value) => value ?? ''),
+  category: z.string().optional(),
   discordChannelId: z.string().min(1),
   isThread: z.boolean(),
   name: z.string().min(1),
-  position: z.number().int(),
-  topic: z
-    .string()
-    .nullish()
-    .transform((value) => value ?? ''),
+  position: z.number().int().optional(),
+  topic: z.string().optional(),
 })
 
 const recordChannelRemovalSchema = z.object({
@@ -103,6 +98,165 @@ async function findOrCreateGuild(trx: Transaction<DB>, discordGuildId: string) {
     .executeTakeFirstOrThrow()
 }
 
+async function currentChannelTopic(trx: Transaction<DB>, channelId: string) {
+  const events = trx
+    .selectFrom('channelTopicChanges')
+    .select((eb) => [
+      'createdAt',
+      'id',
+      eb.ref('topic').$castTo<string | null>().as('topic'),
+    ])
+    .where('channelId', '=', channelId)
+    .unionAll(
+      trx
+        .selectFrom('channelTopicClearings')
+        .select(['createdAt', 'id', sql<string | null>`null`.as('topic')])
+        .where('channelId', '=', channelId)
+    )
+
+  const newest = await trx
+    .selectFrom(events.as('topicEvents'))
+    .select('topic')
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst()
+
+  return newest?.topic ?? null
+}
+
+async function currentChannelCategory(trx: Transaction<DB>, channelId: string) {
+  const events = trx
+    .selectFrom('channelCategoryChanges')
+    .select((eb) => [
+      'createdAt',
+      'id',
+      eb.ref('category').$castTo<string | null>().as('category'),
+    ])
+    .where('channelId', '=', channelId)
+    .unionAll(
+      trx
+        .selectFrom('channelCategoryClearings')
+        .select(['createdAt', 'id', sql<string | null>`null`.as('category')])
+        .where('channelId', '=', channelId)
+    )
+
+  const newest = await trx
+    .selectFrom(events.as('categoryEvents'))
+    .select('category')
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst()
+
+  return newest?.category ?? null
+}
+
+async function currentChannelPosition(trx: Transaction<DB>, channelId: string) {
+  const events = trx
+    .selectFrom('channelPositionChanges')
+    .select((eb) => [
+      'createdAt',
+      'id',
+      eb.ref('position').$castTo<number | null>().as('position'),
+    ])
+    .where('channelId', '=', channelId)
+    .unionAll(
+      trx
+        .selectFrom('channelPositionClearings')
+        .select(['createdAt', 'id', sql<number | null>`null`.as('position')])
+        .where('channelId', '=', channelId)
+    )
+
+  const newest = await trx
+    .selectFrom(events.as('positionEvents'))
+    .select('position')
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst()
+
+  return newest?.position ?? null
+}
+
+async function recordChannelTopic(
+  trx: Transaction<DB>,
+  channelId: string,
+  topic: string | undefined
+) {
+  const current = await currentChannelTopic(trx, channelId)
+
+  if (topic === undefined) {
+    if (current === null) return
+
+    await trx
+      .insertInto('channelTopicClearings')
+      .values({ channelId, id: newId() })
+      .execute()
+
+    return
+  }
+
+  if (current === topic) return
+
+  await trx
+    .insertInto('channelTopicChanges')
+    .values({ channelId, id: newId(), topic })
+    .execute()
+}
+
+async function recordChannelCategory(
+  trx: Transaction<DB>,
+  channelId: string,
+  category: string | undefined
+) {
+  const current = await currentChannelCategory(trx, channelId)
+
+  if (category === undefined) {
+    if (current === null) return
+
+    await trx
+      .insertInto('channelCategoryClearings')
+      .values({ channelId, id: newId() })
+      .execute()
+
+    return
+  }
+
+  if (current === category) return
+
+  await trx
+    .insertInto('channelCategoryChanges')
+    .values({ category, channelId, id: newId() })
+    .execute()
+}
+
+async function recordChannelPosition(
+  trx: Transaction<DB>,
+  channelId: string,
+  position: number | undefined
+) {
+  const current = await currentChannelPosition(trx, channelId)
+
+  if (position === undefined) {
+    if (current === null) return
+
+    await trx
+      .insertInto('channelPositionClearings')
+      .values({ channelId, id: newId() })
+      .execute()
+
+    return
+  }
+
+  if (current === position) return
+
+  await trx
+    .insertInto('channelPositionChanges')
+    .values({ channelId, id: newId(), position })
+    .execute()
+}
+
 async function findOrCreateChannel(
   trx: Transaction<DB>,
   guildId: string,
@@ -126,7 +280,7 @@ async function findOrCreateChannel(
 
   const latestDetail = await trx
     .selectFrom('channelDetailRevisions')
-    .select(['category', 'isThread', 'name', 'position', 'topic'])
+    .select(['isThread', 'name'])
     .where('channelId', '=', record.id)
     .orderBy('createdAt', 'desc')
     .orderBy('id', 'desc')
@@ -134,28 +288,26 @@ async function findOrCreateChannel(
     .executeTakeFirst()
 
   const isThread = channel.isThread ? 1 : 0
-  const unchanged =
-    latestDetail &&
-    latestDetail.category === channel.category &&
-    latestDetail.isThread === isThread &&
-    latestDetail.name === channel.name &&
-    latestDetail.position === channel.position &&
-    latestDetail.topic === channel.topic
 
-  if (!unchanged) {
+  if (
+    !latestDetail ||
+    latestDetail.isThread !== isThread ||
+    latestDetail.name !== channel.name
+  ) {
     await trx
       .insertInto('channelDetailRevisions')
       .values({
-        category: channel.category,
         channelId: record.id,
         id: newId(),
         isThread,
         name: channel.name,
-        position: channel.position,
-        topic: channel.topic,
       })
       .execute()
   }
+
+  await recordChannelTopic(trx, record.id, channel.topic)
+  await recordChannelCategory(trx, record.id, channel.category)
+  await recordChannelPosition(trx, record.id, channel.position)
 
   return record
 }

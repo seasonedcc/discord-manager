@@ -72,10 +72,10 @@ async function configuredGuild() {
 async function createChannel({
   guildId,
   name = `channel-${randomUUID()}`,
-  topic = `topic-${randomUUID()}`,
-  category = `category-${randomUUID()}`,
+  topic,
+  category,
   isThread = 0,
-  position = 0,
+  position,
 }: ChannelAttributes = {}) {
   const resolvedGuildId = guildId ?? (await createGuild()).id
 
@@ -94,16 +94,29 @@ async function createChannel({
 
       await trx
         .insertInto('channelDetailRevisions')
-        .values({
-          id: newId(),
-          channelId: channel.id,
-          name,
-          topic,
-          category,
-          isThread,
-          position,
-        })
+        .values({ id: newId(), channelId: channel.id, name, isThread })
         .execute()
+
+      if (topic !== undefined) {
+        await trx
+          .insertInto('channelTopicChanges')
+          .values({ id: newId(), channelId: channel.id, topic })
+          .execute()
+      }
+
+      if (category !== undefined) {
+        await trx
+          .insertInto('channelCategoryChanges')
+          .values({ id: newId(), channelId: channel.id, category })
+          .execute()
+      }
+
+      if (position !== undefined) {
+        await trx
+          .insertInto('channelPositionChanges')
+          .values({ id: newId(), channelId: channel.id, position })
+          .execute()
+      }
 
       return channel
     })
@@ -167,7 +180,7 @@ async function createMessage({
 
 async function createBookmarkedMessage({
   source = 'reaction',
-  bookmarkedAt = new Date().toISOString(),
+  bookmarkedAt,
   ...messageAttributes
 }: BookmarkedMessageAttributes = {}) {
   const message = await createMessage(messageAttributes)
@@ -178,7 +191,7 @@ async function createBookmarkedMessage({
       id: newId(),
       messageId: message.id,
       source,
-      createdAt: bookmarkedAt,
+      ...(bookmarkedAt === undefined ? {} : { createdAt: bookmarkedAt }),
     })
     .execute()
 

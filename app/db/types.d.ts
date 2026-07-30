@@ -59,15 +59,38 @@ export interface BookmarkSnoozes {
   until: string;
 }
 
-export interface ChannelDetailRevisions {
+export interface ChannelCategoryChanges {
   category: string;
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+}
+
+export interface ChannelCategoryClearings {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+}
+
+export interface ChannelDetailRevisions {
   channelId: string;
   createdAt: Generated<string>;
   id: string;
   isThread: number;
   name: string;
+}
+
+export interface ChannelPositionChanges {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
   position: number;
-  topic: string;
+}
+
+export interface ChannelPositionClearings {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
 }
 
 export interface ChannelRemovals {
@@ -80,6 +103,19 @@ export interface Channels {
   createdAt: Generated<string>;
   discordChannelId: string;
   guildId: string;
+  id: string;
+}
+
+export interface ChannelTopicChanges {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+  topic: string;
+}
+
+export interface ChannelTopicClearings {
+  channelId: string;
+  createdAt: Generated<string>;
   id: string;
 }
 
@@ -178,9 +214,15 @@ export interface DB {
   bookmarkAdditions: BookmarkAdditions;
   bookmarkRemovals: BookmarkRemovals;
   bookmarkSnoozes: BookmarkSnoozes;
+  channelCategoryChanges: ChannelCategoryChanges;
+  channelCategoryClearings: ChannelCategoryClearings;
   channelDetailRevisions: ChannelDetailRevisions;
+  channelPositionChanges: ChannelPositionChanges;
+  channelPositionClearings: ChannelPositionClearings;
   channelRemovals: ChannelRemovals;
   channels: Channels;
+  channelTopicChanges: ChannelTopicChanges;
+  channelTopicClearings: ChannelTopicClearings;
   gatewayConnections: GatewayConnections;
   gatewayDisconnections: GatewayDisconnections;
   guilds: Guilds;

@@ -26,13 +26,13 @@ type SeededMember = {
 }
 
 type SeededChannel = {
-  category: string
+  category?: string
   discordChannelId: string
   id: string
   isThread: boolean
   name: string
-  position: number
-  topic: string
+  position?: number
+  topic?: string
 }
 
 type SeededMessage = {
@@ -81,11 +81,11 @@ async function disconnectGateway() {
 }
 
 async function observeChannel({
-  category = '',
+  category,
   isThread = false,
   name,
-  position = 0,
-  topic = '',
+  position,
+  topic,
 }: {
   category?: string
   isThread?: boolean

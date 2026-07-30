@@ -5,7 +5,7 @@ import { createChannel, createGuild, ownerContext } from '~/test/fixtures'
 import { db, describe, expect, it } from '~/test/prelude'
 
 describe('listChannels', () => {
-  it('describes each channel by its newest detail snapshot', async () => {
+  it('describes each channel by its newest name, thread flag and attributes', async () => {
     const guild = await createGuild()
     const channel = await createChannel({
       guildId: guild.id,
@@ -22,9 +22,33 @@ describe('listChannels', () => {
         id: newId(),
         channelId: channel.id,
         name: 'after-the-rename',
+        isThread: 0,
+        createdAt: '2099-01-01T00:00:00.000Z',
+      })
+      .execute()
+    await db()
+      .insertInto('channelTopicChanges')
+      .values({
+        id: newId(),
+        channelId: channel.id,
         topic: 'after the rename',
+        createdAt: '2099-01-01T00:00:00.000Z',
+      })
+      .execute()
+    await db()
+      .insertInto('channelCategoryChanges')
+      .values({
+        id: newId(),
+        channelId: channel.id,
         category: 'Product',
-        isThread: 1,
+        createdAt: '2099-01-01T00:00:00.000Z',
+      })
+      .execute()
+    await db()
+      .insertInto('channelPositionChanges')
+      .values({
+        id: newId(),
+        channelId: channel.id,
         position: 3,
         createdAt: '2099-01-01T00:00:00.000Z',
       })
@@ -37,15 +61,93 @@ describe('listChannels', () => {
 
     expect(channels).toEqual([
       {
-        id: channel.id,
+        channelId: channel.id,
         discordChannelId: channel.discordChannelId,
         name: 'after-the-rename',
         topic: 'after the rename',
         category: 'Product',
-        isThread: true,
+        isThread: false,
         position: 3,
       },
     ])
+  })
+
+  it('leaves out the attributes a channel never had', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id, name: 'loose' })
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(channels).toEqual([
+      {
+        channelId: channel.id,
+        discordChannelId: channel.discordChannelId,
+        name: 'loose',
+        isThread: false,
+      },
+    ])
+  })
+
+  it('tells an emptied topic apart from a topic the channel still carries', async () => {
+    const guild = await createGuild()
+    const blank = await createChannel({ guildId: guild.id, topic: '' })
+    const cleared = await createChannel({
+      guildId: guild.id,
+      topic: 'about to go',
+    })
+
+    await db()
+      .insertInto('channelTopicClearings')
+      .values({
+        id: newId(),
+        channelId: cleared.id,
+        createdAt: '2099-01-01T00:00:00.000Z',
+      })
+      .execute()
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const listed = new Map(
+      channels.map((channel) => [channel.channelId, channel])
+    )
+
+    expect(listed.get(blank.id)).toHaveProperty('topic', '')
+    expect(listed.get(cleared.id)).not.toHaveProperty('topic')
+  })
+
+  it('reads the newest of a category set, cleared and set again', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id, category: 'Old' })
+
+    await db()
+      .insertInto('channelCategoryClearings')
+      .values({
+        id: newId(),
+        channelId: channel.id,
+        createdAt: '2099-01-01T00:00:00.000Z',
+      })
+      .execute()
+    await db()
+      .insertInto('channelCategoryChanges')
+      .values({
+        id: newId(),
+        channelId: channel.id,
+        category: 'New',
+        createdAt: '2099-01-02T00:00:00.000Z',
+      })
+      .execute()
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(channels[0].category).toBe('New')
   })
 
   it('leaves out channels the bot no longer sees', async () => {
@@ -63,11 +165,12 @@ describe('listChannels', () => {
       await ownerContext({ guildId: guild.id })
     )
 
-    expect(channels.map(({ id }) => id)).toEqual([visible.id])
+    expect(channels.map(({ channelId }) => channelId)).toEqual([visible.id])
   })
 
-  it('orders channels by category, then position, then name', async () => {
+  it('sorts uncategorized channels first, then by category, position and name', async () => {
     const guild = await createGuild()
+    const loose = await createChannel({ guildId: guild.id, name: 'loose-talk' })
     const announcements = await createChannel({
       guildId: guild.id,
       category: 'Company',
@@ -98,12 +201,40 @@ describe('listChannels', () => {
       await ownerContext({ guildId: guild.id })
     )
 
-    expect(channels.map(({ id }) => id)).toEqual([
+    expect(channels.map(({ channelId }) => channelId)).toEqual([
+      loose.id,
       announcements.id,
       alerts.id,
       watercooler.id,
       roadmap.id,
     ])
+  })
+
+  it('sorts threads after the channels they hang from', async () => {
+    const guild = await createGuild()
+    const thread = await createChannel({
+      guildId: guild.id,
+      category: 'Company',
+      isThread: 1,
+      name: 'a-thread',
+    })
+    const channel = await createChannel({
+      guildId: guild.id,
+      category: 'Teams',
+      position: 9,
+      name: 'z-channel',
+    })
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(channels.map(({ channelId }) => channelId)).toEqual([
+      channel.id,
+      thread.id,
+    ])
+    expect(channels[1]).not.toHaveProperty('position')
   })
 
   it('only lists channels of the configured server', async () => {
@@ -117,7 +248,7 @@ describe('listChannels', () => {
       await ownerContext({ guildId: guild.id })
     )
 
-    expect(channels.map(({ id }) => id)).toEqual([channel.id])
+    expect(channels.map(({ channelId }) => channelId)).toEqual([channel.id])
   })
 
   it('refuses a context that cannot read messages', async () => {
