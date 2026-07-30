@@ -25,6 +25,7 @@ function digestMessagesSince({
     .select((eb) => [
       'messageId',
       'content',
+      'id as revisionId',
       eb.fn
         .agg<number>('row_number')
         .over((over) =>
@@ -169,8 +170,22 @@ const listMentions = applySchema(
   })
 
   return await readDigest(
-    query.where(({ eb, or }) =>
+    query.where(({ eb, exists, or, selectFrom }) =>
       or([
+        exists(
+          selectFrom('messageRevisionUserMentions')
+            .select('messageRevisionUserMentions.id')
+            .whereRef(
+              'messageRevisionUserMentions.messageRevisionId',
+              '=',
+              'latestRevisions.revisionId'
+            )
+            .where(
+              'messageRevisionUserMentions.mentionedDiscordUserId',
+              '=',
+              context.owner.discordUserId
+            )
+        ),
         eb(
           'latestRevisions.content',
           'like',

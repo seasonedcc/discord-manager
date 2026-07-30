@@ -7,6 +7,7 @@ type BackfilledMessage = {
   content: string
   discordCreatedAt: string
   discordMessageId: string
+  mentionedDiscordUserIds: string[]
 }
 
 type FetchChannelHistory = (request: {

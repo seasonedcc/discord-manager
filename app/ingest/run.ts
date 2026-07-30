@@ -38,6 +38,7 @@ function makeChannelHistoryFetcher(client: Client) {
       content: message.content,
       discordCreatedAt: message.createdAt.toISOString(),
       discordMessageId: message.id,
+      mentionedDiscordUserIds: [...message.mentions.users.keys()],
     }))
   }
 }
