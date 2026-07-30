@@ -1,4 +1,5 @@
 import { InputError, applySchema } from 'composable-functions'
+import { sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -100,7 +101,7 @@ function digestMessagesSince({
       )
     )
     .select([
-      'messages.id',
+      'messages.id as messageId',
       'messages.discordMessageId',
       'messages.discordCreatedAt',
       'messages.channelId',
@@ -111,7 +112,7 @@ function digestMessagesSince({
       'latestRevisions.content',
     ])
     .orderBy('messages.discordCreatedAt', 'asc')
-    .orderBy('messages.discordMessageId', 'asc')
+    .orderBy(sql`cast(messages.discord_message_id as integer)`, 'asc')
     .limit(digestMessageLimit + 1)
 }
 
@@ -149,9 +150,10 @@ const catchUpSince = applySchema(
     .executeTakeFirst()
 
   if (!channel) {
-    throw new InputError('That channel has not been ingested yet', [
-      'channelId',
-    ])
+    throw new InputError(
+      'No channel with that id has been ingested. List the channels to pick one.',
+      ['channelId']
+    )
   }
 
   return await readDigest(query.where('messages.channelId', '=', channel.id))

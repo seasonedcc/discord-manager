@@ -90,6 +90,50 @@ describe('makeJob', () => {
     expect(attemptsAt[2] - attemptsAt[1]).toBeGreaterThanOrEqual(20)
   })
 
+  it('skips a deduped enqueue while an identical one is still waiting', async () => {
+    const finished = deferred()
+    const seen: string[] = []
+    const sweepOnce = makeJob(
+      'sweepOnce',
+      async ({ value }: { value: string }) => {
+        seen.push(value)
+        if (value === 'letting the queue drain') finished.resolve()
+      },
+      { dedupe: true }
+    )
+    const runner = makeSchedulerRunner([sweepOnce])
+
+    sweepOnce.enqueue({ value: 'first' })
+    sweepOnce.enqueue({ value: 'while the first still waits' })
+    runner.start()
+    sweepOnce.enqueue({ value: 'letting the queue drain' })
+    await finished.promise
+    await runner.stop()
+
+    expect(seen).toEqual(['first', 'letting the queue drain'])
+  })
+
+  it('still enqueues a job that does not ask to be deduped', async () => {
+    const finished = deferred()
+    const seen: string[] = []
+    const sweepAlways = makeJob(
+      'sweepAlways',
+      async ({ value }: { value: string }) => {
+        seen.push(value)
+        if (value === 'second') finished.resolve()
+      }
+    )
+    const runner = makeSchedulerRunner([sweepAlways])
+
+    sweepAlways.enqueue({ value: 'first' })
+    sweepAlways.enqueue({ value: 'second' })
+    runner.start()
+    await finished.promise
+    await runner.stop()
+
+    expect(seen).toEqual(['first', 'second'])
+  })
+
   it('stops retrying once the attempt cap is reached', async () => {
     let attempts = 0
     const failForever = makeJob(

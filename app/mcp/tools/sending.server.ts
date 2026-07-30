@@ -56,7 +56,7 @@ const sendingTools: McpTool[] = [
   {
     name: 'messages_send',
     description:
-      'Post a message to a channel as your bot, optionally as a reply to a message the bot has ingested.',
+      'Post a message to a channel as your bot, optionally as a reply to a message the bot has ingested. Answers with `send`, whose `status` must be read: delivered means it is live in the channel, skipped means it never went out and `reason` says why, failed means Discord refused it or could not be reached. Read `summary` and `nextAction` to the owner rather than retrying blindly.',
     inputSchema: sendMessageSchema,
     wraps: ['sending.sendMessage'],
     execute: (input, context) =>
@@ -65,7 +65,7 @@ const sendingTools: McpTool[] = [
   {
     name: 'messages_send_status',
     description:
-      'Read where a message you sent ended up — delivered, skipped, failed, or still on its way — and what to do next.',
+      'Read where a message you sent ended up — delivered, skipped, failed, pending while it is still on its way, or stalled when nothing was ever recorded — and what to do next.',
     inputSchema: readMessageSendStatusSchema,
     wraps: ['sending.readMessageSendStatus'],
     execute: (input, context) => readMessageSendStatus(input, context),

@@ -4,7 +4,7 @@ import { fixtures } from './seed'
 import { test } from './spec'
 
 type Digest = {
-  messages: { content: string; id: string }[]
+  messages: { content: string; messageId: string }[]
 }
 
 test('an edited message catches up with its latest wording', async () => {
@@ -16,7 +16,7 @@ test('an edited message catches up with its latest wording', async () => {
     since: clock.at(5),
   })
   const corrected = digest.messages.filter(
-    ({ id }) => id === messages.corrected.id
+    ({ messageId }) => messageId === messages.corrected.id
   )
 
   assert.equal(corrected.length, 1)

@@ -122,7 +122,7 @@ describe('bookmarks_resolve', () => {
     expect(isError).toBe(false)
     expect(payload.bookmark).toMatchObject({
       messageId: message.id,
-      source: 'mcp',
+      resolvedVia: 'mcp',
     })
     expect(removals).toHaveLength(1)
     expect(removals[0].source).toBe('mcp')

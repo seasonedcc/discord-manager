@@ -620,17 +620,23 @@ function newestBackfillCursor(channelId: string) {
     .select('discordMessageId')
     .where('channelId', '=', channelId)
     .orderBy('discordCreatedAt', 'desc')
-    .orderBy('discordMessageId', 'desc')
+    .orderBy(sql`cast(discord_message_id as integer)`, 'desc')
     .orderBy('id', 'desc')
     .limit(1)
     .executeTakeFirst()
+}
+
+function bySnowflake(one: string, other: string) {
+  if (BigInt(one) === BigInt(other)) return 0
+
+  return BigInt(one) < BigInt(other) ? -1 : 1
 }
 
 function lastMessageOfPage(page: BackfilledMessage[]) {
   return [...page].sort(
     (one, other) =>
       one.discordCreatedAt.localeCompare(other.discordCreatedAt) ||
-      one.discordMessageId.localeCompare(other.discordMessageId)
+      bySnowflake(one.discordMessageId, other.discordMessageId)
   )[page.length - 1]
 }
 
@@ -673,9 +679,10 @@ const runChannelBackfill = applySchema(
     .executeTakeFirst()
 
   if (!channel) {
-    throw new InputError('That channel has not been ingested yet', [
-      'channelId',
-    ])
+    throw new InputError(
+      'No channel with that id has been ingested. List the channels to pick one.',
+      ['channelId']
+    )
   }
 
   const run = await db()
@@ -846,7 +853,8 @@ const backfillIngestedChannels = makeJob(
     for (const channel of channels) {
       backfillChannel.enqueue({ channelId: channel.id, fetchChannelHistory })
     }
-  }
+  },
+  { dedupe: true }
 )
 
 export {

@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { fromSuccess, isContextError, isInputError } from 'composable-functions'
 import { ownerCaps, ownerContext } from '~/business/auth.server'
 import { newId } from '~/framework/db.server'
-import { createChannel, createGuild, createMessage } from '~/test/fixtures'
+import {
+  createChannel,
+  createGuild,
+  createMessage,
+  snowflake,
+} from '~/test/fixtures'
 import { db, describe, expect, it, vi } from '~/test/prelude'
 import type { BackfilledMessage, FetchChannelHistory } from './ingestion.common'
 import {
@@ -60,7 +65,7 @@ function backfilledMessage(
     author: observedAuthor(),
     content: `content-${randomUUID()}`,
     discordCreatedAt: new Date().toISOString(),
-    discordMessageId: randomUUID(),
+    discordMessageId: snowflake(),
     ...overrides,
   }
 }
@@ -995,7 +1000,7 @@ describe('runChannelBackfill', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isInputError(result.errors[0])).toBe(true)
     expect(result.errors[0].message).toBe(
-      'That channel has not been ingested yet'
+      'No channel with that id has been ingested. List the channels to pick one.'
     )
 
     const runs = await db()
@@ -1063,6 +1068,10 @@ describe('listBackfillableChannels', () => {
 })
 
 describe('backfillIngestedChannels', () => {
+  it('asks the scheduler to keep only one waiting sweep', () => {
+    expect(backfillIngestedChannels.dedupe).toBe(true)
+  })
+
   it('enqueues one backfill per channel the bot still sees', async () => {
     const guild = await configuredGuild()
     const channel = await createChannel({ guildId: guild.id })
