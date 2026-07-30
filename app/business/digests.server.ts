@@ -2,8 +2,8 @@ import { applySchema } from 'composable-functions'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
-  DIGEST_MESSAGE_LIMIT,
   catchUpSinceSchema,
+  digestMessageLimit,
   listMentionsSchema,
 } from '~/business/digests.common'
 import { db } from '~/db/db.server'
@@ -112,7 +112,7 @@ function digestMessagesSince({
     ])
     .orderBy('messages.discordCreatedAt', 'asc')
     .orderBy('messages.discordMessageId', 'asc')
-    .limit(DIGEST_MESSAGE_LIMIT + 1)
+    .limit(digestMessageLimit + 1)
 }
 
 async function readDigest(query: ReturnType<typeof digestMessagesSince>) {
@@ -120,12 +120,12 @@ async function readDigest(query: ReturnType<typeof digestMessagesSince>) {
 
   return {
     messages: rows
-      .slice(0, DIGEST_MESSAGE_LIMIT)
+      .slice(0, digestMessageLimit)
       .map(({ discordGuildId, ...message }) => ({
         ...message,
         jumpUrl: `https://discord.com/channels/${discordGuildId}/${message.discordChannelId}/${message.discordMessageId}`,
       })),
-    truncated: rows.length > DIGEST_MESSAGE_LIMIT,
+    truncated: rows.length > digestMessageLimit,
   }
 }
 

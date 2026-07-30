@@ -3,11 +3,11 @@ import { sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
-  MESSAGE_SEND_STALL_MINUTES,
   type MessageSendSkipReason,
   type MessageSendStatus,
   type MessageSendTransport,
   messageSendSkipCopy,
+  messageSendStallThresholdMinutes,
   messageSendStatusCopy,
   readMessageSendStatusSchema,
   sendMessageSchema,
@@ -300,7 +300,7 @@ const readMessageSendStatus = applySchema(
       sql<MessageSendStatus>`coalesce(
         latest_outcomes.outcome,
         case
-          when message_send_requests.created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now', ${`-${MESSAGE_SEND_STALL_MINUTES} minutes`})
+          when message_send_requests.created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now', ${`-${messageSendStallThresholdMinutes} minutes`})
           then 'stalled'
           else 'pending'
         end

@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 // A send is a single REST call with no scheduled retry, so nothing can still be
 // working on a request that has gone this long without recording an outcome.
-const MESSAGE_SEND_STALL_MINUTES = 15
+const messageSendStallThresholdMinutes = 15
 
 type MessageSendSkipReason =
   | 'channel_not_found'
@@ -80,8 +80,8 @@ const sendMessageSchema = z.object({
 })
 
 export {
-  MESSAGE_SEND_STALL_MINUTES,
   messageSendSkipCopy,
+  messageSendStallThresholdMinutes,
   messageSendStatusCopy,
   readMessageSendStatusSchema,
   sendMessageSchema,

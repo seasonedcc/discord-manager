@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-const DIGEST_MESSAGE_LIMIT = 200
+const digestMessageLimit = 200
 
 const catchUpSinceSchema = z.object({
   since: z.iso.datetime(),
@@ -11,4 +11,4 @@ const listMentionsSchema = z.object({
   since: z.iso.datetime(),
 })
 
-export { DIGEST_MESSAGE_LIMIT, catchUpSinceSchema, listMentionsSchema }
+export { catchUpSinceSchema, digestMessageLimit, listMentionsSchema }

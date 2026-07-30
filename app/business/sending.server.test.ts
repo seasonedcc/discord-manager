@@ -1,8 +1,8 @@
 import { fromSuccess, isContextError, isInputError } from 'composable-functions'
 import type { MessageSendTransport } from '~/business/sending.common'
 import {
-  MESSAGE_SEND_STALL_MINUTES,
   messageSendSkipCopy,
+  messageSendStallThresholdMinutes,
   messageSendStatusCopy,
 } from '~/business/sending.common'
 import { readMessageSendStatus, sendMessage } from '~/business/sending.server'
@@ -358,7 +358,7 @@ describe('readMessageSendStatus', () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
     const requestedAt = new Date(
-      Date.now() - (MESSAGE_SEND_STALL_MINUTES + 1) * 60_000
+      Date.now() - (messageSendStallThresholdMinutes + 1) * 60_000
     ).toISOString()
     const request = await db()
       .insertInto('messageSendRequests')

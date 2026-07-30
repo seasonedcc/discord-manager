@@ -1,5 +1,5 @@
 import { fromSuccess, isContextError } from 'composable-functions'
-import { DIGEST_MESSAGE_LIMIT } from '~/business/digests.common'
+import { digestMessageLimit } from '~/business/digests.common'
 import { catchUpSince, listMentions } from '~/business/digests.server'
 import { db } from '~/db/db.server'
 import { newId } from '~/framework/db.server'
@@ -156,7 +156,7 @@ describe('catchUpSince', () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
     const member = await createMember()
-    const messageIds = Array.from({ length: DIGEST_MESSAGE_LIMIT + 1 }, () =>
+    const messageIds = Array.from({ length: digestMessageLimit + 1 }, () =>
       newId()
     )
 
@@ -193,7 +193,7 @@ describe('catchUpSince', () => {
       await ownerContext({ guildId: guild.id })
     )
 
-    expect(digest.messages).toHaveLength(DIGEST_MESSAGE_LIMIT)
+    expect(digest.messages).toHaveLength(digestMessageLimit)
     expect(digest.truncated).toBe(true)
   })
 
