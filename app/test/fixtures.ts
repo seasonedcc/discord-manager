@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { ownerCaps } from '~/business/auth.server'
 import { db } from '~/db/db.server'
+import { env } from '~/env.server'
 import { newId } from '~/framework/db.server'
 
 type ChannelAttributes = {
@@ -21,6 +22,7 @@ type MessageAttributes = {
   channelId?: string
   authorMemberId?: string
   content?: string
+  discordMessageId?: string
   discordCreatedAt?: string
 }
 
@@ -48,6 +50,22 @@ async function createGuild() {
     .insertInto('guilds')
     .values({ id: newId(), discordGuildId: snowflake() })
     .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
+async function configuredGuild() {
+  const discordGuildId = env().discordGuildId
+
+  await db()
+    .insertInto('guilds')
+    .values({ id: newId(), discordGuildId })
+    .onConflict((oc) => oc.doNothing())
+    .execute()
+
+  return await db()
+    .selectFrom('guilds')
+    .selectAll()
+    .where('discordGuildId', '=', discordGuildId)
     .executeTakeFirstOrThrow()
 }
 
@@ -117,6 +135,7 @@ async function createMessage({
   channelId,
   authorMemberId,
   content = `content-${randomUUID()}`,
+  discordMessageId = snowflake(),
   discordCreatedAt = new Date().toISOString(),
 }: MessageAttributes = {}) {
   const resolvedChannelId = channelId ?? (await createChannel()).id
@@ -131,7 +150,7 @@ async function createMessage({
           id: newId(),
           channelId: resolvedChannelId,
           authorMemberId: resolvedAuthorMemberId,
-          discordMessageId: snowflake(),
+          discordMessageId,
           discordCreatedAt,
         })
         .returningAll()
@@ -176,7 +195,7 @@ async function ownerContext({
         .select('discordGuildId')
         .where('id', '=', guildId)
         .executeTakeFirstOrThrow()
-    : await createGuild()
+    : await configuredGuild()
 
   return {
     owner: { discordUserId, guildId: guild.discordGuildId },
@@ -185,6 +204,7 @@ async function ownerContext({
 }
 
 export {
+  configuredGuild,
   createBookmarkedMessage,
   createChannel,
   createGuild,

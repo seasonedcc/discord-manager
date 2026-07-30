@@ -274,7 +274,10 @@ describe('resolveBookmark', () => {
   it('fails when the bookmark was already resolved', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
-    const message = await createBookmarkedMessage({ channelId: channel.id })
+    const message = await createBookmarkedMessage({
+      channelId: channel.id,
+      bookmarkedAt: '2020-01-01T00:00:00.000Z',
+    })
     const context = await ownerContext({ guildId: guild.id })
 
     await fromSuccess(resolveBookmark)({ messageId: message.id }, context)
