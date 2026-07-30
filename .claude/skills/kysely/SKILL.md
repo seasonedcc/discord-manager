@@ -109,7 +109,9 @@ SQLite's `alter table` is narrow, and that never becomes a problem here: migrati
 
 ## Deterministic ordering for reads
 
-When a query orders rows by a non-unique column — a timestamp, a count — add a tiebreak on a stable meaningful column before any final `orderBy('id')`. Primary keys are random UUIDs, so an id-only tiebreak returns tied rows in a different order on every database, which reads as arbitrary to the owner's assistant and breaks anything that pins the output.
+When a query orders rows by a non-unique column — a timestamp, a count — add a tiebreak on a stable meaningful column before any final `orderBy('id')`. Primary keys sort in the order the writing process issued them, so an id-only tiebreak orders tied rows by when they happened to be written rather than by anything the owner would recognise — and two processes writing in the same millisecond leave even that undefined.
+
+A Discord snowflake is a number stored as text, so ordering by it needs `cast(discord_message_id as integer)`: lexicographic order breaks the moment ids differ in length, and in JavaScript the comparison is `BigInt`, never `localeCompare`.
 
 ```typescript
 .orderBy('messages.discordCreatedAt', 'asc')

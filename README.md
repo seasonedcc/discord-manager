@@ -8,13 +8,13 @@ Each person runs their own bot and their own local stack. Nothing is shared, not
 
 ## What you get
 
-- **Catch-up digests** — everything posted since a moment in time, across the server or in one channel, each message with a jump link.
+- **Catch-up digests** — everything posted since a moment in time, across the server or in one channel, each message with a jump link. Long stretches come back 200 messages at a time, so your assistant can walk a busy week in order.
 - **Mention triage** — the messages that name you, ready for an assistant to sort by what actually needs you.
 - **Bookmarks without Nitro** — react to any message with 🔖 and your bot records a bookmark; remove the reaction and it's gone. Your assistant can also bookmark by message link, resolve, and snooze — privately, with no reaction anyone can see. Only *your* reactions count, so a whole team of bots coexists in one server without crosstalk.
 - **Draft and send** — messages posted to any channel as your bot, optionally as a reply, with a status trail for every send.
 - **Ingestion health** — whether the bot is still receiving from Discord and how far its history backfills have got, as plain readings with a concrete next action.
 
-Everything is stored locally in SQLite as an append-only event history: edits are revisions, deletions are events, and nothing is ever erased — a bookmarked message survives the author's edit, and your assistant can tell you what changed.
+Everything is stored locally in SQLite as an append-only event history: edits are revisions, deletions are events, and nothing is ever erased — a bookmarked message survives the author's edit.
 
 ## Setup
 
@@ -31,10 +31,10 @@ You'll need [Node.js](https://nodejs.org) 22.12+ and [pnpm](https://pnpm.io) 10.
 In **OAuth2**, copy your **Client ID**, put it into this URL, open it, and pick your server:
 
 ```
-https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot&permissions=68608
+https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot&permissions=274877975552
 ```
 
-`68608` is exactly View Channels + Send Messages + Read Message History — everything the product does, nothing it doesn't. You'll need to be a server admin, or ask one.
+`274877975552` is exactly View Channels + Send Messages + Send Messages in Threads + Read Message History — everything the product does, nothing it doesn't. You'll need to be a server admin, or ask one.
 
 ### 3. Configure
 
@@ -44,6 +44,8 @@ cd discord-manager
 pnpm install
 cp .env.example .env
 ```
+
+On Linux, `pnpm install` may have to build `better-sqlite3` from source when no prebuilt binary matches your Node version — install `python3` and your distribution's build tools (`build-essential` on Debian and Ubuntu) first if the install stops there.
 
 Fill in `.env` — the file explains where each value comes from: your bot token, your own Discord user id (so only *your* 🔖 reactions become bookmarks), and the server id.
 
@@ -63,11 +65,13 @@ This is the long-running daemon: it connects to Discord's gateway, records every
 
 ### 5. Wire up your assistant
 
-The repo ships a [`.mcp.json`](.mcp.json) that wires the MCP server the way an assistant spawns it. With [Claude Code](https://claude.com/claude-code), opening the repo is enough — it picks up `.mcp.json` and starts the server per session. For any other MCP client, point it at:
+The repo ships a [`.mcp.json`](.mcp.json) that wires the MCP server the way an assistant spawns it. With [Claude Code](https://claude.com/claude-code), opening the repo is enough — it picks up `.mcp.json` and asks you to approve the server the first time; approve it and it starts per session from then on. For any other MCP client, point it at:
 
 ```bash
 pnpm run mcp
 ```
+
+If your client cannot find `pnpm` — GUI apps often start without your shell's PATH — put the absolute path in `.mcp.json` instead (`which pnpm` tells you where it lives), and give it the repo directory as the working directory.
 
 Then just talk: *"What did I miss since this morning?"* — *"Bookmark that and snooze it until Monday."* — *"Reply that we'll ship it Thursday."*
 
@@ -88,15 +92,15 @@ The seed only ever runs against a freshly created, empty database, and sending w
 
 | Tool | What you get |
 | --- | --- |
-| `channels_list` | The channels the bot can see, with their current name, topic, and category |
-| `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel |
-| `mentions_list` | The messages that name you since a moment in time |
+| `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them |
+| `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time |
+| `mentions_list` | The messages whose text names you since a moment in time |
 | `bookmarks_add` | A bookmark from a Discord message link, exactly as reacting with 🔖 would |
 | `bookmarks_list` | The bookmarks still waiting on you, snoozed ones on request |
 | `bookmarks_resolve` | A bookmark cleared, leaving any reaction in Discord untouched |
 | `bookmarks_snooze` | A bookmark hidden until the moment you pick |
 | `messages_send` | A message posted to a channel as your bot, optionally as a reply |
-| `messages_send_status` | Where a send ended up — delivered, skipped, failed, or still on its way |
+| `messages_send_status` | Where a send ended up — delivered, skipped, failed, still on its way, or stalled when nothing was ever recorded |
 | `ingestion_status` | Whether the bot is receiving from Discord, and how far backfills have got |
 
 ## Good to know

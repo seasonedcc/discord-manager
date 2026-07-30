@@ -24,8 +24,9 @@ Discord app, so nothing is shared between deployments.
 Two processes share one SQLite database file (WAL mode makes this safe):
 
 - `pnpm run ingest` — the long-running daemon: a discord.js gateway client that writes
-  message, reaction, and metadata events, plus the in-process scheduler for periodic work
-  (startup backfill, gap sweeps).
+  message, reaction, and metadata events, plus the in-process work queue that runs the
+  startup backfill, the gap sweeps triggered on connect and resume, and the liveness
+  heartbeat cron.
 - The MCP server — a stdio process the owner's AI client spawns per session (wired via
   `.mcp.json`). It only reads the store and calls Discord's REST API for sends.
 
@@ -45,29 +46,32 @@ end-to-end specs (see Testing).
 ```
 app/
   framework/        Zero app-specific logic; extractable as a package at any time.
-    db.server.ts        makeDb, migrator, createDbMigration, migrateDbToLatest/Down
+    db.server.ts        makeDb, newId, migrator, createDbMigration, migrateDbToLatest/Down
     env.server.ts       framework-only typed env (make-typed-env + camelKeys)
     scheduler.server.ts makeJob, makeCronJob, makeSchedulerRunner (in-process; no queue)
     globals.ts          getOrSetGlobal (HMR/test-safe singletons)
-    helpers.ts          pure helpers only as needed
   business/         The product. Domain-named files, no cross-imports, one export block.
-    auth.server.ts      owner context: env + db -> ownerContext; ownerContextSchema
-    channels.server.ts  channel listing + metadata revisions
-    ingestion.server.ts message/reaction/member event recording; backfill; telemetry
-    digests.server.ts   catch-up + mention triage derivations
-    bookmarks.server.ts add/remove/resolve/snooze + list derivation
-    sending.server.ts   draft-and-send with its telemetry family
-    jobs.server.ts      registered jobs array
-    *.common.ts         schemas, copy maps, named constants per domain
+    auth.server.ts             owner context: env + db -> ownerContext; ownerContextSchema
+    channels.server.ts         channel listing from its detail and attribute events
+    ingestion.server.ts        message/reaction/member event recording; backfill; heartbeat
+    ingestion-status.server.ts gateway activity + backfill health derivations
+    digests.server.ts          catch-up + mention triage derivations
+    bookmarks.server.ts        add/remove/resolve/snooze + list derivation
+    sending.server.ts          draft-and-send with its telemetry family
+    jobs.server.ts             registered jobs array
+    *.common.ts                schemas, copy maps, named constants per domain
   db/
     migrations/         timestamped, prose-named, self-contained
-    scripts/            migration.ts, migrate.ts, rollback.ts
+    scripts/            migration.ts, migrate.ts, rollback.ts, generate.ts
+    db.server.ts        the product's Kysely instance (makeDb<DB>())
     types.d.ts          generated — never hand-edited
     dev-seed/           empty-database-only seed for local development
+  env.server.ts     the product's typed env, plus the startup guard both entrypoints call
   mcp/
     tool.ts             McpTool shape
     server.server.ts    stdio server: listTools/callTool, JSON-schema projection
     registry.server.ts  accumulate-only tool array
+    run.ts              stdio entrypoint
     tools/<domain>.server.ts
     parity.test.ts      every business capability wrapped xor exempt, with reasons
     parity-exemptions.ts
@@ -80,8 +84,13 @@ app/
     fixtures.ts         createGuild/createChannel/createMessage/ownerContext factories
 tests/
   *.spec.ts             behavior-sentence specs driving the real MCP server over stdio
-  mcp-client.ts         stdio client harness
+  spec.ts               the one-test-per-file registrar
+  run-e2e.ts            fresh store, seed, run every spec, then the coverage gate
+  mcp-client.ts         stdio client harness + the local Discord double
+  discord-ids.ts        run-unique Discord snowflakes for seeds and specs
   coverage/gate.ts      every registered MCP tool must be exercised by the suite
+  coverage/pending.ts   tools no spec reaches yet; the list only ever shrinks
+  coverage/exclusions.ts  tools excluded with a written rationale
   seed/                 per-run fresh-store E2E seed built from a fake gateway feed
 ```
 
@@ -96,7 +105,9 @@ SQLite adaptations (the only sanctioned divergences, mirrored in CLAUDE.md):
 - **ids** are monotonic UUIDv7 values from `newId()` in application code — SQLite has no
   `gen_random_uuid()`, and a random id would make the `id desc` tie-break a coin flip
   whenever two events share a millisecond. Insert helpers own this; migrations declare
-  `text` primary keys.
+  `text` primary keys. The guarantee is per process: two processes appending to one
+  reversible pair inside the same millisecond stay unordered, which is accepted rather
+  than fixed — there is no cross-process ordering machinery.
 - **Timestamps** are ISO-8601 UTC `text` columns: `createdAt` defaults to
   `strftime('%Y-%m-%dT%H:%M:%fZ','now')`. Lexicographic order equals chronological order.
 - **Latest-event-wins** uses a window function instead of `distinct on`:
@@ -114,8 +125,13 @@ discordMessageId unique, discordCreatedAt).
 
 Events (all with `(parentId, createdAt desc)` indexes):
 
-- `channel_detail_revisions` — full snapshot per observed change: name, topic, category,
-  isThread, position.
+- `channel_detail_revisions` — full snapshot of what every channel always has: name and
+  isThread.
+- `channel_topic_changes` / `channel_topic_clearings`, `channel_category_changes` /
+  `channel_category_clearings`, `channel_position_changes` / `channel_position_clearings`
+  — the optional attributes, each a reversible pair: the newer of the two latest rows
+  wins, and no rows at all means the channel never had one. A thread simply never gets a
+  position row.
 - `channel_removals` — existence is state (channel deleted/hidden from the bot).
 - `member_detail_revisions` — username, displayName.
 - `message_revisions` — full content snapshot; the first revision lands with ingestion,
@@ -132,11 +148,16 @@ Events (all with `(parentId, createdAt desc)` indexes):
 Every Discord API operation family gets its own request + outcome tables and its own
 skip-reason enum; no shared framework, no shared enums:
 
-- `message_send_requests` / `...deliveries` / `...failures` / `...skips` — MCP sends.
+- `message_send_requests` / `...reply_targets` / `...deliveries` / `...failures` (with a
+  `kind` of `rejected` or `unreachable`) / `...skips` — MCP sends.
 - `backfill_runs` / `backfill_run_progress` / `...completions` / `...failures` — REST
-  history backfills, with real denominators for progress.
-- `gateway_connections` / `gateway_disconnections` — activity derivation reads
-  `receiving | quiet | never` against a named silence-threshold constant.
+  history backfills. Each channel's newest run gives a state, and the reading rolls those
+  states up worst-first into counts, the names of the channels whose newest run failed,
+  and how many channels no run has ever visited.
+- `gateway_connections` / `gateway_heartbeats` / `gateway_disconnections` — activity
+  derivation reads `receiving | quiet | never` from the newest sign of life against a
+  named silence-threshold constant, so a daemon that died without disconnecting goes
+  quiet instead of reading live forever.
 
 Owner-facing status is always mapped copy from exhaustive typed maps in `.common.ts`
 (summary + nextAction per reason), never raw vendor text — pinned by serialization tests.
@@ -144,8 +165,9 @@ Owner-facing status is always mapped copy from exhaustive typed maps in `.common
 ## Authorization
 
 The three-layer architecture survives with a collapsed top: the owner is configured, not
-authenticated. `ownerContext()` builds context from env (bot token, owner user id, guild id)
-plus the store, and `ownerContextSchema` still carries `z.literal(true)` capability flags
+authenticated. `ownerContext()` builds context from env (owner user id, guild id) plus the
+store — never the bot token, which only the transports read when they call Discord — and
+`ownerContextSchema` still carries `z.literal(true)` capability flags
 (`canReadMessages`, `canManageBookmarks`, `canSendMessages`) so every business function
 validates context exactly as in bettr-manager and the gates stay testable. The MCP layer
 contains zero authorization — tools call business functions with the real context.
@@ -153,8 +175,9 @@ contains zero authorization — tools call business functions with the real cont
 ## MCP tools (v1)
 
 `channels_list`, `messages_catch_up` (since + optional channel), `mentions_list`,
-`bookmarks_list`, `bookmarks_add` (by message link), `bookmarks_resolve`,
-`bookmarks_snooze`, `messages_send` (channel, content, optional reply), `ingestion_status`.
+`bookmarks_list` (optional limit), `bookmarks_add` (by message link), `bookmarks_resolve`,
+`bookmarks_snooze`, `messages_send` (channel, content, optional reply),
+`messages_send_status` (by request id), `ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the
 business functions' own exported schemas, dates cross the boundary as ISO strings. The
@@ -172,7 +195,18 @@ partials for reactions on uncached messages). Handlers translate events to busin
 - channel/thread create/update/delete → channel revisions/removals
 
 Startup runs a backfill per readable channel from the newest stored message forward, as a
-`backfill_runs` telemetry family with progress rows. Reconnects re-run the gap sweep.
+`backfill_runs` telemetry family with progress rows. A fresh identify (`shardReady`) and a
+resume (`shardResume`) both re-run the gap sweep; the sweep asks the scheduler to keep only
+one waiting copy of itself, so a reconnect storm queues one sweep rather than ten.
+
+## Scheduling
+
+`app/framework/scheduler.server.ts` is an in-process work queue, not a job server: one
+pending array drained one task at a time, retries with exponential backoff up to a per-job
+attempt cap, and `setInterval` timers for cron jobs. Nothing is persisted — a daemon
+restart starts from an empty queue, which is why every job is safe to re-run from scratch.
+`app/business/jobs.server.ts` lists the registered jobs and the daemon is the only process
+that starts the runner.
 
 ## Testing
 
@@ -181,10 +215,15 @@ Startup runs a backfill per readable channel from the newest stored message forw
   `describe` per public function, fixtures with `crypto.randomUUID()` entropy,
   `fromSuccess` for happy paths, specific error assertions.
 - **End-to-end**: specs named as behavior sentences (`a-bookmarked-message-survives-the-
-  authors-edit.spec.ts`), one test per file. Each spec seeds the store through the real
-  ingestion business functions (a scripted fake gateway feed — no network), spawns the real
-  MCP server over stdio, and drives it with the real MCP SDK client. Discord REST calls in
-  `messages_send` go through an injected transport double that records requests.
+  authors-edit.spec.ts`), one test per file. `tests/run-e2e.ts` deletes the E2E database
+  file, migrates it, seeds it **once per run** through the real ingestion business
+  functions (a scripted fake gateway feed — no network), then runs every spec against that
+  one store and finishes with the coverage gate. Each spec spawns the real MCP server over
+  stdio and drives it with the real MCP SDK client. Discord REST calls are not mocked: the
+  harness starts a local HTTP double on `127.0.0.1` and spawns the server with
+  `DISCORD_API_BASE_URL` pointing at it, so the real `discord.js` REST client makes a real
+  request the spec can assert on — or the double refuses it with a 403 to exercise the
+  failure copy.
 - **Coverage gate**: the E2E runner fails if any registered MCP tool was never called by
   the suite, with the same pending/exemption discipline as bettr's route gate.
 - **TDD for bugs**: red, green, refactor. Mutation-prove any test whose absence assertion
