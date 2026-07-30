@@ -1,0 +1,58 @@
+{
+  "name": "discord-manager",
+  "version": "0.1.0",
+  "description": "Self-hosted Discord bookmarks, catch-up digests, and triage for your AI assistant, over MCP. No Nitro required.",
+  "license": "MIT",
+  "author": "Seasoned",
+  "homepage": "https://github.com/seasonedcc/discord-manager",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seasonedcc/discord-manager.git"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "db:generate": "tsx ./app/db/scripts/generate.ts",
+    "db:migrate": "tsx ./app/db/scripts/migrate.ts && pnpm run db:generate",
+    "db:migration": "tsx ./app/db/scripts/migration.ts",
+    "db:rollback": "tsx ./app/db/scripts/rollback.ts && pnpm run db:generate",
+    "db:seed:dev": "tsx ./app/db/dev-seed/seed.ts",
+    "ingest": "tsx ./app/ingest/run.ts",
+    "lint": "biome check --error-on-warnings",
+    "lint-fix": "biome check --write --error-on-warnings",
+    "mcp": "tsx ./app/mcp/run.ts",
+    "test": "npm-run-all test:unit test:e2e",
+    "test:e2e": "tsx ./tests/run-e2e.ts",
+    "test:unit": "cross-env TZ=UTC vitest run",
+    "tsc": "tsc"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.2.0",
+    "composable-functions": "^5.0.0",
+    "discord.js": "^14.21.0",
+    "kysely": "^0.27.2",
+    "kysely-codegen": "^0.19.0",
+    "make-typed-env": "^0.0.4",
+    "string-ts": "^2.3.1",
+    "tsx": "^4.20.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22",
+    "cross-env": "^7.0.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.0",
+    "vite-tsconfig-paths": "^5.0.1",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "packageManager": "pnpm@10.6.5",
+  "pnpm": {
+    "onlyBuiltDependencies": ["@biomejs/biome", "better-sqlite3", "esbuild"]
+  }
+}

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  DISCORD_BOT_TOKEN: 'placeholder'
+  DISCORD_OWNER_USER_ID: '1'
+  DISCORD_GUILD_ID: '1'
+  DATABASE_PATH: './data/ci.db'
+
+jobs:
+  ci:
+    name: Lint, tsc, and unit tests
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install pnpm
+        run: npm install -g pnpm@10
+      - name: ⎔ Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm run lint
+      - name: Typecheck
+        run: pnpm run tsc
+      - name: Run unit tests
+        run: pnpm run test:unit
