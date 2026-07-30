@@ -90,7 +90,9 @@ A stream the product only receives from gets an honest last-seen instead: the ga
 
 ## Retry only what is safe to re-run
 
-Offer a retry only when another attempt could do something different. The predicate is shared between the reader and the writer: one exported function decides it, the status reader returns it as `canRetry`, and the re-send function re-checks it and throws an `InputError` naming where the last attempt stands. Failed and stalled are worth repeating; a skip is worth repeating only when the condition that caused it can have changed. Never let the reading and the action disagree.
+Offer a retry only when another attempt could do something different — and only when the recorded outcome proves the last attempt put nothing in front of the vendor. A failure the vendor itself rejected is worth repeating; a skip is worth repeating only when the condition that caused it can have changed. An unknown outcome is never safely repeatable: a stalled request, or a failure where the vendor never answered, includes the case where the attempt succeeded, and the repeat performs it twice. The same reading extends over the request's own retries — while any retry of a request might itself have gone through, the request is not retryable.
+
+The predicate is shared between the reader and the writer: one function decides it for both call sites, the status reader returns it as `canRetry`, and the re-send function re-checks it inside the transaction that records the new attempt and throws an `InputError` naming where the last attempt stands. Never let the reading and the action disagree.
 
 ## Seeding telemetry rows
 
