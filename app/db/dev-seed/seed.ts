@@ -3,6 +3,10 @@ import { fromSuccess } from 'composable-functions'
 import { sql } from 'kysely'
 import { ownerContext } from '~/business/auth.server'
 import {
+  addBookmarkByLink,
+  listBookmarkReasons,
+} from '~/business/bookmarks.server'
+import {
   recordChannelArchiving,
   recordChannelSnapshot,
   recordGatewayConnection,
@@ -33,6 +37,11 @@ async function readAnchor() {
   return rows[0].anchor
 }
 
+const tablesTheSchemaShipsPopulated = [
+  'bookmark_reason_detail_revisions',
+  'bookmark_reasons',
+]
+
 async function applicationTables() {
   const { rows } = await sql<{ name: string }>`
     select name from sqlite_master
@@ -40,7 +49,9 @@ async function applicationTables() {
     order by name
   `.execute(db())
 
-  return rows.map(({ name }) => name)
+  return rows
+    .map(({ name }) => name)
+    .filter((name) => !tablesTheSchemaShipsPopulated.includes(name))
 }
 
 async function guardAnEmptyDatabase() {
@@ -168,7 +179,7 @@ const bookmarkWorthy = await postMessage({
   discordCreatedAt: secondsAfterTheAnchor(2),
 })
 
-await postMessage({
+const awaitingAnAnswer = await postMessage({
   author: omar,
   channel: engineering,
   content: `<@${context.owner.discordUserId}> can you review the release notes today?`,
@@ -189,6 +200,23 @@ await fromSuccess(recordOwnerBookmarkReaction)(
     discordMessageId: bookmarkWorthy.discordMessageId,
     emoji: '🔖',
     reactorDiscordUserId: context.owner.discordUserId,
+  },
+  context
+)
+
+const { reasons } = await fromSuccess(listBookmarkReasons)({}, context)
+const answerLater = reasons.find(({ name }) => name === 'Answer later')
+
+if (!answerLater) {
+  throw new Error(
+    'The Answer later bookmark reason is missing — run pnpm run db:migrate before seeding.'
+  )
+}
+
+await fromSuccess(addBookmarkByLink)(
+  {
+    messageLink: `https://discord.com/channels/${context.owner.guildId}/${engineering.discordChannelId}/${awaitingAnAnswer.discordMessageId}`,
+    reasonId: answerLater.reasonId,
   },
   context
 )
@@ -231,5 +259,5 @@ const refusedSend = await fromSuccess(
 await db().destroy()
 
 console.log(
-  `Seeded a development server: two channels, an archived thread, five messages, one mention of you, one reply that pinged you without naming you, one bookmark, and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to list the channels, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
+  `Seeded a development server: two channels, an archived thread, five messages, one mention of you, one reply that pinged you without naming you, two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later — and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to list the channels, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
 )
