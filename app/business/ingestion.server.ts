@@ -18,6 +18,9 @@ import {
   skipped,
 } from './ingestion.common'
 
+const pageLimitReachedMessage =
+  'Stopped at the page limit before reaching the newest messages'
+
 const ingestionContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
 })
@@ -683,6 +686,7 @@ const runChannelBackfill = applySchema(
 
   let fetchedMessageCount = 0
   let storedMessageCount = 0
+  let reachedTheNewestMessage = false
 
   try {
     const cursor = await newestBackfillCursor(channel.id)
@@ -696,7 +700,10 @@ const runChannelBackfill = applySchema(
         limit: backfillPageSize,
       })
 
-      if (messages.length === 0) break
+      if (messages.length === 0) {
+        reachedTheNewestMessage = true
+        break
+      }
 
       fetchedMessageCount += messages.length
       storedMessageCount += await storeBackfilledPage(channel.id, messages)
@@ -713,11 +720,17 @@ const runChannelBackfill = applySchema(
 
       const nextCursor = lastMessageOfPage(messages).discordMessageId
 
-      if (nextCursor === afterDiscordMessageId) break
+      if (nextCursor === afterDiscordMessageId) {
+        reachedTheNewestMessage = true
+        break
+      }
 
       afterDiscordMessageId = nextCursor
 
-      if (messages.length < backfillPageSize) break
+      if (messages.length < backfillPageSize) {
+        reachedTheNewestMessage = true
+        break
+      }
     }
   } catch (error) {
     await db()
@@ -730,6 +743,24 @@ const runChannelBackfill = applySchema(
       .execute()
 
     throw error
+  }
+
+  if (!reachedTheNewestMessage) {
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        backfillRunId: run.id,
+        errorMessage: pageLimitReachedMessage,
+        id: newId(),
+      })
+      .execute()
+
+    return {
+      backfillRunId: run.id,
+      fetchedMessageCount,
+      outcome: 'stopped_at_the_page_limit' as const,
+      storedMessageCount,
+    }
   }
 
   await db()

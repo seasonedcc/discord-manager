@@ -12,8 +12,10 @@ type IngestionStatus = {
         running: number
         stalled: number
       }
+      failedChannelNames: string[]
       fetchedMessageCount: number
       lastRunStartedAt: string | null
+      neverRanChannelCount: number
       nextAction: string
       status: string
       storedMessageCount: number
@@ -31,7 +33,7 @@ type IngestionStatus = {
   }
 }
 
-test('ingestion status reports a live gateway and a finished backfill', async () => {
+test('ingestion status owns up to the channels no backfill has visited', async () => {
   const { backfill, clock } = fixtures()
   const session = await openMcpSession()
 
@@ -55,13 +57,15 @@ test('ingestion status reports a live gateway and a finished backfill', async ()
     'Nothing to fix — catch up on messages whenever you like.'
   )
 
-  assert.equal(ingestion.backfill.status, 'completed')
+  assert.equal(ingestion.backfill.status, 'running')
   assert.deepEqual(ingestion.backfill.channels, {
     completed: 1,
     failed: 0,
     running: 0,
     stalled: 0,
   })
+  assert.equal(ingestion.backfill.neverRanChannelCount, 3)
+  assert.deepEqual(ingestion.backfill.failedChannelNames, [])
   assert.equal(
     ingestion.backfill.fetchedMessageCount,
     backfill.fetchedMessageCount
@@ -73,10 +77,10 @@ test('ingestion status reports a live gateway and a finished backfill', async ()
   assert.ok(ingestion.backfill.lastRunStartedAt !== null)
   assert.equal(
     ingestion.backfill.summary,
-    'Every channel the bot backfilled has finished pulling its history.'
+    'Backfills are still working through the history.'
   )
   assert.equal(
     ingestion.backfill.nextAction,
-    'Catch up on messages whenever you like — the history is in the store.'
+    'Read this status again in a few minutes to watch the counts move.'
   )
 })

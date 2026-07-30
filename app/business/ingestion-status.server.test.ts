@@ -131,11 +131,98 @@ describe('readIngestionStatus', () => {
     expect(ingestion.backfill).toEqual({
       status: 'completed',
       channels: { completed: 1, failed: 0, running: 0, stalled: 0 },
+      failedChannelNames: [],
+      neverRanChannelCount: 0,
       fetchedMessageCount: 250,
       storedMessageCount: 90,
       lastRunStartedAt: run.createdAt,
       ...backfillStatusCopy.completed,
     })
+  })
+
+  it('counts the channels no backfill has ever visited', async () => {
+    const guild = await createGuild()
+    const visited = await createChannel({ guildId: guild.id })
+    await createChannel({ guildId: guild.id })
+    const run = await startBackfillRun(visited.id)
+
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: run.id,
+        fetchedMessageCount: 5,
+        storedMessageCount: 5,
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'running',
+      channels: { completed: 1, failed: 0, running: 0, stalled: 0 },
+      neverRanChannelCount: 1,
+      ...backfillStatusCopy.running,
+    })
+  })
+
+  it('leaves out the channels the bot can no longer see', async () => {
+    const guild = await createGuild()
+    const visited = await createChannel({ guildId: guild.id })
+    const removed = await createChannel({ guildId: guild.id })
+    const run = await startBackfillRun(visited.id)
+
+    await db()
+      .insertInto('channelRemovals')
+      .values({ id: newId(), channelId: removed.id })
+      .execute()
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: run.id,
+        fetchedMessageCount: 5,
+        storedMessageCount: 5,
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'completed',
+      neverRanChannelCount: 0,
+    })
+  })
+
+  it('names the channels whose newest backfill failed', async () => {
+    const guild = await createGuild()
+    const failing = await createChannel({
+      guildId: guild.id,
+      name: 'incident-room',
+    })
+    const run = await startBackfillRun(failing.id)
+
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        id: newId(),
+        backfillRunId: run.id,
+        errorMessage: 'Missing Access',
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill.failedChannelNames).toEqual(['incident-room'])
   })
 
   it('reads a backfill that has said nothing for too long as stalled', async () => {
@@ -318,6 +405,8 @@ describe('readIngestionStatus', () => {
     expect(ingestion.backfill).toEqual({
       status: 'never',
       channels: { completed: 0, failed: 0, running: 0, stalled: 0 },
+      failedChannelNames: [],
+      neverRanChannelCount: 0,
       fetchedMessageCount: 0,
       storedMessageCount: 0,
       lastRunStartedAt: null,

@@ -957,6 +957,27 @@ describe('runChannelBackfill', () => {
     expect(telemetry.completions).toHaveLength(0)
   })
 
+  it('records a failure, not a completion, when it stops at the page limit', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const fetchChannelHistory: FetchChannelHistory = async () =>
+      Array.from({ length: 100 }).map(() => backfilledMessage())
+
+    const result = await fromSuccess(runChannelBackfill)(
+      { channelId: channel.id, fetchChannelHistory },
+      ownerContextFor(guild)
+    )
+
+    const telemetry = await backfillTelemetryOf(result.backfillRunId)
+
+    expect(result.outcome).toBe('stopped_at_the_page_limit')
+    expect(telemetry.completions).toHaveLength(0)
+    expect(telemetry.failures).toHaveLength(1)
+    expect(telemetry.failures[0].errorMessage).toBe(
+      'Stopped at the page limit before reaching the newest messages'
+    )
+  })
+
   it('refuses a channel this deployment has not ingested', async () => {
     const guild = await createGuild()
     const channel = await createChannel()
