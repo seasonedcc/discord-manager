@@ -93,8 +93,10 @@ no derived/status columns, deletion is an event, state is computed at query time
 
 SQLite adaptations (the only sanctioned divergences, mirrored in CLAUDE.md):
 
-- **ids** are `crypto.randomUUID()` generated in application code — SQLite has no
-  `gen_random_uuid()`. Insert helpers own this; migrations declare `text` primary keys.
+- **ids** are monotonic UUIDv7 values from `newId()` in application code — SQLite has no
+  `gen_random_uuid()`, and a random id would make the `id desc` tie-break a coin flip
+  whenever two events share a millisecond. Insert helpers own this; migrations declare
+  `text` primary keys.
 - **Timestamps** are ISO-8601 UTC `text` columns: `createdAt` defaults to
   `strftime('%Y-%m-%dT%H:%M:%fZ','now')`. Lexicographic order equals chronological order.
 - **Latest-event-wins** uses a window function instead of `distinct on`:

@@ -5,7 +5,7 @@ import type {
   MigrationResultSet,
 } from 'kysely'
 
-import { randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import fs, { promises } from 'node:fs'
 import * as path from 'node:path'
 import Database from 'better-sqlite3'
@@ -43,8 +43,30 @@ function makeDb<DB>(databasePath: () => string = () => env().databasePath) {
     )
 }
 
+// Event rows tie on createdAt at millisecond resolution, and the id is their
+// tie-break, so ids must sort in issue order even within one millisecond.
+let lastIssuedInstant = -1
+let sameInstantSequence = 0
+
 function newId() {
-  return randomUUID()
+  const now = Math.max(Date.now(), lastIssuedInstant)
+
+  if (now > lastIssuedInstant) {
+    lastIssuedInstant = now
+    sameInstantSequence = 0
+  } else if (sameInstantSequence === 0xfff) {
+    lastIssuedInstant += 1
+    sameInstantSequence = 0
+  } else {
+    sameInstantSequence += 1
+  }
+
+  const instant = lastIssuedInstant.toString(16).padStart(12, '0')
+  const sequence = sameInstantSequence.toString(16).padStart(3, '0')
+  const entropy = randomBytes(8).toString('hex')
+  const variant = ((Number.parseInt(entropy[0], 16) & 0x3) | 0x8).toString(16)
+
+  return `${instant.slice(0, 8)}-${instant.slice(8)}-7${sequence}-${variant}${entropy.slice(1, 4)}-${entropy.slice(4)}`
 }
 
 const MIGRATION_TEMPLATE = `import type { Kysely } from 'kysely'
