@@ -52,6 +52,8 @@ The window has to outlast everything that could legitimately still be working on
 
 ## What the owner reads
 
+Copy is observation, never conclusion. Write every summary as a statement the recorded events can prove, and every next action as safe under **all** causes the reason covers. "The bot is connected" requires a liveness event no crash can suppress — a connection row only proves the bot *was* connected. "Send it again" is wrong wherever the outcome is unrecorded, because the unrecorded case includes success and the advice double-posts. A next action that names a thing ("that channel") the reading does not identify is unactionable — surface the identifier or reword to what the reader can actually do.
+
 Owner-facing readings render mapped copy only. Never a Discord error message, an exception, a stack trace, or a request id. Pin it with a serialization assertion on the status reader:
 
 ```typescript
