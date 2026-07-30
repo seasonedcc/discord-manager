@@ -156,8 +156,8 @@ Events (all with `(parentId, createdAt desc)` indexes):
 Every Discord API operation family gets its own request + outcome tables and its own
 skip-reason enum; no shared framework, no shared enums:
 
-- `message_send_requests` / `...reply_targets` / `...deliveries` / `...failures` (with a
-  `kind` of `rejected` or `unreachable`) / `...skips` — MCP sends.
+- `message_send_requests` / `...reply_targets` / `...retries` / `...deliveries` /
+  `...failures` (with a `kind` of `rejected` or `unreachable`) / `...skips` — MCP sends.
 - `backfill_runs` / `backfill_run_progress` / `...completions` / `...failures` — REST
   history backfills. Each channel's newest run gives a state, and the reading rolls those
   states up worst-first into counts, the names of the channels whose newest run failed,
@@ -169,6 +169,35 @@ skip-reason enum; no shared framework, no shared enums:
 
 Owner-facing status is always mapped copy from exhaustive typed maps in `.common.ts`
 (summary + nextAction per reason), never raw vendor text — pinned by serialization tests.
+
+### Guarded send retries
+
+A second attempt at a send is a new `message_send_requests` row plus one
+`message_send_request_retries` row linking it to the request it retries, so the attempts at
+one message form a chain the store can read in both directions. Nothing about a request is
+ever mutated; the chain is derived from those link rows.
+
+One predicate in `sending.server.ts` decides whether a request may be retried, and the
+status reader and the send both call it — the reader returns it as `canRetry`, the send
+re-evaluates it and throws an `InputError` naming where the attempt stands. They cannot
+disagree, and a unit test asserts that property across every status. When a later attempt
+is what blocks a retry, the status reading's next action becomes that refusal, so the
+reading never points at a path the send would reject.
+
+The predicate answers two questions, both of which must pass. First, did the attempt
+provably never reach the channel? Only a skip and a Discord-refused failure prove that;
+delivered, pending, stalled and a Discord we could not reach all leave the outcome unknown,
+and retrying an unknown outcome is how a message gets posted twice. Second, could another
+attempt do anything different? A skip qualifies only when the condition that caused it can
+change — empty text can be written, a channel the bot lost can never come back, because
+`channel_removals` is one-way. The same live-risk test walks the chain: a linked retry that
+might itself be live blocks any further attempt, while one that provably never posted
+leaves the chain open.
+
+The predicate runs inside the transaction that writes the new request and its link row, so
+two racing retries of one request cannot both pass. That transaction writes before it reads
+so it holds SQLite's write lock from its first statement — a read-first transaction takes a
+snapshot and its later writes fail outright when the ingest daemon commits in between.
 
 ## Authorization
 
@@ -184,8 +213,8 @@ contains zero authorization — tools call business functions with the real cont
 
 `channels_list`, `messages_catch_up` (since + optional channel), `mentions_list`,
 `bookmarks_list` (optional limit), `bookmarks_add` (by message link), `bookmarks_resolve`,
-`bookmarks_snooze`, `messages_send` (channel, content, optional reply),
-`messages_send_status` (by request id), `ingestion_status`.
+`bookmarks_snooze`, `messages_send` (channel, content, optional reply, optional retry of an
+earlier request), `messages_send_status` (by request id), `ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the
 business functions' own exported schemas, dates cross the boundary as ISO strings. The
