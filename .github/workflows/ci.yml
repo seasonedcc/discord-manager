@@ -37,3 +37,26 @@ jobs:
         run: pnpm run tsc
       - name: Run unit tests
         run: pnpm run test:unit
+
+  e2e:
+    name: E2E tests
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install pnpm
+        run: npm install -g pnpm@10
+      - name: ⎔ Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run end-to-end specs
+        run: pnpm run test:e2e
+      - name: Upload the end-to-end store
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: tests/.artifacts
