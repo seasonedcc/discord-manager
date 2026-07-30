@@ -11,6 +11,7 @@ type ChannelAttributes = {
   category?: string
   isThread?: number
   position?: number
+  archived?: boolean
 }
 
 type MemberAttributes = {
@@ -76,6 +77,7 @@ async function createChannel({
   category,
   isThread = 0,
   position,
+  archived = false,
 }: ChannelAttributes = {}) {
   const resolvedGuildId = guildId ?? (await createGuild()).id
 
@@ -115,6 +117,13 @@ async function createChannel({
         await trx
           .insertInto('channelPositionChanges')
           .values({ id: newId(), channelId: channel.id, position })
+          .execute()
+      }
+
+      if (archived) {
+        await trx
+          .insertInto('channelArchivings')
+          .values({ id: newId(), channelId: channel.id })
           .execute()
       }
 

@@ -35,6 +35,16 @@ const parityExemptions: ParityExemption[] = [
       'Tells the daemon which channels its backfill sweep should visit. The owner-facing channel listing is channels_list.',
   },
   {
+    functionName: 'ingestion.reconcileThreadArchivings',
+    reason:
+      'Reconciles the archived state of every known thread against the list Discord hands the daemon on reconnect. The owner reads the resulting flag through channels_list.',
+  },
+  {
+    functionName: 'ingestion.recordChannelArchiving',
+    reason:
+      'Records that Discord archived a thread, called by the gateway daemon on a thread event. The owner reads the resulting flag through channels_list.',
+  },
+  {
     functionName: 'ingestion.recordChannelRemoval',
     reason:
       'Records that a channel left the view of the bot, called by the gateway daemon on a Discord channel event.',
@@ -43,6 +53,11 @@ const parityExemptions: ParityExemption[] = [
     functionName: 'ingestion.recordChannelSnapshot',
     reason:
       'Records how a channel looks right now, called by the gateway daemon on a Discord channel event.',
+  },
+  {
+    functionName: 'ingestion.recordChannelUnarchiving',
+    reason:
+      'Records that an archived thread came back to life, called by the gateway daemon on a thread event. The owner reads the resulting flag through channels_list.',
   },
   {
     functionName: 'ingestion.recordGatewayConnection',

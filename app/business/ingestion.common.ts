@@ -18,6 +18,8 @@ type FetchChannelHistory = (request: {
 type GatewayActivity = 'never' | 'quiet' | 'receiving'
 
 type IngestionSkipReason =
+  | 'channel_is_already_archived'
+  | 'channel_is_not_archived'
   | 'channel_not_ingested'
   | 'emoji_is_not_the_bookmark_reaction'
   | 'message_not_ingested'

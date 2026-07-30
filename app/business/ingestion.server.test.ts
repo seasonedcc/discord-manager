@@ -14,8 +14,11 @@ import {
   backfillChannel,
   backfillIngestedChannels,
   listBackfillableChannels,
+  reconcileThreadArchivings,
+  recordChannelArchiving,
   recordChannelRemoval,
   recordChannelSnapshot,
+  recordChannelUnarchiving,
   recordGatewayConnection,
   recordGatewayDisconnection,
   recordGatewayHeartbeat,
@@ -566,6 +569,249 @@ describe('recordChannelRemoval', () => {
   })
 })
 
+function channelArchivingsOf(channelId: string) {
+  return db()
+    .selectFrom('channelArchivings')
+    .selectAll()
+    .where('channelId', '=', channelId)
+    .execute()
+}
+
+function channelUnarchivingsOf(channelId: string) {
+  return db()
+    .selectFrom('channelUnarchivings')
+    .selectAll()
+    .where('channelId', '=', channelId)
+    .execute()
+}
+
+describe('recordChannelArchiving', () => {
+  it('records that a thread went quiet enough for Discord to archive it', async () => {
+    const guild = await createGuild()
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    const result = await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      ownerContextFor(guild)
+    )
+
+    expect(result).toEqual({ channelId: thread.id, outcome: 'recorded' })
+    expect(await channelArchivingsOf(thread.id)).toHaveLength(1)
+  })
+
+  it('records nothing when the thread is already archived', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+    const result = await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'channel_is_already_archived',
+    })
+    expect(await channelArchivingsOf(thread.id)).toHaveLength(1)
+  })
+
+  it('archives again once the thread has been revived', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+    await fromSuccess(recordChannelUnarchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+
+    expect(await channelArchivingsOf(thread.id)).toHaveLength(2)
+  })
+
+  it('skips a channel this deployment never ingested', async () => {
+    const guild = await createGuild()
+
+    const result = await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: randomUUID() },
+      ownerContextFor(guild)
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'channel_not_ingested',
+    })
+  })
+})
+
+describe('recordChannelUnarchiving', () => {
+  it('records that an archived thread came back to life', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+    const result = await fromSuccess(recordChannelUnarchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+
+    expect(result).toEqual({ channelId: thread.id, outcome: 'recorded' })
+    expect(await channelUnarchivingsOf(thread.id)).toHaveLength(1)
+  })
+
+  it('records nothing for a thread that was never archived', async () => {
+    const guild = await createGuild()
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    const result = await fromSuccess(recordChannelUnarchiving)(
+      { discordChannelId: thread.discordChannelId },
+      ownerContextFor(guild)
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'channel_is_not_archived',
+    })
+    expect(await channelUnarchivingsOf(thread.id)).toHaveLength(0)
+  })
+
+  it('skips a channel this deployment never ingested', async () => {
+    const guild = await createGuild()
+
+    const result = await fromSuccess(recordChannelUnarchiving)(
+      { discordChannelId: randomUUID() },
+      ownerContextFor(guild)
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'channel_not_ingested',
+    })
+  })
+})
+
+describe('reconcileThreadArchivings', () => {
+  it('archives every known thread the guild no longer lists as active', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const stillActive = await createChannel({ guildId: guild.id, isThread: 1 })
+    const goneQuiet = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    const result = await fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds: [stillActive.discordChannelId] },
+      context
+    )
+
+    expect(result.archivedChannelIds).toEqual([goneQuiet.id])
+    expect(result.unarchivedChannelIds).toEqual([])
+    expect(await channelArchivingsOf(goneQuiet.id)).toHaveLength(1)
+    expect(await channelArchivingsOf(stillActive.id)).toHaveLength(0)
+  })
+
+  it('unarchives a thread the guild lists as active again', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const revived = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: revived.discordChannelId },
+      context
+    )
+    const result = await fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds: [revived.discordChannelId] },
+      context
+    )
+
+    expect(result.unarchivedChannelIds).toEqual([revived.id])
+    expect(result.archivedChannelIds).toEqual([])
+    expect(await channelUnarchivingsOf(revived.id)).toHaveLength(1)
+  })
+
+  it('records nothing for threads already in the state the guild reports', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const active = await createChannel({ guildId: guild.id, isThread: 1 })
+    const archived = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: archived.discordChannelId },
+      context
+    )
+    const result = await fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds: [active.discordChannelId] },
+      context
+    )
+
+    expect(result).toEqual({ archivedChannelIds: [], unarchivedChannelIds: [] })
+    expect(await channelArchivingsOf(archived.id)).toHaveLength(1)
+    expect(await channelUnarchivingsOf(archived.id)).toHaveLength(0)
+  })
+
+  it('never archives a channel that is not a thread', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+
+    const result = await fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds: [] },
+      context
+    )
+
+    expect(result.archivedChannelIds).toEqual([])
+    expect(await channelArchivingsOf(channel.id)).toHaveLength(0)
+  })
+
+  it('never archives a thread the bot can no longer see', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const removed = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelRemoval)(
+      { discordChannelId: removed.discordChannelId },
+      context
+    )
+    const result = await fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds: [] },
+      context
+    )
+
+    expect(result.archivedChannelIds).toEqual([])
+    expect(await channelArchivingsOf(removed.id)).toHaveLength(0)
+  })
+
+  it('leaves the threads of another server alone', async () => {
+    const guild = await createGuild()
+    const otherGuild = await createGuild()
+    const otherThread = await createChannel({
+      guildId: otherGuild.id,
+      isThread: 1,
+    })
+
+    await fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds: [] },
+      ownerContextFor(guild)
+    )
+
+    expect(await channelArchivingsOf(otherThread.id)).toHaveLength(0)
+  })
+})
+
 describe('recordGatewayConnection', () => {
   it('records that the bot linked to Discord', async () => {
     const guild = await createGuild()
@@ -1049,6 +1295,26 @@ describe('runChannelBackfill', () => {
   })
 })
 
+function recordBackfillRunFor(channelId: string, createdAt: string) {
+  return db()
+    .insertInto('backfillRuns')
+    .values({ channelId, createdAt, id: newId() })
+    .execute()
+}
+
+async function anInstantAfterArchiving(channel: { id: string }) {
+  const archiving = await db()
+    .selectFrom('channelArchivings')
+    .select('createdAt')
+    .where('channelId', '=', channel.id)
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirstOrThrow()
+
+  return new Date(Date.parse(archiving.createdAt) + 1).toISOString()
+}
+
 describe('listBackfillableChannels', () => {
   it('leaves out the channels the bot can no longer see', async () => {
     const guild = await createGuild()
@@ -1064,6 +1330,100 @@ describe('listBackfillableChannels', () => {
     const channels = await fromSuccess(listBackfillableChannels)({}, context)
 
     expect(channels.map((channel) => channel.id)).toEqual([visible.id])
+  })
+
+  it('keeps sweeping a thread no archiving was ever recorded for', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await recordBackfillRunFor(thread.id, new Date().toISOString())
+
+    const channels = await fromSuccess(listBackfillableChannels)({}, context)
+
+    expect(channels.map((channel) => channel.id)).toEqual([thread.id])
+  })
+
+  it('sweeps a freshly archived thread once more and then leaves it out', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+
+    const owedTheFinalSweep = await fromSuccess(listBackfillableChannels)(
+      {},
+      context
+    )
+
+    expect(owedTheFinalSweep.map((channel) => channel.id)).toEqual([thread.id])
+
+    await recordBackfillRunFor(thread.id, await anInstantAfterArchiving(thread))
+
+    const afterTheFinalSweep = await fromSuccess(listBackfillableChannels)(
+      {},
+      context
+    )
+
+    expect(afterTheFinalSweep.map((channel) => channel.id)).toEqual([])
+  })
+
+  it('still owes the final sweep when the only backfill ran before the archiving', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await recordBackfillRunFor(thread.id, '2020-01-01T00:00:00.000Z')
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+
+    const channels = await fromSuccess(listBackfillableChannels)({}, context)
+
+    expect(channels.map((channel) => channel.id)).toEqual([thread.id])
+  })
+
+  it('sweeps a revived thread again even though its final sweep already ran', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+    await recordBackfillRunFor(thread.id, await anInstantAfterArchiving(thread))
+    await fromSuccess(recordChannelUnarchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+
+    const channels = await fromSuccess(listBackfillableChannels)({}, context)
+
+    expect(channels.map((channel) => channel.id)).toEqual([thread.id])
+  })
+
+  it('leaves out an archived thread the bot can no longer see either', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+    await fromSuccess(recordChannelRemoval)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+
+    const channels = await fromSuccess(listBackfillableChannels)({}, context)
+
+    expect(channels.map((channel) => channel.id)).toEqual([])
   })
 })
 

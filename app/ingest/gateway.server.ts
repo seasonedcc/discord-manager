@@ -5,9 +5,12 @@ import { ownerContext } from '~/business/auth.server'
 import type { FetchChannelHistory } from '~/business/ingestion.common'
 import {
   backfillIngestedChannels,
+  reconcileThreadArchivings,
+  recordChannelArchiving,
   recordChannelRemoval,
   recordChannelSnapshot,
   type recordChannelSnapshotSchema,
+  recordChannelUnarchiving,
   recordGatewayConnection,
   recordGatewayDisconnection,
   recordIncomingMessage,
@@ -19,6 +22,7 @@ import {
 } from '~/business/ingestion.server'
 
 type ObservedChannel = z.input<typeof recordChannelSnapshotSchema> & {
+  archived?: boolean
   discordGuildId: string
 }
 
@@ -74,7 +78,20 @@ async function handleMessageDeletion(message: ObservedMessageReference) {
 async function handleChannelSnapshot(channel: ObservedChannel) {
   if (!belongsToTheOwnersGuild(channel.discordGuildId)) return
 
-  return await recordChannelSnapshot(channel, ownerContext())
+  const snapshot = await recordChannelSnapshot(channel, ownerContext())
+
+  if (channel.archived === undefined) return snapshot
+
+  const recordArchivedState = channel.archived
+    ? recordChannelArchiving
+    : recordChannelUnarchiving
+
+  await recordArchivedState(
+    { discordChannelId: channel.discordChannelId },
+    ownerContext()
+  )
+
+  return snapshot
 }
 
 async function handleChannelRemoval(channel: ObservedChannel) {
@@ -113,9 +130,11 @@ async function handleReactionRemoved(reaction: ObservedReaction) {
 }
 
 async function handleGatewayConnected({
+  activeThreadDiscordChannelIds,
   channels,
   fetchChannelHistory,
 }: {
+  activeThreadDiscordChannelIds?: string[]
   channels: ObservedChannel[]
   fetchChannelHistory: FetchChannelHistory
 }) {
@@ -123,6 +142,13 @@ async function handleGatewayConnected({
 
   for (const channel of channels) {
     await handleChannelSnapshot(channel)
+  }
+
+  if (activeThreadDiscordChannelIds) {
+    await reconcileThreadArchivings(
+      { activeThreadDiscordChannelIds },
+      ownerContext()
+    )
   }
 
   backfillIngestedChannels.enqueue({ fetchChannelHistory })
@@ -136,6 +162,8 @@ async function handleGatewayDisconnected() {
 
 function observeChannel(channel: GuildBasedChannel): ObservedChannel {
   return {
+    archived:
+      'archived' in channel ? (channel.archived ?? undefined) : undefined,
     category:
       channel.parent && 'name' in channel.parent
         ? channel.parent.name
@@ -158,33 +186,45 @@ function observableChannels(client: Client): ObservedChannel[] {
     .map(observeChannel)
 }
 
+async function fetchActiveThreadDiscordChannelIds(client: Client) {
+  try {
+    const guild = client.guilds.cache.get(ownerContext().owner.guildId)
+
+    if (!guild) return undefined
+
+    const { threads } = await guild.channels.fetchActiveThreads()
+
+    return [...threads.keys()]
+  } catch {
+    return undefined
+  }
+}
+
 function registerGatewayListeners(
   client: Client,
   { fetchChannelHistory }: { fetchChannelHistory: FetchChannelHistory }
 ) {
-  client.on(Events.ClientReady, async (readyClient) => {
+  async function reconnect(connectedClient: Client) {
     await handleGatewayConnected({
-      channels: observableChannels(readyClient),
+      activeThreadDiscordChannelIds:
+        await fetchActiveThreadDiscordChannelIds(connectedClient),
+      channels: observableChannels(connectedClient),
       fetchChannelHistory,
     })
-  })
+  }
+
+  client.on(Events.ClientReady, reconnect)
 
   client.on(Events.ShardDisconnect, async () => {
     await handleGatewayDisconnected()
   })
 
   client.on(Events.ShardReady, async () => {
-    await handleGatewayConnected({
-      channels: observableChannels(client),
-      fetchChannelHistory,
-    })
+    await reconnect(client)
   })
 
   client.on(Events.ShardResume, async () => {
-    await handleGatewayConnected({
-      channels: observableChannels(client),
-      fetchChannelHistory,
-    })
+    await reconnect(client)
   })
 
   client.on(Events.MessageCreate, async (message) => {

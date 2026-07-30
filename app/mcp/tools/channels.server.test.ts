@@ -29,6 +29,27 @@ describe('channels_list', () => {
     )
   })
 
+  it('tells the caller which threads Discord has archived', async () => {
+    const guild = await createGuild()
+    const thread = await createChannel({
+      guildId: guild.id,
+      archived: true,
+      isThread: 1,
+      name: 'friday-release',
+    })
+
+    const { isError, payload } = await callAsOwner(
+      'channels_list',
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(isError).toBe(false)
+    expect(payload.channels).toContainEqual(
+      expect.objectContaining({ archived: true, channelId: thread.id })
+    )
+  })
+
   it('refuses a context that cannot read messages', async () => {
     const guild = await createGuild()
     const context = await ownerContext({ guildId: guild.id })

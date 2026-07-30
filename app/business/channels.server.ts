@@ -167,6 +167,40 @@ function latestChannelPositions() {
     .as('channelPositions')
 }
 
+function latestChannelArchivedStates() {
+  const events = db()
+    .selectFrom('channelArchivings')
+    .select(['channelId', 'createdAt', 'id', sql<number>`1`.as('archived')])
+    .unionAll(
+      db()
+        .selectFrom('channelUnarchivings')
+        .select(['channelId', 'createdAt', 'id', sql<number>`0`.as('archived')])
+    )
+
+  const ranked = db()
+    .selectFrom(events.as('archivedEvents'))
+    .select((eb) => [
+      'channelId',
+      'archived',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy('channelId')
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('rankedArchivedStates')
+
+  return db()
+    .selectFrom(ranked)
+    .select(['channelId', 'archived'])
+    .where('rowNumber', '=', 1)
+    .as('channelArchivedStates')
+}
+
 const listChannels = applySchema(
   listChannelsSchema,
   channelsContextSchema
@@ -190,6 +224,11 @@ const listChannels = applySchema(
       'channelPositions.channelId',
       'channels.id'
     )
+    .leftJoin(
+      latestChannelArchivedStates(),
+      'channelArchivedStates.channelId',
+      'channels.id'
+    )
     .where('guilds.discordGuildId', '=', context.owner.guildId)
     .where(({ not, exists, selectFrom }) =>
       not(
@@ -200,7 +239,7 @@ const listChannels = applySchema(
         )
       )
     )
-    .select([
+    .select((eb) => [
       'channels.id as channelId',
       'channels.discordChannelId',
       'channelDetails.name',
@@ -208,8 +247,12 @@ const listChannels = applySchema(
       'channelTopics.topic',
       'channelCategories.category',
       'channelPositions.position',
+      eb.fn
+        .coalesce('channelArchivedStates.archived', sql<number>`0`)
+        .as('archived'),
     ])
     .orderBy('channelDetails.isThread', 'asc')
+    .orderBy('archived', 'asc')
     .orderBy('channelCategories.category', 'asc')
     .orderBy('channelPositions.position', 'asc')
     .orderBy('channelDetails.name', 'asc')
@@ -218,9 +261,10 @@ const listChannels = applySchema(
 
   return {
     channels: rows.map(
-      ({ category, isThread, position, topic, ...channel }) => ({
+      ({ archived, category, isThread, position, topic, ...channel }) => ({
         ...channel,
         isThread: isThread === 1,
+        ...(isThread === 1 ? { archived: archived === 1 } : {}),
         ...(topic === null ? {} : { topic }),
         ...(category === null ? {} : { category }),
         ...(position === null ? {} : { position }),
