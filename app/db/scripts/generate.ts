@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { env } from '~/env.server'
+import { env } from '~/framework/env.server'
 
 if (existsSync('.env')) process.loadEnvFile()
 
