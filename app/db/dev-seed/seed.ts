@@ -3,6 +3,10 @@ import { fromSuccess } from 'composable-functions'
 import { sql } from 'kysely'
 import { ownerContext } from '~/business/auth.server'
 import {
+  addBookmarkByLink,
+  listBookmarkReasons,
+} from '~/business/bookmarks.server'
+import {
   recordChannelArchiving,
   recordChannelSnapshot,
   recordGatewayConnection,
@@ -157,7 +161,7 @@ const bookmarkWorthy = await postMessage({
   discordCreatedAt: secondsAfterTheAnchor(2),
 })
 
-await postMessage({
+const awaitingAnAnswer = await postMessage({
   author: omar,
   channel: engineering,
   content: `<@${context.owner.discordUserId}> can you review the release notes today?`,
@@ -169,6 +173,23 @@ await fromSuccess(recordOwnerBookmarkReaction)(
     discordMessageId: bookmarkWorthy.discordMessageId,
     emoji: '🔖',
     reactorDiscordUserId: context.owner.discordUserId,
+  },
+  context
+)
+
+const { reasons } = await fromSuccess(listBookmarkReasons)({}, context)
+const answerLater = reasons.find(({ name }) => name === 'Answer later')
+
+if (!answerLater) {
+  throw new Error(
+    'The Answer later bookmark reason is missing — run pnpm run db:migrate before seeding.'
+  )
+}
+
+await fromSuccess(addBookmarkByLink)(
+  {
+    messageLink: `https://discord.com/channels/${context.owner.guildId}/${engineering.discordChannelId}/${awaitingAnAnswer.discordMessageId}`,
+    reasonId: answerLater.reasonId,
   },
   context
 )
@@ -193,5 +214,5 @@ await fromSuccess(recordChannelArchiving)(
 await db().destroy()
 
 console.log(
-  'Seeded a development server: two channels, an archived thread, four messages, one mention of you, and one bookmark. Start the MCP server with pnpm run mcp and ask your assistant to list the channels.'
+  'Seeded a development server: two channels, an archived thread, four messages, one mention of you, and two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later. Start the MCP server with pnpm run mcp and ask your assistant to list the channels.'
 )

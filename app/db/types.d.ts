@@ -45,6 +45,32 @@ export interface BookmarkAdditions {
   source: string;
 }
 
+export interface BookmarkReasonAssignments {
+  createdAt: Generated<string>;
+  id: string;
+  messageId: string;
+  reasonId: string;
+}
+
+export interface BookmarkReasonDetailRevisions {
+  createdAt: Generated<string>;
+  description: string;
+  id: string;
+  name: string;
+  reasonId: string;
+}
+
+export interface BookmarkReasonRetirements {
+  createdAt: Generated<string>;
+  id: string;
+  reasonId: string;
+}
+
+export interface BookmarkReasons {
+  createdAt: Generated<string>;
+  id: string;
+}
+
 export interface BookmarkRemovals {
   createdAt: Generated<string>;
   id: string;
@@ -230,6 +256,10 @@ export interface DB {
   backfillRunProgress: BackfillRunProgress;
   backfillRuns: BackfillRuns;
   bookmarkAdditions: BookmarkAdditions;
+  bookmarkReasonAssignments: BookmarkReasonAssignments;
+  bookmarkReasonDetailRevisions: BookmarkReasonDetailRevisions;
+  bookmarkReasonRetirements: BookmarkReasonRetirements;
+  bookmarkReasons: BookmarkReasons;
   bookmarkRemovals: BookmarkRemovals;
   bookmarkSnoozes: BookmarkSnoozes;
   channelArchivings: ChannelArchivings;

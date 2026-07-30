@@ -4,8 +4,14 @@ import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
   addBookmarkByLinkSchema,
+  addBookmarkReasonSchema,
+  editBookmarkReasonSchema,
+  inboxBookmarkReasonId,
+  listBookmarkReasonsSchema,
   listBookmarksSchema,
   resolveBookmarkSchema,
+  retireBookmarkReasonSchema,
+  setBookmarkReasonSchema,
   snoozeBookmarkSchema,
 } from '~/business/bookmarks.common'
 import { db } from '~/db/db.server'
@@ -63,11 +69,147 @@ function latestBookmarkEvents() {
     .as('latestBookmarkEvents')
 }
 
+function latestReasonDetails() {
+  return db()
+    .selectFrom('bookmarkReasonDetailRevisions')
+    .select((eb) => [
+      'reasonId',
+      'name',
+      'description',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy('reasonId')
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('latestReasonDetails')
+}
+
+function latestReasonAssignments() {
+  return db()
+    .selectFrom('bookmarkReasonAssignments')
+    .select((eb) => [
+      'messageId',
+      'reasonId',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy('messageId')
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('latestReasonAssignments')
+}
+
+function reasonsWithCurrentDetails() {
+  return db()
+    .selectFrom('bookmarkReasons')
+    .innerJoin(latestReasonDetails(), (join) =>
+      join
+        .onRef('latestReasonDetails.reasonId', '=', 'bookmarkReasons.id')
+        .on('latestReasonDetails.rowNumber', '=', 1)
+    )
+}
+
+function activeReasons() {
+  return reasonsWithCurrentDetails().where(({ not, exists, selectFrom }) =>
+    not(
+      exists(
+        selectFrom('bookmarkReasonRetirements')
+          .select('bookmarkReasonRetirements.id')
+          .whereRef(
+            'bookmarkReasonRetirements.reasonId',
+            '=',
+            'bookmarkReasons.id'
+          )
+      )
+    )
+  )
+}
+
+async function readReason(reasonId: string) {
+  return await reasonsWithCurrentDetails()
+    .select((eb) => [
+      'bookmarkReasons.id as reasonId',
+      'latestReasonDetails.name',
+      'latestReasonDetails.description',
+      eb
+        .exists(
+          eb
+            .selectFrom('bookmarkReasonRetirements')
+            .select('bookmarkReasonRetirements.id')
+            .whereRef(
+              'bookmarkReasonRetirements.reasonId',
+              '=',
+              'bookmarkReasons.id'
+            )
+        )
+        .$castTo<number>()
+        .as('retired'),
+    ])
+    .where('bookmarkReasons.id', '=', reasonId)
+    .executeTakeFirst()
+}
+
+async function activeReasonNamed(name: string, exceptReasonId?: string) {
+  const query = activeReasons()
+    .select(['bookmarkReasons.id as reasonId', 'latestReasonDetails.name'])
+    .where((eb) =>
+      eb(
+        eb.fn<string>('lower', ['latestReasonDetails.name']),
+        '=',
+        name.toLowerCase()
+      )
+    )
+
+  return await (exceptReasonId
+    ? query.where('bookmarkReasons.id', '!=', exceptReasonId)
+    : query
+  ).executeTakeFirst()
+}
+
 function unknownMessageError() {
   return new InputError(
     'No message with that id has been ingested. List your bookmarks or catch up to pick one.',
     ['messageId']
   )
+}
+
+function unknownReasonError() {
+  return new InputError(
+    'No bookmark reason with that id exists. List your bookmark reasons to pick one.',
+    ['reasonId']
+  )
+}
+
+function retiredReasonError() {
+  return new InputError(
+    'That bookmark reason is retired, so nothing new can be given it. Pick an active reason, or add one.',
+    ['reasonId']
+  )
+}
+
+function duplicateReasonNameError(name: string) {
+  return new InputError(
+    `An active bookmark reason is already called "${name}". Pick another name, or edit that reason.`,
+    ['name']
+  )
+}
+
+async function requireAssignableReason(reasonId: string) {
+  const reason = await readReason(reasonId)
+
+  if (!reason) throw unknownReasonError()
+  if (reason.retired === 1) throw retiredReasonError()
+
+  return reason
 }
 
 function messagesInGuild(guildId: string) {
@@ -88,10 +230,197 @@ async function readBookmarkState(messageId: string) {
     .executeTakeFirst()
 }
 
+const addBookmarkReason = applySchema(
+  addBookmarkReasonSchema,
+  bookmarksContextSchema
+)(async ({ name, description }) => {
+  const clash = await activeReasonNamed(name)
+
+  if (clash) throw duplicateReasonNameError(clash.name)
+
+  const reason = await db()
+    .transaction()
+    .execute(async (trx) => {
+      const record = await trx
+        .insertInto('bookmarkReasons')
+        .values({ id: newId() })
+        .returning(['id', 'createdAt'])
+        .executeTakeFirstOrThrow()
+
+      await trx
+        .insertInto('bookmarkReasonDetailRevisions')
+        .values({ id: newId(), reasonId: record.id, name, description })
+        .execute()
+
+      return record
+    })
+
+  return {
+    reason: {
+      reasonId: reason.id,
+      name,
+      description,
+      createdAt: reason.createdAt,
+    },
+  }
+})
+
+const editBookmarkReason = applySchema(
+  editBookmarkReasonSchema,
+  bookmarksContextSchema
+)(async ({ reasonId, name, description }) => {
+  if (reasonId === inboxBookmarkReasonId) {
+    throw new InputError(
+      'Inbox is where every unsorted bookmark lands, so its name and description belong to the product. Add a reason of your own instead.',
+      ['reasonId']
+    )
+  }
+
+  const reason = await readReason(reasonId)
+
+  if (!reason) throw unknownReasonError()
+
+  if (reason.retired === 1) {
+    throw new InputError(
+      'That bookmark reason is retired, so there is nothing to edit. Add a new reason instead.',
+      ['reasonId']
+    )
+  }
+
+  const clash = await activeReasonNamed(name, reasonId)
+
+  if (clash) throw duplicateReasonNameError(clash.name)
+
+  const revision = await db()
+    .insertInto('bookmarkReasonDetailRevisions')
+    .values({ id: newId(), reasonId, name, description })
+    .returning('createdAt')
+    .executeTakeFirstOrThrow()
+
+  return {
+    reason: { reasonId, name, description, recordedAt: revision.createdAt },
+  }
+})
+
+const retireBookmarkReason = applySchema(
+  retireBookmarkReasonSchema,
+  bookmarksContextSchema
+)(async ({ reasonId }) => {
+  if (reasonId === inboxBookmarkReasonId) {
+    throw new InputError(
+      'Inbox is where every unsorted bookmark lands, so it cannot be retired. Retire a reason of your own instead.',
+      ['reasonId']
+    )
+  }
+
+  const reason = await readReason(reasonId)
+
+  if (!reason) throw unknownReasonError()
+
+  if (reason.retired === 1) {
+    throw new InputError('That bookmark reason is already retired.', [
+      'reasonId',
+    ])
+  }
+
+  const retirement = await db()
+    .insertInto('bookmarkReasonRetirements')
+    .values({ id: newId(), reasonId })
+    .returning('createdAt')
+    .executeTakeFirstOrThrow()
+
+  return {
+    reason: { reasonId, name: reason.name, retiredAt: retirement.createdAt },
+  }
+})
+
+const listBookmarkReasons = applySchema(
+  listBookmarkReasonsSchema,
+  bookmarksContextSchema
+)(async (_input, context) => {
+  const reasons = await activeReasons()
+    .select((eb) => [
+      'bookmarkReasons.id as reasonId',
+      'latestReasonDetails.name',
+      'latestReasonDetails.description',
+      eb
+        .selectFrom('messages')
+        .innerJoin('channels', 'channels.id', 'messages.channelId')
+        .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+        .innerJoin(
+          latestBookmarkEvents(),
+          'latestBookmarkEvents.messageId',
+          'messages.id'
+        )
+        .leftJoin(latestReasonAssignments(), (join) =>
+          join
+            .onRef('latestReasonAssignments.messageId', '=', 'messages.id')
+            .on('latestReasonAssignments.rowNumber', '=', 1)
+        )
+        .where('latestBookmarkEvents.rowNumber', '=', 1)
+        .where('latestBookmarkEvents.bookmarked', '=', 1)
+        .where('guilds.discordGuildId', '=', context.owner.guildId)
+        .where((inner) =>
+          inner(
+            inner.fn.coalesce(
+              'latestReasonAssignments.reasonId',
+              inner.val(inboxBookmarkReasonId)
+            ),
+            '=',
+            inner.ref('bookmarkReasons.id')
+          )
+        )
+        .select((inner) => inner.fn.countAll<number>().as('bookmarkCount'))
+        .as('bookmarkCount'),
+    ])
+    .orderBy('bookmarkReasons.createdAt', 'asc')
+    .orderBy('bookmarkReasons.id', 'asc')
+    .execute()
+
+  return { reasons }
+})
+
+const setBookmarkReason = applySchema(
+  setBookmarkReasonSchema,
+  bookmarksContextSchema
+)(async ({ messageId, reasonId }, context) => {
+  const message = await messagesInGuild(context.owner.guildId)
+    .where('messages.id', '=', messageId)
+    .executeTakeFirst()
+
+  if (!message) throw unknownMessageError()
+
+  const state = await readBookmarkState(message.id)
+
+  if (state?.bookmarked !== 1) {
+    throw new InputError(
+      'That message is not bookmarked, so there is nothing to sort',
+      ['messageId']
+    )
+  }
+
+  const reason = await requireAssignableReason(reasonId)
+
+  const assignment = await db()
+    .insertInto('bookmarkReasonAssignments')
+    .values({ id: newId(), messageId: message.id, reasonId })
+    .returning('createdAt')
+    .executeTakeFirstOrThrow()
+
+  return {
+    bookmark: {
+      messageId: message.id,
+      reasonId,
+      reasonName: reason.name,
+      sortedAt: assignment.createdAt,
+    },
+  }
+})
+
 const addBookmarkByLink = applySchema(
   addBookmarkByLinkSchema,
   bookmarksContextSchema
-)(async ({ messageLink }, context) => {
+)(async ({ messageLink, reasonId }, context) => {
   const link = messageLink.match(discordMessageLinkPattern)
 
   if (!link) {
@@ -132,29 +461,51 @@ const addBookmarkByLink = applySchema(
     )
   }
 
+  const reason = await requireAssignableReason(reasonId)
+
   const state = await readBookmarkState(message.id)
 
   if (state?.bookmarked === 1) {
+    await db()
+      .insertInto('bookmarkReasonAssignments')
+      .values({ id: newId(), messageId: message.id, reasonId })
+      .execute()
+
     return {
       bookmark: {
         messageId: message.id,
         source: state.source,
         bookmarkedAt: state.createdAt,
+        reasonId,
+        reasonName: reason.name,
       },
     }
   }
 
   const addition = await db()
-    .insertInto('bookmarkAdditions')
-    .values({ id: newId(), messageId: message.id, source: 'mcp' })
-    .returning(['source', 'createdAt'])
-    .executeTakeFirstOrThrow()
+    .transaction()
+    .execute(async (trx) => {
+      const record = await trx
+        .insertInto('bookmarkAdditions')
+        .values({ id: newId(), messageId: message.id, source: 'mcp' })
+        .returning(['source', 'createdAt'])
+        .executeTakeFirstOrThrow()
+
+      await trx
+        .insertInto('bookmarkReasonAssignments')
+        .values({ id: newId(), messageId: message.id, reasonId })
+        .execute()
+
+      return record
+    })
 
   return {
     bookmark: {
       messageId: message.id,
       source: addition.source,
       bookmarkedAt: addition.createdAt,
+      reasonId,
+      reasonName: reason.name,
     },
   }
 })
@@ -162,7 +513,9 @@ const addBookmarkByLink = applySchema(
 const listBookmarks = applySchema(
   listBookmarksSchema,
   bookmarksContextSchema
-)(async ({ includeSnoozed, limit }, context) => {
+)(async ({ includeSnoozed, limit, reasonId }, context) => {
+  if (reasonId && !(await readReason(reasonId))) throw unknownReasonError()
+
   const rankedRevisions = db()
     .selectFrom('messageRevisions')
     .select((eb) => [
@@ -259,6 +612,25 @@ const listBookmarks = applySchema(
       'messages.authorMemberId'
     )
     .leftJoin(activeSnoozes, 'activeSnoozes.messageId', 'messages.id')
+    .leftJoin(latestReasonAssignments(), (join) =>
+      join
+        .onRef('latestReasonAssignments.messageId', '=', 'messages.id')
+        .on('latestReasonAssignments.rowNumber', '=', 1)
+    )
+    .innerJoin(latestReasonDetails(), (join) =>
+      join
+        .on('latestReasonDetails.rowNumber', '=', 1)
+        .on((eb) =>
+          eb(
+            'latestReasonDetails.reasonId',
+            '=',
+            eb.fn.coalesce(
+              'latestReasonAssignments.reasonId',
+              eb.val(inboxBookmarkReasonId)
+            )
+          )
+        )
+    )
     .where('latestBookmarkEvents.rowNumber', '=', 1)
     .where('latestBookmarkEvents.bookmarked', '=', 1)
     .where('latestRevisions.rowNumber', '=', 1)
@@ -277,6 +649,8 @@ const listBookmarks = applySchema(
       'latestRevisions.content',
       'latestBookmarkEvents.createdAt as bookmarkedAt',
       'latestBookmarkEvents.source',
+      'latestReasonDetails.reasonId',
+      'latestReasonDetails.name as reasonName',
       'activeSnoozes.until as snoozedUntil',
       eb
         .exists(
@@ -292,9 +666,13 @@ const listBookmarks = applySchema(
     .orderBy(sql`cast(messages.discord_message_id as integer)`, 'desc')
     .limit(limit + 1)
 
-  const rows = await (includeSnoozed
+  const awake = includeSnoozed
     ? query
     : query.where('activeSnoozes.messageId', 'is', null)
+
+  const rows = await (reasonId
+    ? awake.where('latestReasonDetails.reasonId', '=', reasonId)
+    : awake
   ).execute()
 
   return {
@@ -386,4 +764,14 @@ const snoozeBookmark = applySchema(
   }
 })
 
-export { addBookmarkByLink, listBookmarks, resolveBookmark, snoozeBookmark }
+export {
+  addBookmarkByLink,
+  addBookmarkReason,
+  editBookmarkReason,
+  listBookmarkReasons,
+  listBookmarks,
+  resolveBookmark,
+  retireBookmarkReason,
+  setBookmarkReason,
+  snoozeBookmark,
+}

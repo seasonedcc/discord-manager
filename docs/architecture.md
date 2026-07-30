@@ -145,6 +145,35 @@ Events (all with `(parentId, createdAt desc)` indexes):
   resolve stay distinguishable facts.
 - `bookmark_snoozes` — until timestamp; latest wins; a snoozed bookmark leaves the default
   list until `until` passes.
+- `bookmark_reasons` — identity: which reason exists. `bookmark_reason_detail_revisions`
+  snapshots its name and description together; latest wins.
+  `bookmark_reason_retirements` is one-way — a row means the reason takes nothing new.
+  `bookmark_reason_assignments` carries `messageId` + `reasonId`; latest wins.
+
+### Bookmark reasons
+
+Every bookmark is filed under a reason, and the reason is **derived, never stored on the
+bookmark**: the newest `bookmark_reason_assignments` row for the message wins, and a
+bookmark with no assignment rows at all reads as the shipped **Inbox** reason. That
+fallback is the whole design. A 🔖 reaction physically cannot carry intent, so the
+reaction recorder appends nothing but its `bookmark_additions` row and the capture reads
+as Inbox honestly — no intent is invented for it, and bookmarks that predate the feature
+stay valid. The derivation is a `coalesce` against the Inbox id inside the bookmark
+readers, so listing bookmarks stays one query.
+
+A reason's displayed name and description always come from its latest detail revision,
+including once it is retired, so a bookmark never loses its label when the owner stops
+using that reason. Retirement only closes the reason to *new* assignments.
+
+The six defaults (*Answer later*, *To-do*, *Follow up*, *Read later*, *Reference*,
+*Inbox*) are seeded by the migration that creates the tables, under fixed literal ids
+every deployment shares. Seeding there is deliberate: it runs exactly once per store, so a
+default the owner later retires or rewords stays retired or reworded — there is no
+re-ensure logic anywhere, and nothing reintroduces a reason the owner removed. Inbox is
+the one reason the product keeps for itself: `bookmarks.common.ts` exports its id as a
+named constant (pinned by a test against a freshly migrated store), and both editing and
+retiring it are refused, because it has to stay a valid landing place for every capture.
+Assigning Inbox is allowed — sending a bookmark back to be sorted again is legitimate.
 
 ### Telemetry families (integration-telemetry doctrine)
 
@@ -178,8 +207,10 @@ contains zero authorization — tools call business functions with the real cont
 ## MCP tools (v1)
 
 `channels_list`, `messages_catch_up` (since + optional channel), `mentions_list`,
-`bookmarks_list` (optional limit), `bookmarks_add` (by message link), `bookmarks_resolve`,
-`bookmarks_snooze`, `messages_send` (channel, content, optional reply),
+`bookmarks_list` (optional limit, snoozed, reason filter), `bookmarks_add` (by message
+link + reason), `bookmarks_resolve`, `bookmarks_snooze`, `bookmarks_set_reason`,
+`bookmark_reasons_list`, `bookmark_reasons_add`, `bookmark_reasons_edit`,
+`bookmark_reasons_retire`, `messages_send` (channel, content, optional reply),
 `messages_send_status` (by request id), `ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the

@@ -11,6 +11,7 @@ Each person runs their own bot and their own local stack. Nothing is shared, not
 - **Catch-up digests** — everything posted since a moment in time, across the server or in one channel, each message with a jump link. Long stretches come back 200 messages at a time, so your assistant can walk a busy week in order.
 - **Mention triage** — the messages that name you, ready for an assistant to sort by what actually needs you.
 - **Bookmarks without Nitro** — react to any message with 🔖 and your bot records a bookmark; remove the reaction and it's gone. Your assistant can also bookmark by message link, resolve, and snooze — privately, with no reaction anyone can see. Only *your* reactions count, so a whole team of bots coexists in one server without crosstalk.
+- **Bookmarks that know why they're there** — every bookmark is filed under a reason you manage, so *"what am I on the hook to answer?"* is a different question from *"what should I read on the train?"*. A 🔖 reaction can't carry intent, so those land in your *Inbox* for your assistant to sort.
 - **Draft and send** — messages posted to any channel as your bot, optionally as a reply, with a status trail for every send.
 - **Ingestion health** — whether the bot is still receiving from Discord and how far its history backfills have got, as plain readings with a concrete next action.
 
@@ -73,7 +74,7 @@ pnpm run mcp
 
 If your client cannot find `pnpm` — GUI apps often start without your shell's PATH — put the absolute path in `.mcp.json` instead (`which pnpm` tells you where it lives), and give it the repo directory as the working directory.
 
-Then just talk: *"What did I miss since this morning?"* — *"Bookmark that and snooze it until Monday."* — *"Reply that we'll ship it Thursday."*
+Then just talk: *"What did I miss since this morning?"* — *"Bookmark that as something to answer later."* — *"Sort my bookmark inbox."* — *"Reply that we'll ship it Thursday."*
 
 ## Try it before inviting a bot
 
@@ -95,10 +96,15 @@ The seed only ever runs against a freshly created, empty database, and sending w
 | `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them — and for threads, whether Discord has archived them, archived ones last |
 | `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time |
 | `mentions_list` | The messages whose text names you since a moment in time |
-| `bookmarks_add` | A bookmark from a Discord message link, exactly as reacting with 🔖 would |
-| `bookmarks_list` | The bookmarks still waiting on you, snoozed ones on request |
+| `bookmarks_add` | A bookmark from a Discord message link, filed under the reason you pick |
+| `bookmarks_list` | The bookmarks still waiting on you, each with its reason, snoozed ones and single-reason views on request |
 | `bookmarks_resolve` | A bookmark cleared, leaving any reaction in Discord untouched |
 | `bookmarks_snooze` | A bookmark hidden until the moment you pick |
+| `bookmarks_set_reason` | A bookmark filed under a different reason — how an unsorted 🔖 capture leaves the Inbox |
+| `bookmark_reasons_list` | The reasons you can file bookmarks under, with how many bookmarks each one holds |
+| `bookmark_reasons_add` | A reason of your own, on top of the ones you started with |
+| `bookmark_reasons_edit` | A reason reworded, on every bookmark already carrying it |
+| `bookmark_reasons_retire` | A reason taken out of circulation, without disturbing the bookmarks that carry it |
 | `messages_send` | A message posted to a channel as your bot, optionally as a reply |
 | `messages_send_status` | Where a send ended up — delivered, skipped, failed, still on its way, or stalled when nothing was ever recorded |
 | `ingestion_status` | Whether the bot is receiving from Discord, and how far backfills have got |
@@ -106,6 +112,8 @@ The seed only ever runs against a freshly created, empty database, and sending w
 ## Good to know
 
 - **🔖 reactions are visible to the channel**, like any reaction. When you'd rather bookmark quietly, ask your assistant to `bookmarks_add` the message link — nothing appears in Discord.
+- **Every bookmark carries a reason**, so your assistant can triage by intent rather than guess. You start with six: *Answer later*, *To-do*, *Follow up*, *Read later*, *Reference*, and *Inbox*. Add, reword, and retire your own with the `bookmark_reasons_*` tools — retiring one leaves the bookmarks already carrying it untouched, still showing its name.
+- **A 🔖 reaction cannot carry intent**, so captures land in *Inbox* rather than have one invented for them. Ask your assistant to sort the inbox — *"what's in my bookmark inbox?"* — and it files each one with `bookmarks_set_reason`. Inbox is the one reason you cannot reword or retire, because it is where every unsorted capture has to land.
 - **One deployment, one server, one owner.** The bot only records the server you configured, and only answers to you. Teammates clone the repo and create their own app — five minutes each, no shared infrastructure.
 - **This is a bot, not your account.** Automating a user account ("self-botting") violates Discord's Terms of Service and risks a ban; Discord Manager only ever acts through a bot you created, posting as itself.
 
