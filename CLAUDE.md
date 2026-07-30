@@ -107,6 +107,8 @@ Mutation-prove any test whose absence assertion could false-pass. Load the `test
 
 The MCP tool surface and the README are this product's entire UX: tool names, descriptions, error messages, and setup instructions are what a user actually experiences, so hold them to the same bar as a beautiful interface — outcome-oriented, unambiguous, and honest about what went wrong and what to do next. We care even more about code quality. Please ensure our code is a work of art, always as simple as it can be, with the right domain language and prose. NEVER compromise on this quality bar to save time or tokens.
 
+The conventions in this file and the skills are the maintainer's preferences, not gospel: when the situation genuinely warrants a better shape, diverge — with judgment, and with the divergence and its reasoning recorded in the PR that makes it. A divergence made silently is a bug; a divergence made and argued is how these conventions improve.
+
 ## Orchestration
 
 These instructions are for the top-level session — the orchestrator. If you are a subagent (you were spawned with a specific task and your final report goes back to a coordinator), they are not addressed to you: execute your task directly — read, build, and test yourself — and never spawn subagents, launch workflows, open PRs, or merge unless your task instructions explicitly say to.
