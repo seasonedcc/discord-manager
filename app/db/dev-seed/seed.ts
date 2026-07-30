@@ -35,6 +35,11 @@ async function readAnchor() {
   return rows[0].anchor
 }
 
+const tablesTheSchemaShipsPopulated = [
+  'bookmark_reason_detail_revisions',
+  'bookmark_reasons',
+]
+
 async function applicationTables() {
   const { rows } = await sql<{ name: string }>`
     select name from sqlite_master
@@ -42,7 +47,9 @@ async function applicationTables() {
     order by name
   `.execute(db())
 
-  return rows.map(({ name }) => name)
+  return rows
+    .map(({ name }) => name)
+    .filter((name) => !tablesTheSchemaShipsPopulated.includes(name))
 }
 
 async function guardAnEmptyDatabase() {
