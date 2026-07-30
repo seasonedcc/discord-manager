@@ -44,11 +44,23 @@ const observedChannelSchema = z.object({
   topic: z.string().optional(),
 })
 
+const reconcileThreadArchivingsSchema = z.object({
+  activeThreadDiscordChannelIds: z.array(z.string().min(1)),
+})
+
+const recordChannelArchivingSchema = z.object({
+  discordChannelId: z.string().min(1),
+})
+
 const recordChannelRemovalSchema = z.object({
   discordChannelId: z.string().min(1),
 })
 
 const recordChannelSnapshotSchema = observedChannelSchema
+
+const recordChannelUnarchivingSchema = z.object({
+  discordChannelId: z.string().min(1),
+})
 
 const recordGatewayConnectionSchema = z.object({})
 
@@ -425,6 +437,76 @@ function findIngestedChannel(discordChannelId: string, discordGuildId: string) {
     .executeTakeFirst()
 }
 
+function latestChannelArchivedStates() {
+  const events = db()
+    .selectFrom('channelArchivings')
+    .select(['channelId', 'createdAt', 'id', sql<number>`1`.as('archived')])
+    .unionAll(
+      db()
+        .selectFrom('channelUnarchivings')
+        .select(['channelId', 'createdAt', 'id', sql<number>`0`.as('archived')])
+    )
+
+  const ranked = db()
+    .selectFrom(events.as('archivedEvents'))
+    .select((eb) => [
+      'channelId',
+      'archived',
+      'createdAt',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy('channelId')
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('rankedArchivedStates')
+
+  return db()
+    .selectFrom(ranked)
+    .select(['channelId', 'archived', 'createdAt'])
+    .where('rowNumber', '=', 1)
+    .as('channelArchivedStates')
+}
+
+function latestChannelThreadFlags() {
+  const ranked = db()
+    .selectFrom('channelDetailRevisions')
+    .select((eb) => [
+      'channelId',
+      'isThread',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy('channelId')
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('rankedThreadFlags')
+
+  return db()
+    .selectFrom(ranked)
+    .select(['channelId', 'isThread'])
+    .where('rowNumber', '=', 1)
+    .as('channelThreadFlags')
+}
+
+async function currentlyArchived(channelId: string) {
+  const state = await db()
+    .selectFrom(latestChannelArchivedStates())
+    .select('archived')
+    .where('channelArchivedStates.channelId', '=', channelId)
+    .executeTakeFirst()
+
+  return state?.archived === 1
+}
+
 const recordGatewayConnection = applySchema(
   recordGatewayConnectionSchema,
   ingestionContextSchema
@@ -558,6 +640,136 @@ const recordChannelRemoval = applySchema(
     .execute()
 
   return { channelId: channel.id, outcome: 'recorded' as const }
+})
+
+const recordChannelArchiving = applySchema(
+  recordChannelArchivingSchema,
+  ingestionContextSchema
+)(async ({ discordChannelId }, context) => {
+  const channel = await findIngestedChannel(
+    discordChannelId,
+    context.owner.guildId
+  )
+
+  if (!channel) return skipped('channel_not_ingested')
+
+  if (await currentlyArchived(channel.id)) {
+    return skipped('channel_is_already_archived')
+  }
+
+  await db()
+    .insertInto('channelArchivings')
+    .values({ channelId: channel.id, id: newId() })
+    .execute()
+
+  return { channelId: channel.id, outcome: 'recorded' as const }
+})
+
+const recordChannelUnarchiving = applySchema(
+  recordChannelUnarchivingSchema,
+  ingestionContextSchema
+)(async ({ discordChannelId }, context) => {
+  const channel = await findIngestedChannel(
+    discordChannelId,
+    context.owner.guildId
+  )
+
+  if (!channel) return skipped('channel_not_ingested')
+
+  if (!(await currentlyArchived(channel.id))) {
+    return skipped('channel_is_not_archived')
+  }
+
+  await db()
+    .insertInto('channelUnarchivings')
+    .values({ channelId: channel.id, id: newId() })
+    .execute()
+
+  return { channelId: channel.id, outcome: 'recorded' as const }
+})
+
+const reconcileThreadArchivings = applySchema(
+  reconcileThreadArchivingsSchema,
+  ingestionContextSchema
+)(async ({ activeThreadDiscordChannelIds }, context) => {
+  const threads = await db()
+    .selectFrom('channels')
+    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+    .innerJoin(
+      latestChannelThreadFlags(),
+      'channelThreadFlags.channelId',
+      'channels.id'
+    )
+    .leftJoin(
+      latestChannelArchivedStates(),
+      'channelArchivedStates.channelId',
+      'channels.id'
+    )
+    .select([
+      'channels.id',
+      'channels.discordChannelId',
+      'channelArchivedStates.archived',
+    ])
+    .where('guilds.discordGuildId', '=', context.owner.guildId)
+    .where('channelThreadFlags.isThread', '=', 1)
+    .where(({ exists, not, selectFrom }) =>
+      not(
+        exists(
+          selectFrom('channelRemovals')
+            .select('channelRemovals.id')
+            .whereRef('channelRemovals.channelId', '=', 'channels.id')
+        )
+      )
+    )
+    .orderBy('channels.createdAt', 'asc')
+    .orderBy('channels.discordChannelId', 'asc')
+    .orderBy('channels.id', 'asc')
+    .execute()
+
+  const stillActive = new Set(activeThreadDiscordChannelIds)
+  const archivedChannelIds = threads
+    .filter(
+      (thread) =>
+        thread.archived !== 1 && !stillActive.has(thread.discordChannelId)
+    )
+    .map((thread) => thread.id)
+  const unarchivedChannelIds = threads
+    .filter(
+      (thread) =>
+        thread.archived === 1 && stillActive.has(thread.discordChannelId)
+    )
+    .map((thread) => thread.id)
+
+  if (archivedChannelIds.length === 0 && unarchivedChannelIds.length === 0) {
+    return { archivedChannelIds, unarchivedChannelIds }
+  }
+
+  await db()
+    .transaction()
+    .execute(async (trx) => {
+      if (archivedChannelIds.length > 0) {
+        await trx
+          .insertInto('channelArchivings')
+          .values(
+            archivedChannelIds.map((channelId) => ({ channelId, id: newId() }))
+          )
+          .execute()
+      }
+
+      if (unarchivedChannelIds.length > 0) {
+        await trx
+          .insertInto('channelUnarchivings')
+          .values(
+            unarchivedChannelIds.map((channelId) => ({
+              channelId,
+              id: newId(),
+            }))
+          )
+          .execute()
+      }
+    })
+
+  return { archivedChannelIds, unarchivedChannelIds }
 })
 
 const recordOwnerBookmarkReaction = applySchema(
@@ -797,6 +1009,11 @@ const listBackfillableChannels = applySchema(
   return await db()
     .selectFrom('channels')
     .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+    .leftJoin(
+      latestChannelArchivedStates(),
+      'channelArchivedStates.channelId',
+      'channels.id'
+    )
     .select('channels.id')
     .where('guilds.discordGuildId', '=', context.owner.guildId)
     .where(({ exists, not, selectFrom }) =>
@@ -807,6 +1024,25 @@ const listBackfillableChannels = applySchema(
             .whereRef('channelRemovals.channelId', '=', 'channels.id')
         )
       )
+    )
+    .where((eb) =>
+      eb.or([
+        eb('channelArchivedStates.archived', 'is', null),
+        eb('channelArchivedStates.archived', '=', 0),
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom('backfillRuns')
+              .select('backfillRuns.id')
+              .whereRef('backfillRuns.channelId', '=', 'channels.id')
+              .whereRef(
+                'backfillRuns.createdAt',
+                '>',
+                'channelArchivedStates.createdAt'
+              )
+          )
+        ),
+      ])
     )
     .orderBy('channels.createdAt', 'asc')
     .orderBy('channels.discordChannelId', 'asc')
@@ -863,10 +1099,16 @@ export {
   beatGatewayHeartbeat,
   listBackfillableChannels,
   listBackfillableChannelsSchema,
+  reconcileThreadArchivings,
+  reconcileThreadArchivingsSchema,
+  recordChannelArchiving,
+  recordChannelArchivingSchema,
   recordChannelRemoval,
   recordChannelRemovalSchema,
   recordChannelSnapshot,
   recordChannelSnapshotSchema,
+  recordChannelUnarchiving,
+  recordChannelUnarchivingSchema,
   recordGatewayConnection,
   recordGatewayConnectionSchema,
   recordGatewayDisconnection,

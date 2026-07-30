@@ -237,6 +237,95 @@ describe('listChannels', () => {
     expect(channels[1]).not.toHaveProperty('position')
   })
 
+  it('says which threads Discord has archived and which are still in use', async () => {
+    const guild = await createGuild()
+    const inUse = await createChannel({ guildId: guild.id, isThread: 1 })
+    const archived = await createChannel({
+      guildId: guild.id,
+      archived: true,
+      isThread: 1,
+    })
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const archivedOf = (channelId: string) =>
+      channels.find((channel) => channel.channelId === channelId)?.archived
+
+    expect(archivedOf(inUse.id)).toBe(false)
+    expect(archivedOf(archived.id)).toBe(true)
+  })
+
+  it('counts a thread as in use again once it has been unarchived', async () => {
+    const guild = await createGuild()
+    const revived = await createChannel({
+      guildId: guild.id,
+      archived: true,
+      isThread: 1,
+    })
+
+    await db()
+      .insertInto('channelUnarchivings')
+      .values({
+        id: newId(),
+        channelId: revived.id,
+        createdAt: '2099-01-01T00:00:00.000Z',
+      })
+      .execute()
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(channels[0].archived).toBe(false)
+  })
+
+  it('leaves the archived flag off a channel that is not a thread', async () => {
+    const guild = await createGuild()
+    await createChannel({ guildId: guild.id })
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(channels[0]).not.toHaveProperty('archived')
+  })
+
+  it('sorts archived threads after the threads still in use', async () => {
+    const guild = await createGuild()
+    const archived = await createChannel({
+      guildId: guild.id,
+      archived: true,
+      category: 'Company',
+      isThread: 1,
+      name: 'a-forgotten-thread',
+    })
+    const inUse = await createChannel({
+      guildId: guild.id,
+      category: 'Teams',
+      isThread: 1,
+      name: 'z-busy-thread',
+    })
+    const channel = await createChannel({
+      guildId: guild.id,
+      name: 'a-channel',
+    })
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(channels.map(({ channelId }) => channelId)).toEqual([
+      channel.id,
+      inUse.id,
+      archived.id,
+    ])
+  })
+
   it('only lists channels of the configured server', async () => {
     const guild = await createGuild()
     const otherGuild = await createGuild()

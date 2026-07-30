@@ -5,6 +5,8 @@ import type {
   FetchChannelHistory,
 } from '~/business/ingestion.common'
 import {
+  listBackfillableChannels,
+  reconcileThreadArchivings,
   recordChannelRemoval,
   recordChannelSnapshot,
   recordGatewayConnection,
@@ -276,6 +278,44 @@ async function backfillChannel({
   }
 }
 
+async function reconnectGateway({
+  activeThreadDiscordChannelIds,
+  walkingTheHistoryOf = [],
+}: {
+  activeThreadDiscordChannelIds: string[]
+  walkingTheHistoryOf?: {
+    channel: SeededChannel
+    history: BackfilledMessage[]
+  }[]
+}) {
+  await connectGateway()
+  await withADistinctInstant(
+    fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds },
+      ownerContext()
+    )
+  )
+
+  const backfillable = await fromSuccess(listBackfillableChannels)(
+    {},
+    ownerContext()
+  )
+  const backfillableChannelIds = backfillable.map((channel) => channel.id)
+  const walked = []
+
+  for (const { channel, history } of walkingTheHistoryOf) {
+    if (!backfillableChannelIds.includes(channel.id)) continue
+
+    walked.push(await backfillChannel({ channel, history }))
+  }
+
+  return {
+    backfillableChannelIds,
+    messages: walked.flatMap((run) => run.messages),
+    runs: walked,
+  }
+}
+
 const feed = {
   backfillChannel,
   connectGateway,
@@ -288,6 +328,7 @@ const feed = {
   observeChannel,
   postMessage,
   reactToMessage,
+  reconnectGateway,
   undoReaction,
 }
 
