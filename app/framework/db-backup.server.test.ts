@@ -325,6 +325,30 @@ describe('exportDatabase', () => {
     )
   })
 
+  it('refuses to replace a directory that holds something other than a dump', () => {
+    const databasePath = createEventStore('bystander')
+    const occupied = unitPath('bystander-directory')
+    const bystander = path.join(occupied, 'something-precious.txt')
+    const empty = unitPath('bystander-empty')
+
+    appendEvents(databasePath, [{ id: '000001' }])
+    mkdirSync(occupied, { recursive: true })
+    writeFileSync(bystander, 'not a dump')
+
+    const failure = failureOf(() =>
+      exportDatabase({ databasePath, dumpDirectory: occupied })
+    )
+
+    expect(failure).toContain(path.resolve(occupied))
+    expect(failure).toContain('schema.sql')
+    expect(existsSync(bystander)).toBe(true)
+
+    mkdirSync(empty, { recursive: true })
+    exportDatabase({ databasePath, dumpDirectory: empty })
+
+    expect(existsSync(path.join(empty, 'schema.sql'))).toBe(true)
+  })
+
   it('keeps every chunk but the last of each table identical when events are appended', () => {
     const databasePath = createEventStore('stability')
     const before = unitPath('stability-before')

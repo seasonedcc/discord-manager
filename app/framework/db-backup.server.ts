@@ -8,6 +8,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
   writeSync,
 } from 'node:fs'
@@ -56,10 +57,8 @@ function sqlLiteral(value: unknown) {
   throw new Error(`A ${typeof value} value has no SQLite literal form.`)
 }
 
-function insertStatement(table: string, row: Record<string, unknown>) {
-  const values = Object.values(row).map(sqlLiteral).join(',')
-
-  return `INSERT INTO ${table} VALUES(${values});\n`
+function insertStatement(table: string, values: unknown[]) {
+  return `INSERT INTO ${table} VALUES(${values.map(sqlLiteral).join(',')});\n`
 }
 
 function chunkFileName(index: number) {
@@ -165,6 +164,14 @@ function chunkFilesOf(dumpDirectory: string) {
     )
 }
 
+function holdsSomethingOtherThanADump(destination: string) {
+  if (!existsSync(destination)) return false
+  if (!statSync(destination).isDirectory()) return true
+  if (existsSync(path.join(destination, schemaFileName))) return false
+
+  return readdirSync(destination).length > 0
+}
+
 function exportDatabase({
   databasePath,
   dumpDirectory,
@@ -179,6 +186,13 @@ function exportDatabase({
   }
 
   const destination = path.resolve(dumpDirectory)
+
+  if (holdsSomethingOtherThanADump(destination)) {
+    throw new Error(
+      `${destination} holds something other than a dump — there is no ${schemaFileName} in it. An export replaces its whole destination, so point it at a new directory, an empty one, or a dump it may overwrite.`
+    )
+  }
+
   const staging = `${destination}.partial-${randomUUID()}`
   const database = new Database(storePath, {
     fileMustExist: true,
@@ -197,14 +211,15 @@ function exportDatabase({
 
     for (const table of tables) {
       const chunks = openTableChunks(path.join(staging, table), chunkByteCap)
-      const statement = database.prepare<[], Record<string, unknown>>(
-        `select * from ${quoteIdentifier(table)} order by ${primaryKeyOrderOf(database, table)}`
-      )
+      const statement = database
+        .prepare<[], unknown[]>(
+          `select * from ${quoteIdentifier(table)} order by ${primaryKeyOrderOf(database, table)}`
+        )
+        .raw(true)
+        .safeIntegers(true)
 
-      statement.safeIntegers(true)
-
-      for (const row of statement.iterate()) {
-        chunks.write(insertStatement(table, row))
+      for (const values of statement.iterate()) {
+        chunks.write(insertStatement(table, values))
         rows += 1
       }
 

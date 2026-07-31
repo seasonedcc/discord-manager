@@ -260,7 +260,8 @@ discovers everything by introspection and hardcodes no table name.
   either rewrites every deployment's dump history — and unit tests pin both.
 - **Atomic replacement.** The dump is written to a sibling temporary directory and renamed
   over the target, so a crash never leaves half a dump behind. An empty table gets no
-  directory at all.
+  directory at all. Because an export replaces its whole destination, it refuses one that
+  holds anything but a dump — pointing it at `./data` must not take the store with it.
 - **A verifying restore.** The import only ever writes a fresh file — it refuses an existing
   `DATABASE_PATH` — and applies the schema and every chunk in one transaction with
   `foreign_keys=OFF`, since table-by-table order is not dependency order. It then verifies
