@@ -53,6 +53,14 @@ Never `z.date()` on any path a tool can reach. One trap: `z.date(...)` *with* an
 
 Timestamps in a tool's **output** are ISO strings too, never a formatted display string and never a `Date` instance that `JSON.stringify` would silently reshape.
 
+## Cursors run on one clock
+
+A tool whose answer feeds back as its own next input — a `since`, a watermark, any cursor — keeps every instant it emits and accepts on **a single clock: the store's own arrival clock** (`createdAt`), never a vendor timestamp. The store's clock is the only one whose "newest" is also "latest written": vendor stamps trail or lead the host through gateway lag, backfills, and skew, so a cursor computed on one clock and compared against another silently drops events below a forward-only cutoff. Cutting on arrival time also makes late-arriving history — a post-downtime backfill — count as new, which is exactly what a poller is asking.
+
+Boundary semantics follow the tool's role, and the field's description says which applies: a **reading** tool's `since` is inclusive (`>=`) — re-reading the boundary message is harmless; a **cursor** tool's cutoff is strictly-after (`>`) — an inclusive boundary re-counts the newest event forever, so the poller can never read "all quiet".
+
+The proof lives in the E2E spec: it executes the tool description's recipe *literally* — poll, feed the answer's timestamp back exactly as the copy instructs, read zeros. A spec that has to route around its own tool's instructions to observe an event is not a passing spec; it is the defect report.
+
 ## Scalars at the JSON boundary
 
 An MCP client sends native JSON types. A schema that accepts only a string form of a scalar — a boolean written as `'true'`, a number written as `'5'` — rejects exactly what a real client sends. Business schemas on a wrapped path accept the native type: `z.boolean()`, `z.number()`, `z.string()`. When a wrapped schema carries a coerced field, add a test proving the native JSON value reaches the business logic — it should fail on a business rule, never on input validation.
