@@ -268,4 +268,6 @@ A seed lookup that can match more than one row orders deterministically down to 
 
 Query-time derivation is the default and stays the default until a real query is measurably slow. When that happens, the sanctioned response is `EXPLAIN QUERY PLAN` plus indexes: composite `(parentId, createdAt desc)` indexes, partial indexes, and covering indexes serve every latest-wins and existence derivation. Add the index the plan asks for, and re-measure.
 
+An index ships with proof it is *chosen*: `EXPLAIN QUERY PLAN` on the exact query it serves must show `SEARCH <table> USING INDEX <name>`, and dropping the index must degrade the plan (`SCAN`) — otherwise the index is decoration that taxes every insert. When the planner refuses, the query's shape is usually the reason — a window function over a whole child table forces the child to drive the join and demotes the parent's indexed filter to a residual — and the fix is reshaping the query so the filtered table drives (a correlated per-row lookup instead of a global window), never shipping the unused index anyway.
+
 Never write a derived value back into the application schema from application code — a cache that lives in an app table is a mutable column with extra steps.
