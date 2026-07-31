@@ -79,9 +79,95 @@ describe('catchUpSince', () => {
         channelName: 'product',
         authorDisplayName: 'Ada Lovelace',
         content: 'after the edit',
+        attachments: [],
+        embeds: [],
         jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
       },
     ])
+  })
+
+  it('reads what an alert message says in its embeds and attachments', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({
+      attachments: [
+        {
+          filename: 'error-budget.png',
+          size: 18422,
+          url: 'https://cdn.example.test/error-budget.png',
+        },
+      ],
+      channelId: channel.id,
+      content: '',
+      discordCreatedAt: '2099-06-01T00:00:00.000Z',
+      embeds: [
+        'Uptime watch\nCheckout is down',
+        'Follow-up: the error budget is spent',
+      ],
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-06-01T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+    const alert = digest.messages.find(
+      ({ messageId }) => messageId === message.id
+    )
+
+    expect(alert?.content).toBe('')
+    expect(alert?.embeds).toEqual([
+      'Uptime watch\nCheckout is down',
+      'Follow-up: the error budget is spent',
+    ])
+    expect(alert?.attachments).toEqual([
+      {
+        filename: 'error-budget.png',
+        size: 18422,
+        url: 'https://cdn.example.test/error-budget.png',
+      },
+    ])
+  })
+
+  it('reads the embeds of the newest revision only', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      content: 'the first wording',
+      discordCreatedAt: '2099-06-02T00:00:00.000Z',
+      embeds: ['A preview nobody kept'],
+    })
+
+    const newerRevision = await db()
+      .insertInto('messageRevisions')
+      .values({
+        content: 'the wording that stuck',
+        createdAt: '2099-06-03T00:00:00.000Z',
+        id: newId(),
+        messageId: message.id,
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow()
+
+    await db()
+      .insertInto('messageRevisionEmbeds')
+      .values({
+        content: 'The preview that replaced it',
+        id: newId(),
+        messageRevisionId: newerRevision.id,
+        position: 0,
+      })
+      .execute()
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-06-02T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+    const edited = digest.messages.find(
+      ({ messageId }) => messageId === message.id
+    )
+
+    expect(edited?.embeds).toEqual(['The preview that replaced it'])
   })
 
   it('leaves out messages that were deleted upstream', async () => {

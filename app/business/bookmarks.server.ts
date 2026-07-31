@@ -14,6 +14,10 @@ import {
   setBookmarkReasonSchema,
   snoozeBookmarkSchema,
 } from '~/business/bookmarks.common'
+import {
+  messageAttachmentsSchema,
+  messageEmbedsSchema,
+} from '~/business/messages.common'
 import { db } from '~/db/db.server'
 import { newId } from '~/framework/db.server'
 
@@ -26,6 +30,18 @@ const bookmarksContextSchema = ownerContextSchema.extend({
 })
 
 const nowInstant = sql<string>`strftime('%Y-%m-%dT%H:%M:%fZ','now')`
+
+const embedsAsJsonArray = sql<string>`json_group_array(
+  message_revision_embeds.content order by message_revision_embeds.position
+)`.as('embeds')
+
+const attachmentsAsJsonArray = sql<string>`json_group_array(
+  json_object(
+    'filename', message_revision_attachments.filename,
+    'size', message_revision_attachments.size,
+    'url', message_revision_attachments.url
+  ) order by message_revision_attachments.position
+)`.as('attachments')
 
 function latestBookmarkEvents() {
   const bookmarkEvents = db()
@@ -521,6 +537,7 @@ const listBookmarks = applySchema(
     .select((eb) => [
       'messageId',
       'content',
+      'id as revisionId',
       eb.fn
         .agg<number>('row_number')
         .over((over) =>
@@ -653,6 +670,24 @@ const listBookmarks = applySchema(
       'latestReasonDetails.name as reasonName',
       'activeSnoozes.until as snoozedUntil',
       eb
+        .selectFrom('messageRevisionEmbeds')
+        .select(embedsAsJsonArray)
+        .whereRef(
+          'messageRevisionEmbeds.messageRevisionId',
+          '=',
+          'latestRevisions.revisionId'
+        )
+        .as('embeds'),
+      eb
+        .selectFrom('messageRevisionAttachments')
+        .select(attachmentsAsJsonArray)
+        .whereRef(
+          'messageRevisionAttachments.messageRevisionId',
+          '=',
+          'latestRevisions.revisionId'
+        )
+        .as('attachments'),
+      eb
         .exists(
           eb
             .selectFrom('messageDeletions')
@@ -678,11 +713,23 @@ const listBookmarks = applySchema(
   return {
     bookmarks: rows
       .slice(0, limit)
-      .map(({ discordGuildId, deletedUpstream, ...bookmark }) => ({
-        ...bookmark,
-        deletedUpstream: deletedUpstream === 1,
-        jumpUrl: `https://discord.com/channels/${discordGuildId}/${bookmark.discordChannelId}/${bookmark.discordMessageId}`,
-      })),
+      .map(
+        ({
+          attachments,
+          deletedUpstream,
+          discordGuildId,
+          embeds,
+          ...bookmark
+        }) => ({
+          ...bookmark,
+          attachments: messageAttachmentsSchema.parse(
+            JSON.parse(attachments ?? '[]')
+          ),
+          deletedUpstream: deletedUpstream === 1,
+          embeds: messageEmbedsSchema.parse(JSON.parse(embeds ?? '[]')),
+          jumpUrl: `https://discord.com/channels/${discordGuildId}/${bookmark.discordChannelId}/${bookmark.discordMessageId}`,
+        })
+      ),
     truncated: rows.length > limit,
   }
 })
