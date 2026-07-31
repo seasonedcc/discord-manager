@@ -39,6 +39,12 @@ Calibration entries accumulate per repo as real tasks are measured. Record each 
 
 General shape that holds across repos: prefer **design (1 agent) → build coherent sub-slices (parallel, one module or layer each) → exhaustive review (fan-out)** over "one agent builds the entire feature." A full feature built from scratch in a single agent — migration plus business layer plus MCP tools plus tests plus gate-until-green — reliably overruns the budget while still mid-build.
 
+Measured in this repo (issues #19/#20, 2026-07, opus/xhigh lanes):
+
+- **Full-feature build lane, one agent** (business function + MCP tool + migration + 13 unit tests + E2E spec + docs, gates until green): landed at 22% (215k). Same shape for a 500-line framework module + 18 tests + CLI proofs + docs: 18%. At this repo's feature size, one agent per feature is comfortably inside budget — the cross-repo overrun warning above starts biting at larger slices than these.
+- **Remediation lane on an existing branch** (a query redesign with spec rewrite, or a three-defect fix with 9 new tests): landed 15–19%; a small docs+guard fix lane: 9%.
+- **Review fan-out** (3 finder lenses over a ~700-line diff, one adversarial verifier per finding): peak agent 10–15%, 9–20 agents per audit.
+
 ## Measure a live or finished agent's context
 
 Transcripts record per-turn token usage. Extract just the numbers — never read the JSONL wholesale (it overflows the reader's own window). The last turn's `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` is that agent's current context occupancy:
