@@ -258,17 +258,33 @@ discovers everything by introspection and hardcodes no table name.
   byte-identical between exports: git stores only the events that were appended, and no
   file approaches a host's 100 MB ceiling. The cap and the format are frozen — changing
   either rewrites every deployment's dump history — and unit tests pin both.
-- **Atomic replacement.** The dump is written to a sibling temporary directory and renamed
-  over the target, so a crash never leaves half a dump behind. An empty table gets no
-  directory at all. Because an export replaces its whole destination, it refuses one that
-  holds anything but a dump — pointing it at `./data` must not take the store with it.
+- **A manifest that states the truth.** `manifest.json` carries `{"rows": {…}}` — every table
+  the export saw mapped to the exact number of rows it wrote, keys sorted, counted from the
+  same streamed rows inside the same read transaction as the chunks, so an empty table is a
+  `0` rather than an absence. It is what makes a restore verifiable instead of merely
+  plausible: without it, a dump missing a leaf table's last chunk passes both pragmas.
+- **Owned-artifact replacement.** The dump is written to a sibling temporary directory and
+  swapped in one artifact at a time. An export removes only what an export wrote:
+  `schema.sql`, `manifest.json`, and any direct subdirectory whose entries are all
+  `NNNNNN.sql` chunk files. Every other entry in the destination — a `.git` directory, a
+  notes file, an empty folder — survives untouched, so the dump directory can be a git
+  repository of its own. The swap is ordered as a fail-safe: the old `schema.sql` goes
+  first, the new chunk directories move in next, and `manifest.json` and `schema.sql` land
+  last, so a crash mid-swap leaves a dump the import refuses rather than a plausible wrong
+  one. An empty table gets no directory at all. A non-empty destination carrying no
+  `schema.sql` is still refused outright — with nothing of its own to recognise there, an
+  export pointed at `./data` must not take the store with it.
 - **A verifying restore.** The import only ever writes a fresh file — it refuses an existing
-  `DATABASE_PATH` — and applies the schema and every chunk in one transaction with
-  `foreign_keys=OFF`, since table-by-table order is not dependency order. It then verifies
-  before it claims success: `PRAGMA integrity_check` must answer `ok`, `PRAGMA
-  foreign_key_check` must come back empty, and the restored row counts are printed per
-  table. Any failure exits non-zero saying the store is not trustworthy, and removes
-  nothing.
+  `DATABASE_PATH` — and refuses a dump carrying no `schema.sql` or no `manifest.json`. It
+  applies the schema and every chunk the manifest's tables name in one transaction with
+  `foreign_keys=OFF`, since table-by-table order is not dependency order. Any failure before
+  the commit — an unrunnable `schema.sql`, a truncated chunk — is reported as mapped copy and
+  takes the file that run had just created with it, so the wreckage of one attempt cannot
+  block the next. After the commit it verifies before it claims success: `PRAGMA
+  integrity_check` must answer `ok`, `PRAGMA foreign_key_check` must come back empty, and
+  every restored row count must equal the manifest's, table set included. A failure there
+  exits non-zero naming the first table that diverges with what it should carry and what it
+  carries, and leaves the file for inspection.
 
 ## Authorization
 

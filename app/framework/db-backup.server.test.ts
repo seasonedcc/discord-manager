@@ -123,6 +123,19 @@ function chunkNamesOf(dumpDirectory: string, table: string) {
   return readdirSync(path.join(dumpDirectory, table)).sort()
 }
 
+function manifestOf(dumpDirectory: string) {
+  return JSON.parse(
+    readFileSync(path.join(dumpDirectory, 'manifest.json'), 'utf8')
+  ) as { rows: Record<string, number> }
+}
+
+function writeManifest(dumpDirectory: string, rows: Record<string, number>) {
+  writeFileSync(
+    path.join(dumpDirectory, 'manifest.json'),
+    `${JSON.stringify({ rows }, null, 2)}\n`
+  )
+}
+
 function readChunk(dumpDirectory: string, table: string, chunk: string) {
   return readFileSync(path.join(dumpDirectory, table, chunk), 'utf8')
 }
@@ -303,7 +316,7 @@ describe('exportDatabase', () => {
     expect(failure).toContain('DATABASE_PATH')
   })
 
-  it('replaces the previous dump instead of merging into it', () => {
+  it('removes a chunk directory left behind by a table the store no longer has', () => {
     const databasePath = createEventStore('replace')
     const dumpDirectory = unitPath('replace-dump')
 
@@ -311,18 +324,119 @@ describe('exportDatabase', () => {
     exportDatabase({ databasePath, dumpDirectory, chunkByteCap: 512 })
 
     const staleChunks = chunkNamesOf(dumpDirectory, 'events')
+    const stale = path.join(dumpDirectory, 'events_that_no_longer_exist')
 
-    mkdirSync(path.join(dumpDirectory, 'events_that_no_longer_exist'), {
-      recursive: true,
-    })
+    mkdirSync(stale, { recursive: true })
+    writeFileSync(
+      path.join(stale, '000000.sql'),
+      "INSERT INTO events_that_no_longer_exist VALUES('000001');\n"
+    )
     exportDatabase({ databasePath, dumpDirectory, chunkByteCap: 4096 })
 
-    expect(
-      existsSync(path.join(dumpDirectory, 'events_that_no_longer_exist'))
-    ).toBe(false)
+    expect(existsSync(stale)).toBe(false)
     expect(chunkNamesOf(dumpDirectory, 'events').length).toBeLessThan(
       staleChunks.length
     )
+  })
+
+  it('replaces the artifacts it owns and leaves every other entry alone', () => {
+    const databasePath = createEventStore('bystanders')
+    const dumpDirectory = unitPath('bystanders-dump')
+
+    appendEvents(databasePath, paddedEvents(0, 40))
+    exportDatabase({ databasePath, dumpDirectory, chunkByteCap: 512 })
+
+    const repositoryConfig = path.join(dumpDirectory, '.git', 'config')
+    const notes = path.join(dumpDirectory, 'NOTES.md')
+    const emptyFolder = path.join(dumpDirectory, 'thoughts')
+
+    mkdirSync(path.join(dumpDirectory, '.git'), { recursive: true })
+    writeFileSync(
+      repositoryConfig,
+      '[remote "origin"]\n\turl = git@example.com:me/backup.git\n'
+    )
+    writeFileSync(notes, 'restored from tape on the third\n')
+    mkdirSync(emptyFolder, { recursive: true })
+
+    const configDigest = digestOf(repositoryConfig)
+    const notesDigest = digestOf(notes)
+    const chunksBefore = chunkNamesOf(dumpDirectory, 'events').length
+
+    appendEvents(databasePath, paddedEvents(40, 40))
+    exportDatabase({ databasePath, dumpDirectory, chunkByteCap: 512 })
+
+    expect(digestOf(repositoryConfig)).toBe(configDigest)
+    expect(digestOf(notes)).toBe(notesDigest)
+    expect(existsSync(emptyFolder)).toBe(true)
+    expect(chunkNamesOf(dumpDirectory, 'events').length).toBeGreaterThan(
+      chunksBefore
+    )
+    expect(manifestOf(dumpDirectory).rows.events).toBe(80)
+  })
+
+  it('refuses to replace a chunk directory that picked up a file it did not write', () => {
+    const databasePath = createEventStore('intruder')
+    const dumpDirectory = unitPath('intruder-dump')
+
+    appendEvents(databasePath, paddedEvents(0, 5))
+    exportDatabase({ databasePath, dumpDirectory })
+
+    const intruder = path.join(dumpDirectory, 'events', 'NOTES.md')
+
+    writeFileSync(intruder, 'why is this in here\n')
+
+    const intruderDigest = digestOf(intruder)
+    const schemaDigest = digestOf(path.join(dumpDirectory, 'schema.sql'))
+    const failure = failureOf(() =>
+      exportDatabase({ databasePath, dumpDirectory })
+    )
+
+    expect(failure).toContain(path.join(dumpDirectory, 'events'))
+    expect(failure).toContain('Move it aside')
+    expect(digestOf(intruder)).toBe(intruderDigest)
+    expect(digestOf(path.join(dumpDirectory, 'schema.sql'))).toBe(schemaDigest)
+    expect(chunkNamesOf(dumpDirectory, 'events')).toContain('000000.sql')
+  })
+
+  it('writes a manifest of the exact row count of every table it saw', () => {
+    const databasePath = createEventStore('manifest')
+    const dumpDirectory = unitPath('manifest-dump')
+
+    appendEvents(databasePath, paddedEvents(0, 7))
+    appendNotes(
+      databasePath,
+      Array.from({ length: 3 }, (_, offset) => ({
+        id: String(offset).padStart(9, '0'),
+        eventId: String(offset).padStart(9, '0'),
+        note: `note-${offset}`,
+        createdAt: '2026-07-01T10:00:00.000Z',
+      }))
+    )
+    exportDatabase({ databasePath, dumpDirectory, chunkByteCap: 256 })
+
+    expect(
+      readFileSync(path.join(dumpDirectory, 'manifest.json'), 'utf8')
+    ).toBe(`{\n  "rows": {\n    "event_notes": 3,\n    "events": 7\n  }\n}\n`)
+    expect(
+      Object.entries(manifestOf(dumpDirectory).rows).map(([name, rows]) => ({
+        name,
+        rows,
+      }))
+    ).toEqual(tableRowCountsOf(databasePath))
+  })
+
+  it('counts a table with no rows in the manifest rather than omitting it', () => {
+    const databasePath = createEventStore('manifest-empty')
+    const dumpDirectory = unitPath('manifest-empty-dump')
+
+    appendEvents(databasePath, [{ id: '000001' }])
+    exportDatabase({ databasePath, dumpDirectory })
+
+    expect(manifestOf(dumpDirectory).rows).toEqual({
+      event_notes: 0,
+      events: 1,
+    })
+    expect(existsSync(path.join(dumpDirectory, 'event_notes'))).toBe(false)
   })
 
   it('refuses to replace a directory that holds something other than a dump', () => {
@@ -382,6 +496,8 @@ describe('exportDatabase', () => {
       )
     ).toBe(true)
     expect(chunkNamesOf(after, 'events').length).toBeGreaterThan(chunks.length)
+    expect(manifestOf(before).rows.events).toBe(400)
+    expect(manifestOf(after).rows.events).toBe(520)
   })
 
   it('closes a chunk as soon as it reaches the byte cap', () => {
@@ -547,7 +663,7 @@ describe('importDatabase', () => {
     expect(failure).toContain('schema.sql')
   })
 
-  it('fails on a truncated chunk and says the restored store is not trustworthy', () => {
+  it('fails on a truncated chunk and takes the half-written file with it', () => {
     const databasePath = createEventStore('truncated')
     const dumpDirectory = unitPath('truncated-dump')
     const restoredPath = `${unitPath('truncated-restored')}.db`
@@ -564,8 +680,142 @@ describe('importDatabase', () => {
     )
 
     expect(failure).toContain(path.join('events', '000000.sql'))
+    expect(failure).toContain('Nothing was restored')
+    expect(existsSync(restoredPath)).toBe(false)
+  })
+
+  it('maps a schema that will not run, clears the file it made, and lets the next run through', () => {
+    const databasePath = createEventStore('broken-schema')
+    const dumpDirectory = unitPath('broken-schema-dump')
+    const restoredPath = `${unitPath('broken-schema-restored')}.db`
+
+    appendEvents(databasePath, paddedEvents(0, 5))
+    exportDatabase({ databasePath, dumpDirectory })
+
+    const schemaFile = path.join(dumpDirectory, 'schema.sql')
+    const schema = readFileSync(schemaFile, 'utf8')
+
+    writeFileSync(schemaFile, 'CREATE TABLE events (;\n')
+
+    const failure = failureOf(() =>
+      importDatabase({ databasePath: restoredPath, dumpDirectory })
+    )
+
+    expect(failure).toContain('schema.sql did not restore:')
+    expect(failure).toContain('Nothing was restored')
+    expect(failure).toContain(path.resolve(restoredPath))
+    expect(existsSync(restoredPath)).toBe(false)
+
+    writeFileSync(schemaFile, schema)
+
+    const restored = importDatabase({
+      databasePath: restoredPath,
+      dumpDirectory,
+    })
+
+    expect(restored.tables).toEqual([
+      { name: 'event_notes', rows: 0 },
+      { name: 'events', rows: 5 },
+    ])
+  })
+
+  it('fails when the dump lost the last chunk of a table nothing points at', () => {
+    const databasePath = createEventStore('short-count')
+    const dumpDirectory = unitPath('short-count-dump')
+    const restoredPath = `${unitPath('short-count-restored')}.db`
+
+    appendEvents(databasePath, paddedEvents(0, 30))
+    appendNotes(
+      databasePath,
+      Array.from({ length: 30 }, (_, offset) => ({
+        id: String(offset).padStart(9, '0'),
+        eventId: String(offset).padStart(9, '0'),
+        note: `note-${offset}`.padEnd(80, '.'),
+        createdAt: '2026-07-01T10:00:00.000Z',
+      }))
+    )
+    exportDatabase({ databasePath, dumpDirectory, chunkByteCap: 512 })
+
+    const chunks = chunkNamesOf(dumpDirectory, 'event_notes')
+    const lastChunk = chunks[chunks.length - 1]
+    const lostRows = readChunk(dumpDirectory, 'event_notes', lastChunk)
+      .trimEnd()
+      .split('\n').length
+
+    expect(chunks.length).toBeGreaterThan(1)
+    rmSync(path.join(dumpDirectory, 'event_notes', lastChunk), { force: true })
+
+    const failure = failureOf(() =>
+      importDatabase({ databasePath: restoredPath, dumpDirectory })
+    )
+
+    expect(failure).toContain(
+      `event_notes should carry 30 rows and carries ${30 - lostRows}`
+    )
     expect(failure).toContain('NOT trustworthy')
-    expect(tableRowCountsOf(restoredPath)).toEqual([])
+    expect(existsSync(restoredPath)).toBe(true)
+  })
+
+  it('fails when the manifest names a table the dump does not carry', () => {
+    const databasePath = createEventStore('phantom')
+    const dumpDirectory = unitPath('phantom-dump')
+    const restoredPath = `${unitPath('phantom-restored')}.db`
+
+    appendEvents(databasePath, paddedEvents(0, 5))
+    exportDatabase({ databasePath, dumpDirectory })
+    writeManifest(dumpDirectory, {
+      ...manifestOf(dumpDirectory).rows,
+      chronicles: 5,
+    })
+
+    const failure = failureOf(() =>
+      importDatabase({ databasePath: restoredPath, dumpDirectory })
+    )
+
+    expect(failure).toContain(
+      'chronicles should carry 5 rows and is not in the restored store at all'
+    )
+    expect(failure).toContain('NOT trustworthy')
+  })
+
+  it('says what is missing when the dump has no manifest', () => {
+    const databasePath = createEventStore('manifestless')
+    const dumpDirectory = unitPath('manifestless-dump')
+    const restoredPath = `${unitPath('manifestless-restored')}.db`
+
+    appendEvents(databasePath, paddedEvents(0, 5))
+    exportDatabase({ databasePath, dumpDirectory })
+    rmSync(path.join(dumpDirectory, 'manifest.json'), { force: true })
+
+    const failure = failureOf(() =>
+      importDatabase({ databasePath: restoredPath, dumpDirectory })
+    )
+
+    expect(failure).toContain(path.resolve(dumpDirectory))
+    expect(failure).toContain('manifest.json')
+    expect(existsSync(restoredPath)).toBe(false)
+  })
+
+  it('says the manifest is unreadable rather than passing a parser error through', () => {
+    const databasePath = createEventStore('unreadable-manifest')
+    const dumpDirectory = unitPath('unreadable-manifest-dump')
+    const restoredPath = `${unitPath('unreadable-manifest-restored')}.db`
+
+    appendEvents(databasePath, paddedEvents(0, 5))
+    exportDatabase({ databasePath, dumpDirectory })
+    writeFileSync(
+      path.join(dumpDirectory, 'manifest.json'),
+      'the counts are around here somewhere'
+    )
+
+    const failure = failureOf(() =>
+      importDatabase({ databasePath: restoredPath, dumpDirectory })
+    )
+
+    expect(failure).toContain('manifest.json')
+    expect(failure).toContain('Export the store again')
+    expect(failure).not.toContain('JSON')
+    expect(existsSync(restoredPath)).toBe(false)
   })
 
   it('fails when the dump leaves a row pointing at a parent it does not carry', () => {
@@ -620,6 +870,7 @@ describe('the db:export and db:import scripts', () => {
     expect(
       existsSync(path.join(dumpDirectory, 'kysely_migration', '000000.sql'))
     ).toBe(true)
+    expect(manifestOf(dumpDirectory).rows.kysely_migration).toBeGreaterThan(0)
 
     const restored = runScript(
       './app/db/scripts/import.ts',

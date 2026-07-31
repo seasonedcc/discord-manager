@@ -14,9 +14,16 @@ import {
 } from 'node:fs'
 import * as path from 'node:path'
 import Database from 'better-sqlite3'
+import { z } from 'zod'
 
 const appendStableChunkByteCap = 16 * 1024 * 1024
 const schemaFileName = 'schema.sql'
+const manifestFileName = 'manifest.json'
+const chunkFileNamePattern = /^\d{6,}\.sql$/
+
+const manifestSchema = z.object({
+  rows: z.record(z.string(), z.number().int().nonnegative()),
+})
 
 type ExportOptions = {
   databasePath: string
@@ -151,14 +158,13 @@ function rowCountsOf(database: Database.Database) {
   }))
 }
 
-function chunkFilesOf(dumpDirectory: string) {
-  return readdirSync(dumpDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
+function chunkFilesOf(dumpDirectory: string, tables: string[]) {
+  return tables
+    .filter((table) => existsSync(path.join(dumpDirectory, table)))
     .sort()
     .flatMap((table) =>
       readdirSync(path.join(dumpDirectory, table))
-        .filter((file) => file.endsWith('.sql'))
+        .filter((file) => chunkFileNamePattern.test(file))
         .sort()
         .map((file) => path.join(table, file))
     )
@@ -170,6 +176,150 @@ function holdsSomethingOtherThanADump(destination: string) {
   if (existsSync(path.join(destination, schemaFileName))) return false
 
   return readdirSync(destination).length > 0
+}
+
+function isChunkDirectory(directory: string) {
+  const entries = readdirSync(directory, { withFileTypes: true })
+
+  return (
+    entries.length > 0 &&
+    entries.every(
+      (entry) => entry.isFile() && chunkFileNamePattern.test(entry.name)
+    )
+  )
+}
+
+function ownedChunkDirectoriesOf(destination: string) {
+  return readdirSync(destination, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        isChunkDirectory(path.join(destination, entry.name))
+    )
+    .map((entry) => entry.name)
+}
+
+function swapDumpIn(staging: string, destination: string) {
+  mkdirSync(destination, { recursive: true })
+
+  const owned = new Set(ownedChunkDirectoriesOf(destination))
+  const arriving = readdirSync(staging).filter(
+    (entry) => entry !== schemaFileName && entry !== manifestFileName
+  )
+
+  for (const table of arriving) {
+    if (existsSync(path.join(destination, table)) && !owned.has(table)) {
+      throw new Error(
+        `${path.join(destination, table)} is not a chunk directory this export wrote, and the dump has a ${table} table to put there. Move it aside — or point the export at another directory — and run it again.`
+      )
+    }
+  }
+
+  rmSync(path.join(destination, schemaFileName), { force: true })
+  rmSync(path.join(destination, manifestFileName), { force: true })
+
+  for (const table of owned) {
+    rmSync(path.join(destination, table), { force: true, recursive: true })
+  }
+
+  for (const table of arriving) {
+    renameSync(path.join(staging, table), path.join(destination, table))
+  }
+
+  renameSync(
+    path.join(staging, manifestFileName),
+    path.join(destination, manifestFileName)
+  )
+  renameSync(
+    path.join(staging, schemaFileName),
+    path.join(destination, schemaFileName)
+  )
+  rmSync(staging, { force: true, recursive: true })
+}
+
+function manifestFor(rowsByTable: Record<string, number>) {
+  const rows = Object.fromEntries(
+    Object.keys(rowsByTable)
+      .sort()
+      .map((table) => [table, rowsByTable[table]])
+  )
+
+  return `${JSON.stringify({ rows }, null, 2)}\n`
+}
+
+function readParsedJson(text: string) {
+  try {
+    const parsed: unknown = JSON.parse(text)
+
+    return parsed
+  } catch {
+    return undefined
+  }
+}
+
+function manifestRowsOf(source: string) {
+  const manifestFile = path.join(source, manifestFileName)
+
+  if (!existsSync(manifestFile)) {
+    throw new Error(
+      `The dump at ${source} carries no ${manifestFileName}, so nothing says how many rows it should restore. Export the store again to write a dump this can verify.`
+    )
+  }
+
+  const manifest = manifestSchema.safeParse(
+    readParsedJson(readFileSync(manifestFile, 'utf8'))
+  )
+
+  if (!manifest.success) {
+    throw new Error(
+      `The ${manifestFileName} in ${source} is not a row count per table, so it cannot say what a restore should hold. Export the store again to write a dump this can verify.`
+    )
+  }
+
+  return new Map(Object.entries(manifest.data.rows))
+}
+
+function firstCountDivergence(
+  expected: Map<string, number>,
+  restored: { name: string; rows: number }[]
+) {
+  const restoredRows = new Map(
+    restored.map((table) => [table.name, table.rows])
+  )
+  const tables = [
+    ...new Set([...expected.keys(), ...restoredRows.keys()]),
+  ].sort()
+
+  for (const table of tables) {
+    const shouldCarry = expected.get(table)
+    const carries = restoredRows.get(table)
+
+    if (shouldCarry === undefined) {
+      return `${table} carries ${carries} rows the dump does not account for`
+    }
+
+    if (carries === undefined) {
+      return `${table} should carry ${shouldCarry} rows and is not in the restored store at all`
+    }
+
+    if (shouldCarry !== carries) {
+      return `${table} should carry ${shouldCarry} rows and carries ${carries}`
+    }
+  }
+
+  return undefined
+}
+
+function nothingRestored(artifact: string, error: unknown, storePath: string) {
+  return new Error(
+    `${artifact} did not restore: ${error instanceof Error ? error.message : String(error)}. Nothing was restored and no file was left at ${storePath}, so fix the dump and run this again.`
+  )
+}
+
+function removeStoreFiles(storePath: string) {
+  rmSync(storePath, { force: true })
+  rmSync(`${storePath}-wal`, { force: true })
+  rmSync(`${storePath}-shm`, { force: true })
 }
 
 function exportDatabase({
@@ -189,7 +339,7 @@ function exportDatabase({
 
   if (holdsSomethingOtherThanADump(destination)) {
     throw new Error(
-      `${destination} holds something other than a dump — there is no ${schemaFileName} in it. An export replaces its whole destination, so point it at a new directory, an empty one, or a dump it may overwrite.`
+      `${destination} holds something other than a dump — there is no ${schemaFileName} in it. An export only ever replaces the artifacts it wrote, and it recognises none of its own here, so point it at a new directory, an empty one, or a dump it may overwrite.`
     )
   }
 
@@ -205,6 +355,7 @@ function exportDatabase({
     writeFileSync(path.join(staging, schemaFileName), schemaOf(database))
 
     const tables = tableNamesOf(database)
+    const rowsByTable: Record<string, number> = {}
     let rows = 0
     let files = 0
     let largestChunkBytes = 0
@@ -217,22 +368,27 @@ function exportDatabase({
         )
         .raw(true)
         .safeIntegers(true)
+      let tableRows = 0
 
       for (const values of statement.iterate()) {
         chunks.write(insertStatement(table, values))
-        rows += 1
+        tableRows += 1
       }
 
       const written = chunks.finish()
 
+      rowsByTable[table] = tableRows
+      rows += tableRows
       files += written.files
       largestChunkBytes = Math.max(largestChunkBytes, written.largestChunkBytes)
     }
 
+    writeFileSync(
+      path.join(staging, manifestFileName),
+      manifestFor(rowsByTable)
+    )
     database.exec('COMMIT')
-    mkdirSync(path.dirname(destination), { recursive: true })
-    rmSync(destination, { force: true, recursive: true })
-    renameSync(staging, destination)
+    swapDumpIn(staging, destination)
 
     return {
       dumpDirectory: destination,
@@ -266,26 +422,33 @@ function importDatabase({ databasePath, dumpDirectory }: ImportOptions) {
     )
   }
 
+  const manifestRows = manifestRowsOf(source)
+
   mkdirSync(path.dirname(storePath), { recursive: true })
 
   const database = new Database(storePath)
+  let committed = false
 
   try {
     database.pragma('foreign_keys = OFF')
     database.exec('BEGIN')
-    database.exec(readFileSync(schemaFile, 'utf8'))
 
-    for (const chunkFile of chunkFilesOf(source)) {
+    try {
+      database.exec(readFileSync(schemaFile, 'utf8'))
+    } catch (error) {
+      throw nothingRestored(schemaFileName, error, storePath)
+    }
+
+    for (const chunkFile of chunkFilesOf(source, [...manifestRows.keys()])) {
       try {
         database.exec(readFileSync(path.join(source, chunkFile), 'utf8'))
       } catch (error) {
-        throw new Error(
-          `${chunkFile} did not restore: ${error instanceof Error ? error.message : String(error)}. Nothing from the dump was kept, so the store at ${storePath} is NOT trustworthy — delete it, and restore again from a dump you trust.`
-        )
+        throw nothingRestored(chunkFile, error, storePath)
       }
     }
 
     database.exec('COMMIT')
+    committed = true
 
     const integrityFailures = (
       database.pragma('integrity_check') as { integrity_check: string }[]
@@ -309,12 +472,26 @@ function importDatabase({ databasePath, dumpDirectory }: ImportOptions) {
     }
 
     const tables = rowCountsOf(database)
+    const divergence = firstCountDivergence(manifestRows, tables)
+
+    if (divergence) {
+      throw new Error(
+        `The restore does not match what ${manifestFileName} says the dump holds: ${divergence}. The store at ${storePath} is NOT trustworthy — delete it, and restore again from a complete dump.`
+      )
+    }
 
     return {
       databasePath: storePath,
       rows: tables.reduce((total, table) => total + table.rows, 0),
       tables,
     }
+  } catch (error) {
+    if (!committed) {
+      database.close()
+      removeStoreFiles(storePath)
+    }
+
+    throw error
   } finally {
     database.close()
   }
