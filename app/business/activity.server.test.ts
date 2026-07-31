@@ -13,21 +13,21 @@ import {
 import { describe, expect, it } from '~/test/prelude'
 
 describe('readActivitySince', () => {
-  it('counts only the messages that arrived strictly after the cutoff', async () => {
+  it('counts only the messages the store recorded strictly after the cutoff', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
 
     await createMessage({
       channelId: channel.id,
-      discordCreatedAt: '2100-01-01T00:00:00.000Z',
+      recordedAt: '2100-01-01T00:00:00.000Z',
     })
     await createMessage({
       channelId: channel.id,
-      discordCreatedAt: '2100-01-02T00:00:00.000Z',
+      recordedAt: '2100-01-02T00:00:00.000Z',
     })
-    const afterTheCutoff = await createMessage({
+    await createMessage({
       channelId: channel.id,
-      discordCreatedAt: '2100-01-03T00:00:00.000Z',
+      recordedAt: '2100-01-03T00:00:00.000Z',
     })
 
     const { activity } = await fromSuccess(readActivitySince)(
@@ -37,7 +37,34 @@ describe('readActivitySince', () => {
 
     expect(activity.messages).toEqual({
       count: 1,
-      newestAt: afterTheCutoff.discordCreatedAt,
+      newestAt: '2100-01-03T00:00:00.000Z',
+    })
+  })
+
+  it('counts a message Discord stamped long ago that the store only recorded now', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+
+    await createMessage({
+      channelId: channel.id,
+      content: `<@${context.owner.discordUserId}> this thread never got an answer`,
+      discordCreatedAt: '2019-03-04T09:00:00.000Z',
+      recordedAt: '2100-01-20T00:00:00.000Z',
+    })
+
+    const { activity } = await fromSuccess(readActivitySince)(
+      { since: '2100-01-19T00:00:00.000Z' },
+      context
+    )
+
+    expect(activity.messages).toEqual({
+      count: 1,
+      newestAt: '2100-01-20T00:00:00.000Z',
+    })
+    expect(activity.mentions).toEqual({
+      count: 1,
+      newestAt: '2100-01-20T00:00:00.000Z',
     })
   })
 
@@ -45,14 +72,15 @@ describe('readActivitySince', () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
     const context = await ownerContext({ guildId: guild.id })
-    const kept = await createMessage({
+
+    await createMessage({
       channelId: channel.id,
-      discordCreatedAt: '2100-02-01T00:00:00.000Z',
+      recordedAt: '2100-02-01T00:00:00.000Z',
     })
     const deleted = await createMessage({
       channelId: channel.id,
       content: `<@${context.owner.discordUserId}> can you take this?`,
-      discordCreatedAt: '2100-02-02T00:00:00.000Z',
+      recordedAt: '2100-02-02T00:00:00.000Z',
     })
 
     await db()
@@ -67,7 +95,7 @@ describe('readActivitySince', () => {
 
     expect(activity.messages).toEqual({
       count: 1,
-      newestAt: kept.discordCreatedAt,
+      newestAt: '2100-02-01T00:00:00.000Z',
     })
     expect(activity.mentions).toEqual({ count: 0, newestAt: null })
   })
@@ -76,16 +104,17 @@ describe('readActivitySince', () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
     const context = await ownerContext({ guildId: guild.id })
-    const pinged = await createMessage({
+
+    await createMessage({
       channelId: channel.id,
       content: 'reading it now — comments before lunch',
-      discordCreatedAt: '2100-03-01T00:00:00.000Z',
+      recordedAt: '2100-03-01T00:00:00.000Z',
       mentionedDiscordUserIds: [context.owner.discordUserId],
     })
     await createMessage({
       channelId: channel.id,
       content: 'comments are in, nothing blocking',
-      discordCreatedAt: '2100-03-02T00:00:00.000Z',
+      recordedAt: '2100-03-02T00:00:00.000Z',
     })
 
     const { activity } = await fromSuccess(readActivitySince)(
@@ -96,7 +125,7 @@ describe('readActivitySince', () => {
     expect(activity.messages.count).toBe(2)
     expect(activity.mentions).toEqual({
       count: 1,
-      newestAt: pinged.discordCreatedAt,
+      newestAt: '2100-03-01T00:00:00.000Z',
     })
   })
 
@@ -108,17 +137,17 @@ describe('readActivitySince', () => {
     await createMessage({
       channelId: channel.id,
       content: `heads up <@${context.owner.discordUserId}> please review`,
-      discordCreatedAt: '2100-04-01T00:00:00.000Z',
+      recordedAt: '2100-04-01T00:00:00.000Z',
     })
-    const nicknamed = await createMessage({
+    await createMessage({
       channelId: channel.id,
       content: `thanks <@!${context.owner.discordUserId}>`,
-      discordCreatedAt: '2100-04-02T00:00:00.000Z',
+      recordedAt: '2100-04-02T00:00:00.000Z',
     })
     await createMessage({
       channelId: channel.id,
       content: `hello <@${snowflake()}> somebody else`,
-      discordCreatedAt: '2100-04-03T00:00:00.000Z',
+      recordedAt: '2100-04-03T00:00:00.000Z',
     })
 
     const { activity } = await fromSuccess(readActivitySince)(
@@ -128,7 +157,7 @@ describe('readActivitySince', () => {
 
     expect(activity.mentions).toEqual({
       count: 2,
-      newestAt: nicknamed.discordCreatedAt,
+      newestAt: '2100-04-02T00:00:00.000Z',
     })
   })
 
@@ -139,7 +168,7 @@ describe('readActivitySince', () => {
     const message = await createMessage({
       channelId: channel.id,
       content: `<@${context.owner.discordUserId}> can you take this?`,
-      discordCreatedAt: '2100-05-01T00:00:00.000Z',
+      recordedAt: '2100-05-01T00:00:00.000Z',
       mentionedDiscordUserIds: [context.owner.discordUserId],
     })
 
@@ -155,6 +184,41 @@ describe('readActivitySince', () => {
 
     const { activity } = await fromSuccess(readActivitySince)(
       { since: '2100-04-30T00:00:00.000Z' },
+      context
+    )
+
+    expect(activity.messages.count).toBe(1)
+    expect(activity.mentions).toEqual({ count: 0, newestAt: null })
+  })
+
+  it('forgets a ping the edit written in the same instant took away', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      content: `<@${context.owner.discordUserId}> can you take this?`,
+      recordedAt: '2100-05-11T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+    const written = await db()
+      .selectFrom('messageRevisions')
+      .select('createdAt')
+      .where('messageId', '=', message.id)
+      .executeTakeFirstOrThrow()
+
+    await db()
+      .insertInto('messageRevisions')
+      .values({
+        id: newId(),
+        messageId: message.id,
+        content: 'never mind, sorted it myself',
+        createdAt: written.createdAt,
+      })
+      .execute()
+
+    const { activity } = await fromSuccess(readActivitySince)(
+      { since: '2100-05-10T00:00:00.000Z' },
       context
     )
 
@@ -200,7 +264,7 @@ describe('readActivitySince', () => {
     })
   })
 
-  it('answers zeros and null instants once the cutoff passes everything that happened', async () => {
+  it('answers zeros and null instants once the cutoff passes everything the store recorded', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
     const context = await ownerContext({ guildId: guild.id })
@@ -208,8 +272,8 @@ describe('readActivitySince', () => {
     await createBookmarkedMessage({
       channelId: channel.id,
       content: `<@${context.owner.discordUserId}> one last thing`,
-      discordCreatedAt: '2100-07-01T00:00:00.000Z',
-      bookmarkedAt: '2100-07-01T00:00:00.000Z',
+      recordedAt: '2100-07-01T00:00:00.000Z',
+      bookmarkedAt: '2100-07-01T00:05:00.000Z',
     })
 
     const quiet = await fromSuccess(readActivitySince)(
@@ -229,7 +293,7 @@ describe('readActivitySince', () => {
     expect(busy.activity).toEqual({
       messages: { count: 1, newestAt: '2100-07-01T00:00:00.000Z' },
       mentions: { count: 1, newestAt: '2100-07-01T00:00:00.000Z' },
-      bookmarkAdditions: { count: 1, newestAt: '2100-07-01T00:00:00.000Z' },
+      bookmarkAdditions: { count: 1, newestAt: '2100-07-01T00:05:00.000Z' },
     })
   })
 
@@ -240,7 +304,7 @@ describe('readActivitySince', () => {
 
     await createBookmarkedMessage({
       channelId: otherChannel.id,
-      discordCreatedAt: '2100-08-01T00:00:00.000Z',
+      recordedAt: '2100-08-01T00:00:00.000Z',
       bookmarkedAt: '2100-08-01T00:00:00.000Z',
     })
 

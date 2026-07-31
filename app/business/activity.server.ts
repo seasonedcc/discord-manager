@@ -1,32 +1,23 @@
 import { applySchema } from 'composable-functions'
+import type { ExpressionBuilder } from 'kysely'
 import { z } from 'zod'
 import { activitySinceSchema } from '~/business/activity.common'
 import { ownerContextSchema } from '~/business/auth.server'
 import { db } from '~/db/db.server'
+import type { DB } from '~/db/types'
 
 const activityContextSchema = ownerContextSchema.extend({
   canManageBookmarks: z.literal(true),
   canReadMessages: z.literal(true),
 })
 
-function latestRevisions() {
-  return db()
+function latestRevisionOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
     .selectFrom('messageRevisions')
-    .select((eb) => [
-      'messageId',
-      'content',
-      'id as revisionId',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('messageId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestRevisions')
+    .whereRef('messageRevisions.messageId', '=', 'messages.id')
+    .orderBy('messageRevisions.createdAt', 'desc')
+    .orderBy('messageRevisions.id', 'desc')
+    .limit(1)
 }
 
 const readActivitySince = applySchema(
@@ -40,16 +31,16 @@ const readActivitySince = applySchema(
     .with('newMessages', (qb) =>
       qb
         .selectFrom('messages')
-        .innerJoin('channels', 'channels.id', 'messages.channelId')
-        .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-        .innerJoin(
-          latestRevisions(),
-          'latestRevisions.messageId',
-          'messages.id'
+        .where('messages.createdAt', '>', cutoff)
+        .where(({ exists, selectFrom }) =>
+          exists(
+            selectFrom('channels')
+              .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+              .select('channels.id')
+              .whereRef('channels.id', '=', 'messages.channelId')
+              .where('guilds.discordGuildId', '=', guildId)
+          )
         )
-        .where('latestRevisions.rowNumber', '=', 1)
-        .where('guilds.discordGuildId', '=', guildId)
-        .where('messages.discordCreatedAt', '>', cutoff)
         .where(({ not, exists, selectFrom }) =>
           not(
             exists(
@@ -60,17 +51,17 @@ const readActivitySince = applySchema(
           )
         )
         .select((eb) => [
-          'messages.discordCreatedAt',
+          'messages.createdAt',
           eb
             .or([
               eb.exists(
                 eb
                   .selectFrom('messageRevisionUserMentions')
                   .select('messageRevisionUserMentions.id')
-                  .whereRef(
+                  .where(
                     'messageRevisionUserMentions.messageRevisionId',
                     '=',
-                    'latestRevisions.revisionId'
+                    latestRevisionOf(eb).select('messageRevisions.id')
                   )
                   .where(
                     'messageRevisionUserMentions.mentionedDiscordUserId',
@@ -78,8 +69,16 @@ const readActivitySince = applySchema(
                     discordUserId
                   )
               ),
-              eb('latestRevisions.content', 'like', `%<@${discordUserId}>%`),
-              eb('latestRevisions.content', 'like', `%<@!${discordUserId}>%`),
+              eb(
+                latestRevisionOf(eb).select('messageRevisions.content'),
+                'like',
+                `%<@${discordUserId}>%`
+              ),
+              eb(
+                latestRevisionOf(eb).select('messageRevisions.content'),
+                'like',
+                `%<@!${discordUserId}>%`
+              ),
             ])
             .$castTo<number>()
             .as('pingsTheOwner'),
@@ -88,23 +87,29 @@ const readActivitySince = applySchema(
     .with('newBookmarkAdditions', (qb) =>
       qb
         .selectFrom('bookmarkAdditions')
-        .innerJoin('messages', 'messages.id', 'bookmarkAdditions.messageId')
-        .innerJoin('channels', 'channels.id', 'messages.channelId')
-        .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-        .where('guilds.discordGuildId', '=', guildId)
         .where('bookmarkAdditions.createdAt', '>', cutoff)
+        .where(({ exists, selectFrom }) =>
+          exists(
+            selectFrom('messages')
+              .innerJoin('channels', 'channels.id', 'messages.channelId')
+              .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+              .select('messages.id')
+              .whereRef('messages.id', '=', 'bookmarkAdditions.messageId')
+              .where('guilds.discordGuildId', '=', guildId)
+          )
+        )
         .select('bookmarkAdditions.createdAt')
     )
     .selectFrom('newMessages')
     .select((eb) => [
       eb.fn.countAll<number>().as('messageCount'),
-      eb.fn.max<string | null>('discordCreatedAt').as('messagesNewestAt'),
+      eb.fn.max<string | null>('createdAt').as('messagesNewestAt'),
       eb.fn
         .countAll<number>()
         .filterWhere('pingsTheOwner', '=', 1)
         .as('mentionCount'),
       eb.fn
-        .max<string | null>('discordCreatedAt')
+        .max<string | null>('createdAt')
         .filterWhere('pingsTheOwner', '=', 1)
         .as('mentionsNewestAt'),
       eb

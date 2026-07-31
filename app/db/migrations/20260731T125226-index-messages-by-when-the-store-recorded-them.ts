@@ -2,12 +2,12 @@ import type { Kysely } from 'kysely'
 
 export async function up(db: Kysely<any>): Promise<void> {
   await db.schema
-    .createIndex('messagesDiscordCreatedAtIndex')
+    .createIndex('messagesCreatedAtIndex')
     .on('messages')
-    .columns(['discordCreatedAt desc'])
+    .columns(['createdAt desc'])
     .execute()
 }
 
 export async function down(db: Kysely<any>): Promise<void> {
-  await db.schema.dropIndex('messagesDiscordCreatedAtIndex').execute()
+  await db.schema.dropIndex('messagesCreatedAtIndex').execute()
 }

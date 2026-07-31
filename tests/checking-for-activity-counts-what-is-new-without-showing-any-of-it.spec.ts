@@ -13,111 +13,104 @@ type Activity = {
   }
 }
 
-type Digest = {
-  messages: { discordCreatedAt: string }[]
-  truncated: boolean
+const nothingNew = {
+  bookmarkAdditions: { count: 0, newestAt: null },
+  mentions: { count: 0, newestAt: null },
+  messages: { count: 0, newestAt: null },
 }
 
-function newestInstant(messages: { discordCreatedAt: string }[]) {
-  return messages.reduce<string | null>(
-    (newest, { discordCreatedAt }) =>
-      !newest || discordCreatedAt > newest ? discordCreatedAt : newest,
+function nextCursor({ activity }: Activity) {
+  const newest = [
+    activity.bookmarkAdditions.newestAt,
+    activity.mentions.newestAt,
+    activity.messages.newestAt,
+  ].reduce<string | null>(
+    (largest, instant) =>
+      instant && (!largest || instant > largest) ? instant : largest,
     null
   )
-}
 
-function aMinuteAfter(instant: string) {
-  return new Date(Date.parse(instant) + 60_000).toISOString()
+  if (!newest) throw new Error('the answer carried no newest timestamp')
+
+  return newest
 }
 
 test('checking for activity counts what is new without showing any of it', async () => {
   const { channels, clock, members, messages, owner } = fixtures()
   const session = await openMcpSession()
 
-  const sinceTheMorning = clock.at(5)
-  const morning = await session.call<Activity>('activity_since', {
-    since: sinceTheMorning,
+  const everything = await session.call<Activity>('activity_since', {
+    since: clock.anchor,
   })
-  const digest = await session.call<Digest>('messages_catch_up', {
-    since: sinceTheMorning,
-  })
-  const pings = await session.call<Digest>('mentions_list', {
-    since: sinceTheMorning,
-  })
-
-  assert.equal(digest.truncated, false)
-  assert.equal(pings.truncated, false)
-  assert.equal(morning.activity.messages.count, digest.messages.length)
-  assert.equal(
-    morning.activity.messages.newestAt,
-    newestInstant(digest.messages)
-  )
-  assert.equal(morning.activity.mentions.count, pings.messages.length)
-  assert.equal(
-    morning.activity.mentions.newestAt,
-    newestInstant(pings.messages)
-  )
-
-  const everythingSoFar = morning.activity.messages.newestAt
-
-  if (!everythingSoFar) throw new Error('the seeded store answered no messages')
+  const afterEverything = nextCursor(everything)
 
   const settled = await session.call<Activity>('activity_since', {
-    since: everythingSoFar,
+    since: afterEverything,
   })
 
-  assert.deepEqual(settled.activity, {
-    bookmarkAdditions: { count: 0, newestAt: null },
-    mentions: { count: 0, newestAt: null },
-    messages: { count: 0, newestAt: null },
-  })
+  assert.deepEqual(settled.activity, nothingNew)
 
+  const stampedAheadOfTheStoresClock = clock.at(45)
   const fresh = await feed.postMessage({
     author: members.priya,
     channel: channels.engineering,
     content: `Standup notes are up — ${randomUUID()}`,
-    discordCreatedAt: aMinuteAfter(everythingSoFar),
+    discordCreatedAt: stampedAheadOfTheStoresClock,
     mentioning: [owner],
   })
 
   const afterPosting = await session.call<Activity>('activity_since', {
-    since: everythingSoFar,
+    since: afterEverything,
   })
+  const recordedAt = afterPosting.activity.messages.newestAt
 
-  assert.deepEqual(afterPosting.activity, {
-    bookmarkAdditions: { count: 0, newestAt: null },
-    mentions: { count: 1, newestAt: fresh.discordCreatedAt },
-    messages: { count: 1, newestAt: fresh.discordCreatedAt },
+  assert.equal(afterPosting.activity.messages.count, 1)
+  assert.equal(afterPosting.activity.mentions.count, 1)
+  assert.deepEqual(afterPosting.activity.bookmarkAdditions, {
+    count: 0,
+    newestAt: null,
   })
+  assert.equal(afterPosting.activity.mentions.newestAt, recordedAt)
+  assert.ok(recordedAt && recordedAt > afterEverything)
+  assert.ok(recordedAt < stampedAheadOfTheStoresClock)
 
-  const beforeBookmarking = await session.call<Activity>('activity_since', {
-    since: clock.anchor,
-  })
+  const afterTheMessage = nextCursor(afterPosting)
 
   await feed.reactToMessage({ emoji: '🔖', message: fresh, reactor: owner })
 
   const afterBookmarking = await session.call<Activity>('activity_since', {
-    since: clock.anchor,
+    since: afterTheMessage,
+  })
+  const bookmarkedAt = afterBookmarking.activity.bookmarkAdditions.newestAt
+
+  assert.equal(afterBookmarking.activity.bookmarkAdditions.count, 1)
+  assert.ok(bookmarkedAt && bookmarkedAt > afterTheMessage)
+  assert.deepEqual(afterBookmarking.activity.messages, {
+    count: 0,
+    newestAt: null,
+  })
+  assert.deepEqual(afterBookmarking.activity.mentions, {
+    count: 0,
+    newestAt: null,
   })
 
-  assert.equal(
-    afterBookmarking.activity.bookmarkAdditions.count,
-    beforeBookmarking.activity.bookmarkAdditions.count + 1
-  )
-  assert.notEqual(
-    afterBookmarking.activity.bookmarkAdditions.newestAt,
-    beforeBookmarking.activity.bookmarkAdditions.newestAt
-  )
-  assert.equal(
-    afterBookmarking.activity.messages.count,
-    beforeBookmarking.activity.messages.count
-  )
-  assert.equal(
-    afterBookmarking.activity.mentions.count,
-    beforeBookmarking.activity.mentions.count
-  )
+  const afterTheBookmark = nextCursor(afterBookmarking)
 
-  const answered = JSON.stringify(afterBookmarking)
+  const quietAgain = await session.call<Activity>('activity_since', {
+    since: afterTheBookmark,
+  })
+
+  assert.deepEqual(quietAgain.activity, nothingNew)
+
+  const answered = [
+    everything,
+    settled,
+    afterPosting,
+    afterBookmarking,
+    quietAgain,
+  ]
+    .map((answer) => JSON.stringify(answer))
+    .join('')
 
   assert.ok(!answered.includes(fresh.content))
   assert.ok(!answered.includes(messages.offsite.content))

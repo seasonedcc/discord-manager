@@ -22,7 +22,7 @@ async function callAsOwner(name: string, input: unknown, context: unknown) {
 }
 
 describe('activity_since', () => {
-  it('counts what happened after an instant without giving up any content', async () => {
+  it('counts what the store recorded after an instant without giving up any content', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
     const context = await ownerContext({ guildId: guild.id })
@@ -30,7 +30,7 @@ describe('activity_since', () => {
     await createBookmarkedMessage({
       channelId: channel.id,
       content: `<@${context.owner.discordUserId}> the release notes need a look`,
-      discordCreatedAt: '2101-01-02T00:00:00.000Z',
+      recordedAt: '2101-01-02T00:00:00.000Z',
       bookmarkedAt: '2101-01-02T00:00:00.000Z',
     })
 
