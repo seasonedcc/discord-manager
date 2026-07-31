@@ -198,6 +198,24 @@ export interface MessageDeletions {
   messageId: string;
 }
 
+export interface MessageRevisionAttachments {
+  createdAt: Generated<string>;
+  filename: string;
+  id: string;
+  messageRevisionId: string;
+  position: number;
+  size: number;
+  url: string;
+}
+
+export interface MessageRevisionEmbeds {
+  content: string;
+  createdAt: Generated<string>;
+  id: string;
+  messageRevisionId: string;
+  position: number;
+}
+
 export interface MessageRevisions {
   content: string;
   createdAt: Generated<string>;
@@ -294,6 +312,8 @@ export interface DB {
   memberDetailRevisions: MemberDetailRevisions;
   members: Members;
   messageDeletions: MessageDeletions;
+  messageRevisionAttachments: MessageRevisionAttachments;
+  messageRevisionEmbeds: MessageRevisionEmbeds;
   messageRevisions: MessageRevisions;
   messageRevisionUserMentions: MessageRevisionUserMentions;
   messages: Messages;
