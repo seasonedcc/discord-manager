@@ -2,6 +2,7 @@ import { ownerContext } from '~/business/auth.server'
 import { aChannelLeavesTheBotsView } from './a-channel-leaves-the-bots-view'
 import { aThreadArchivesWhileTheBotIsAway } from './a-thread-archives-while-the-bot-is-away'
 import { aWorkdayOfConversation } from './a-workday-of-conversation'
+import { anAlertArrivesAsAnEmbed } from './an-alert-arrives-as-an-embed'
 import { readClock } from './clock'
 import { feed } from './feed'
 import { historyArrivesThroughABackfill } from './history-arrives-through-a-backfill'
@@ -20,6 +21,10 @@ async function feedEveryJourney() {
     maya: feed.member({ displayName: 'Maya Fischer', username: 'maya' }),
     omar: feed.member({ displayName: 'Omar Duarte', username: 'omar' }),
     priya: feed.member({ displayName: 'Priya Raman', username: 'priya' }),
+    uptime: feed.member({
+      displayName: 'Uptime Watch',
+      username: 'uptime-watch',
+    }),
   }
 
   const { announcements, engineering, lobby, releaseThread } =
@@ -37,6 +42,7 @@ async function feedEveryJourney() {
     members,
     owner,
   })
+  const alert = await anAlertArrivesAsAnEmbed({ channels, clock, members })
   const bookmarks = await theOwnerBookmarksAMessage({
     members,
     messages,
@@ -49,6 +55,7 @@ async function feedEveryJourney() {
   })
 
   return {
+    alert,
     archiving,
     backfill,
     bookmarks,

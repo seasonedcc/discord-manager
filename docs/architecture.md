@@ -57,6 +57,7 @@ app/
     ingestion.server.ts        message/reaction/member event recording; backfill; heartbeat
     ingestion-status.server.ts gateway activity + backfill health derivations
     digests.server.ts          catch-up + mention triage derivations
+    messages.common.ts         observed embed/attachment shapes + canonical embed rendering
     bookmarks.server.ts        add/remove/resolve/snooze + list derivation
     sending.server.ts          draft-and-send with its telemetry family
     jobs.server.ts             registered jobs array
@@ -146,6 +147,17 @@ Events (all with `(parentId, createdAt desc)` indexes):
   revision rather than the message because an edit can change it, so the current set is
   the rows of the latest revision — an edit that drops the ping leaves the new revision
   with no rows at all, which is a fact one table can state without a sentinel.
+- `message_revision_embeds` — zero or more rows per revision, one per embed Discord
+  attached to that version of the message, each carrying `position` (its place in the
+  message) and `content` (the embed rendered to the text a person would read). Rendering
+  happens once, at capture, so every reader shows the same words; the structured embed
+  is not kept, and neither is any part the text does not carry. Embeds the message flags
+  as suppressed are never recorded, because Discord does not show them either.
+- `message_revision_attachments` — zero or more rows per revision, one per file, each
+  carrying `position`, `filename`, `size` in bytes, and the Discord `url`. Reference
+  only: no bytes are ever downloaded, and the URL is signed and short-lived, so it names
+  a file rather than links to one forever. `contentType` is deliberately not stored — it
+  is optional upstream and adds nothing a text-triage reader uses.
 - `message_deletions` — existence is state.
 - `bookmark_additions` / `bookmark_removals` — reversible pair; newest of the two latest
   wins. Both carry `source` (`reaction` or `mcp`) so a public un-react and a private MCP
@@ -371,6 +383,31 @@ when the sender switched it off, a distinction `<@id>` text matching cannot see 
   single OR over one query means a message matching both ways still comes back once.
 - Role mentions and `@everyone`/`@here` are deliberately excluded. No role tracking exists,
   and a broadcast ping is not personal triage. `mentions_list`'s description says so.
+
+### What a message says outside its text
+
+An alerting bot posts an embed and no text at all, so a reader that shows only `content`
+reports an empty line where the incident is. Embeds and attachments are captured the same
+way mentions are: read off the Discord payload at the seam, passed to the business layer as
+plain data, and written in the same transaction as the revision they belong to.
+
+- The seam translates discord.js into observations (`observeEmbeds`, `observeAttachments`
+  in `app/ingest/gateway.server.ts`), shared by the live gateway handlers and the REST
+  backfill, so history and live traffic record the same facts.
+- Embeds cross into the business layer **structured** and are rendered once, on the way in,
+  by `renderEmbed` in `app/business/messages.common.ts` — author, title with its link,
+  description, each field as `name: value`, image, thumbnail, footer, timestamp, empty
+  parts skipped. One rendering at capture means every reader and every future live fetch
+  agrees on the words, and `messages.common.ts` is where a message-fetching domain finds
+  it without importing ingestion.
+- The readers (`digestMessagesSince`, `listBookmarks`) aggregate both sets in SQL —
+  `json_group_array` over a correlated subquery keyed on the ranked revision's id — so a
+  digest stays one query and shows only the current version's embeds, never a pre-edit one.
+- Nothing is fetched: an attachment is a filename, a size and Discord's own signed URL,
+  which expires in about a day. The store names files; it does not archive them.
+- Capture is forward-only. The backfill cursor never revisits a message it already has, so
+  messages ingested before this existed keep only their text. The README says so plainly
+  rather than implying a rescan that does not exist.
 
 ## Scheduling
 

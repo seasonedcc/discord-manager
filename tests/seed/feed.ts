@@ -18,6 +18,10 @@ import {
   recordOwnerBookmarkReactionRemoval,
   runChannelBackfill,
 } from '~/business/ingestion.server'
+import type {
+  ObservedAttachment,
+  ObservedEmbed,
+} from '~/business/messages.common'
 import { nextDiscordId } from '../discord-ids'
 import { waitForTheStoreClockToTick } from './clock'
 
@@ -38,6 +42,7 @@ type SeededChannel = {
 }
 
 type SeededMessage = {
+  attachments: ObservedAttachment[]
   author: SeededMember
   channelId: string
   content: string
@@ -122,22 +127,27 @@ async function loseChannel(channel: SeededChannel) {
 }
 
 async function postMessage({
+  attachments = [],
   author,
   channel,
   content,
   discordCreatedAt,
+  embeds = [],
   mentioning = [],
 }: {
+  attachments?: ObservedAttachment[]
   author: SeededMember
   channel: SeededChannel
   content: string
   discordCreatedAt: string
+  embeds?: ObservedEmbed[]
   mentioning?: SeededMember[]
 }): Promise<SeededMessage> {
   const discordMessageId = nextDiscordId()
   const { messageId } = await withADistinctInstant(
     fromSuccess(recordIncomingMessage)(
       {
+        attachments,
         author,
         channel: {
           category: channel.category,
@@ -150,6 +160,7 @@ async function postMessage({
         content,
         discordCreatedAt,
         discordMessageId,
+        embeds,
         mentionedDiscordUserIds: mentioning.map(
           (member) => member.discordUserId
         ),
@@ -159,6 +170,7 @@ async function postMessage({
   )
 
   return {
+    attachments,
     author,
     channelId: channel.id,
     content,
@@ -245,21 +257,27 @@ async function undoReaction({
 }
 
 function draftHistory({
+  attachments = [],
   author,
   content,
   discordCreatedAt,
+  embeds = [],
   mentioning = [],
 }: {
+  attachments?: ObservedAttachment[]
   author: SeededMember
   content: string
   discordCreatedAt: string
+  embeds?: ObservedEmbed[]
   mentioning?: SeededMember[]
 }): BackfilledMessage {
   return {
+    attachments,
     author,
     content,
     discordCreatedAt,
     discordMessageId: nextDiscordId(),
+    embeds,
     mentionedDiscordUserIds: mentioning.map((member) => member.discordUserId),
   }
 }

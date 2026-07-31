@@ -9,6 +9,7 @@ Each person runs their own bot and their own local stack. Nothing is shared, not
 ## What you get
 
 - **Catch-up digests** — everything posted since a moment in time, across the server or in one channel, each message with a jump link. Long stretches come back 200 messages at a time, so your assistant can walk a busy week in order.
+- **Alerts that speak in embeds** — a Sentry issue, an uptime page, a deploy bot: these post a rich embed and no text at all. The store keeps the embed as the text a person would read, and every message also lists the files attached to it, so an alert channel is as triageable as a conversation.
 - **Mention triage** — the messages that pinged you, exactly as Discord counts a ping, ready for an assistant to sort by what actually needs you.
 - **Bookmarks without Nitro** — react to any message with 🔖 and your bot records a bookmark; remove the reaction and it's gone. Your assistant can also bookmark by message link, resolve, and snooze — privately, with no reaction anyone can see. Only *your* reactions count, so a whole team of bots coexists in one server without crosstalk.
 - **Bookmarks that know why they're there** — every bookmark is filed under a reason you manage, so *"what am I on the hook to answer?"* is a different question from *"what should I read on the train?"*. A 🔖 reaction can't carry intent, so those land in your *Inbox* for your assistant to sort.
@@ -62,7 +63,7 @@ pnpm run db:migrate
 pnpm run ingest
 ```
 
-This is the long-running daemon: it connects to Discord's gateway, records everything as it happens, and backfills the history it missed while it was away — on startup and again after every reconnect. Threads Discord has archived get one last backfill each, so nothing said just before they went quiet is lost, and then they stop costing a request on every reconnect; post in one and it comes straight back. Keep it running however you keep things running (a terminal tab is fine to start).
+This is the long-running daemon: it connects to Discord's gateway, records everything as it happens — text, embeds, and what each message has attached to it — and backfills the history it missed while it was away, on startup and again after every reconnect. Threads Discord has archived get one last backfill each, so nothing said just before they went quiet is lost, and then they stop costing a request on every reconnect; post in one and it comes straight back. Keep it running however you keep things running (a terminal tab is fine to start).
 
 ### 5. Wire up your assistant
 
@@ -95,7 +96,7 @@ The seed only ever runs against a freshly created, empty database, and sending w
 | --- | --- |
 | `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them — and for threads, whether Discord has archived them, archived ones last |
 | `activity_since` | Whether the store recorded anything after an instant — counts and newest timestamps for new messages, mentions of you, and bookmark additions, on the store's own clock, with no content |
-| `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time |
+| `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time — each message with its text, the text of any embeds it carries, and what is attached to it |
 | `mentions_list` | The messages that pinged you since a moment in time — someone naming you, plus replies to you the sender left the ping on |
 | `bookmarks_add` | A bookmark from a Discord message link, filed under the reason you pick |
 | `bookmarks_list` | The bookmarks still waiting on you, each with its reason, snoozed ones and single-reason views on request |
@@ -115,6 +116,8 @@ The seed only ever runs against a freshly created, empty database, and sending w
 - **🔖 reactions are visible to the channel**, like any reaction. When you'd rather bookmark quietly, ask your assistant to `bookmarks_add` the message link — nothing appears in Discord.
 - **Every bookmark carries a reason**, so your assistant can triage by intent rather than guess. You start with six: *Answer later*, *To-do*, *Follow up*, *Read later*, *Reference*, and *Inbox*. Add, reword, and retire your own with the `bookmark_reasons_*` tools — retiring one leaves the bookmarks already carrying it untouched, still showing its name.
 - **A 🔖 reaction cannot carry intent**, so captures land in *Inbox* rather than have one invented for them. Ask your assistant to sort the inbox — *"what's in my bookmark inbox?"* — and it files each one with `bookmarks_set_reason`. Inbox is the one reason you cannot reword or retire, because it is where every unsorted capture has to land.
+- **Attachment links are fingerprints, not archives.** Discord signs the URL of every uploaded file and stops honouring it after about a day. The store keeps the filename, the size and that URL so your assistant can say what came with a message and open it while the link is fresh — nothing is ever downloaded, so an old bookmark names its attachment without being able to fetch it.
+- **Embeds are captured from the moment you start ingesting.** Messages the bot recorded before this — and any history it backfilled then — keep only their text, because the backfill walks forward from the newest message it already has and never revisits one. Everything ingested from now on carries its embeds and attachments.
 - **One deployment, one server, one owner.** The bot only records the server you configured, and only answers to you. Teammates clone the repo and create their own app — five minutes each, no shared infrastructure.
 - **This is a bot, not your account.** Automating a user account ("self-botting") violates Discord's Terms of Service and risks a ban; Discord Manager only ever acts through a bot you created, posting as itself.
 
