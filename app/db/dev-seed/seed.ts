@@ -16,6 +16,7 @@ import {
 import { TransportRejectedError } from '~/business/sending.common'
 import { sendMessage } from '~/business/sending.server'
 import { db } from '~/db/db.server'
+import { refusalForNonNumericIds } from '~/db/dev-seed/configured-ids'
 
 if (existsSync('.env')) process.loadEnvFile()
 
@@ -52,6 +53,18 @@ async function applicationTables() {
   return rows
     .map(({ name }) => name)
     .filter((name) => !tablesTheSchemaShipsPopulated.includes(name))
+}
+
+function guardTheConfiguredDiscordIds() {
+  const refusal = refusalForNonNumericIds({
+    guildId: context.owner.guildId,
+    ownerUserId: context.owner.discordUserId,
+  })
+
+  if (!refusal) return
+
+  console.error(refusal)
+  process.exit(1)
 }
 
 async function guardAnEmptyDatabase() {
@@ -132,6 +145,7 @@ async function postMessage({
   return { discordMessageId }
 }
 
+guardTheConfiguredDiscordIds()
 await guardAnEmptyDatabase()
 
 const anchor = await readAnchor()
