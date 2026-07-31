@@ -47,6 +47,7 @@ end-to-end specs (see Testing).
 app/
   framework/        Zero app-specific logic; extractable as a package at any time.
     db.server.ts        makeDb, newId, migrator, createDbMigration, migrateDbToLatest/Down
+    db-backup.server.ts append-stable text dump of any SQLite store + verifying restore
     env.server.ts       framework-only typed env (make-typed-env + camelKeys)
     scheduler.server.ts makeJob, makeCronJob, makeSchedulerRunner (in-process; no queue)
     globals.ts          getOrSetGlobal (HMR/test-safe singletons)
@@ -62,7 +63,8 @@ app/
     *.common.ts                schemas, copy maps, named constants per domain
   db/
     migrations/         timestamped, prose-named, self-contained
-    scripts/            migration.ts, migrate.ts, rollback.ts, generate.ts
+    scripts/            migration.ts, migrate.ts, rollback.ts, generate.ts,
+                        export.ts, import.ts
     db.server.ts        the product's Kysely instance (makeDb<DB>())
     types.d.ts          generated — never hand-edited
     dev-seed/           empty-database-only seed for local development
@@ -227,6 +229,62 @@ The predicate runs inside the transaction that writes the new request and its li
 two racing retries of one request cannot both pass. That transaction writes before it reads
 so it holds SQLite's write lock from its first statement — a read-first transaction takes a
 snapshot and its later writes fail outright when the ingest daemon commits in between.
+
+### Backing the store up as text
+
+`pnpm run db:export` and `pnpm run db:import` — thin entrypoints in `app/db/scripts/` over
+`app/framework/db-backup.server.ts` — turn the binary store into a text dump a deployment
+can commit to a git host, and back again. The framework module is app-agnostic: it
+discovers everything by introspection and hardcodes no table name.
+
+- **One snapshot, never a write.** The export opens the store read-only (`fileMustExist`)
+  and runs inside a single `BEGIN`/`COMMIT` read transaction, so a dump taken while the
+  ingest daemon writes is transactionally consistent, and the export is incapable of
+  writing to a live store.
+- **Introspected shape.** `schema.sql` carries every `sqlite_master` statement — tables
+  before indexes, then by name, so an index never precedes the table it needs — including
+  Kysely's `kysely_migration` bookkeeping, so a restored store knows which migrations it
+  already has. Every non-internal table is dumped with its rows ordered by its real primary
+  key, read from `PRAGMA table_info`. For an application table that key is the UUIDv7 id,
+  so primary-key order *is* append order.
+- **An owned serialization format.** One line per row, `INSERT INTO <table> VALUES(...);`,
+  in SQLite's own literal forms: text single-quoted with quotes doubled and newlines left
+  literal, `NULL`, integers as plain decimals (read as BigInts, so an id beyond 2^53 would
+  survive), reals in their shortest round-trip form, blobs as `X'hex'`.
+- **16 MiB append-stable chunks.** Rows stream into `<dump>/<table>/000000.sql`,
+  `000001.sql`, …, and a chunk closes as soon as it reaches `appendStableChunkByteCap`
+  (16 MiB), always after at least one row. Every boundary is a pure function of the
+  row-stream prefix, so on an append-only store every chunk but each table's last is
+  byte-identical between exports: git stores only the events that were appended, and no
+  file approaches a host's 100 MB ceiling. The cap and the format are frozen — changing
+  either rewrites every deployment's dump history — and unit tests pin both.
+- **A manifest that states the truth.** `manifest.json` carries `{"rows": {…}}` — every table
+  the export saw mapped to the exact number of rows it wrote, keys sorted, counted from the
+  same streamed rows inside the same read transaction as the chunks, so an empty table is a
+  `0` rather than an absence. It is what makes a restore verifiable instead of merely
+  plausible: without it, a dump missing a leaf table's last chunk passes both pragmas.
+- **Owned-artifact replacement.** The dump is written to a sibling temporary directory and
+  swapped in one artifact at a time. An export removes only what an export wrote:
+  `schema.sql`, `manifest.json`, and any direct subdirectory whose entries are all
+  `NNNNNN.sql` chunk files. Every other entry in the destination — a `.git` directory, a
+  notes file, an empty folder — survives untouched, so the dump directory can be a git
+  repository of its own. The swap is ordered as a fail-safe: the old `schema.sql` goes
+  first, the new chunk directories move in next, and `manifest.json` and `schema.sql` land
+  last, so a crash mid-swap leaves a dump the import refuses rather than a plausible wrong
+  one. An empty table gets no directory at all. A non-empty destination carrying no
+  `schema.sql` is still refused outright — with nothing of its own to recognise there, an
+  export pointed at `./data` must not take the store with it.
+- **A verifying restore.** The import only ever writes a fresh file — it refuses an existing
+  `DATABASE_PATH` — and refuses a dump carrying no `schema.sql` or no `manifest.json`. It
+  applies the schema and every chunk the manifest's tables name in one transaction with
+  `foreign_keys=OFF`, since table-by-table order is not dependency order. Any failure before
+  the commit — an unrunnable `schema.sql`, a truncated chunk — is reported as mapped copy and
+  takes the file that run had just created with it, so the wreckage of one attempt cannot
+  block the next. After the commit it verifies before it claims success: `PRAGMA
+  integrity_check` must answer `ok`, `PRAGMA foreign_key_check` must come back empty, and
+  every restored row count must equal the manifest's, table set included. A failure there
+  exits non-zero naming the first table that diverges with what it should carry and what it
+  carries, and leaves the file for inspection.
 
 ## Authorization
 

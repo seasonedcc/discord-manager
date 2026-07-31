@@ -12,7 +12,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "db:export": "tsx ./app/db/scripts/export.ts",
     "db:generate": "tsx ./app/db/scripts/generate.ts",
+    "db:import": "tsx ./app/db/scripts/import.ts",
     "db:migrate": "tsx ./app/db/scripts/migrate.ts && pnpm run db:generate",
     "db:migration": "tsx ./app/db/scripts/migration.ts",
     "db:rollback": "tsx ./app/db/scripts/rollback.ts && pnpm run db:generate",

@@ -118,6 +118,32 @@ The seed only ever runs against a freshly created, empty database, and sending w
 - **One deployment, one server, one owner.** The bot only records the server you configured, and only answers to you. Teammates clone the repo and create their own app — five minutes each, no shared infrastructure.
 - **This is a bot, not your account.** Automating a user account ("self-botting") violates Discord's Terms of Service and risks a ban; Discord Manager only ever acts through a bot you created, posting as itself.
 
+## Back up your history
+
+Your store is the only copy of everything your bot ever saw, and it is a binary SQLite file that outgrows a git host fast — GitHub warns at 50 MB per file and refuses at 100 MB, and every commit of a binary store carries the whole file again.
+
+`pnpm run db:export` writes the store out as text you can commit:
+
+```bash
+pnpm run db:export              # writes ./data/dump
+pnpm run db:export ./somewhere  # or wherever you want it
+```
+
+The dump is one `INSERT` line per row, split into 16 MiB chunk files per table, next to a `schema.sql` and a `manifest.json` saying how many rows each table should hold. Because the store is append-only and rows come out in id order — which is the order they arrived — every chunk but the last of each table comes out byte-identical to the previous export. Git stores only what you appended, and no file ever nears the limit. `data/dump/` is the one thing under `data/` that isn't gitignored, so committing it works out of the box. Exporting is safe while `pnpm run ingest` keeps running: it opens the store read-only and reads one consistent snapshot.
+
+The dump directory can be a git repository of its own: an export replaces only the files it wrote — `schema.sql`, `manifest.json`, and the per-table chunk folders — and never touches anything else in there, so your `.git`, your remotes, and any notes you keep beside the dump all survive.
+
+A good cadence is to export and commit after any session that changed the store — a catch-up, a bookmark sweep, a day of ingestion.
+
+Restoring goes into a fresh file:
+
+```bash
+pnpm run db:import ./data/dump   # restores into DATABASE_PATH
+pnpm run db:migrate              # apply any migrations newer than the dump
+```
+
+The import refuses to run when `DATABASE_PATH` already exists, so it can never eat a store you still have. Before it says it worked it verifies the result — SQLite's integrity check, a foreign key check across every table, and the row count restored per table against the count `manifest.json` recorded at export. If any of that fails it says which table came up short, leaves the file for you to look at, and exits non-zero. If the restore breaks part-way instead — an unreadable `schema.sql`, a truncated chunk — it says so, removes the half-written file it had just created, and leaves the path clear to run again once the dump is fixed.
+
 ## Development
 
 ```bash

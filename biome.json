@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "ignore": ["types.d.ts", "build", "dist", ".claude", "data"]
+    "ignore": ["types.d.ts", "build", "dist", ".claude", "data", ".artifacts"]
   },
   "formatter": {
     "enabled": true,
