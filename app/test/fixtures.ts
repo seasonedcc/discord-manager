@@ -25,6 +25,7 @@ type MessageAttributes = {
   content?: string
   discordMessageId?: string
   discordCreatedAt?: string
+  recordedAt?: string
   mentionedDiscordUserIds?: string[]
 }
 
@@ -160,6 +161,7 @@ async function createMessage({
   content = `content-${randomUUID()}`,
   discordMessageId = snowflake(),
   discordCreatedAt = new Date().toISOString(),
+  recordedAt,
   mentionedDiscordUserIds = [],
 }: MessageAttributes = {}) {
   const resolvedChannelId = channelId ?? (await createChannel()).id
@@ -176,6 +178,7 @@ async function createMessage({
           authorMemberId: resolvedAuthorMemberId,
           discordMessageId,
           discordCreatedAt,
+          ...(recordedAt === undefined ? {} : { createdAt: recordedAt }),
         })
         .returningAll()
         .executeTakeFirstOrThrow()

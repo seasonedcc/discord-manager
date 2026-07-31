@@ -94,6 +94,7 @@ The seed only ever runs against a freshly created, empty database, and sending w
 | Tool | What you get |
 | --- | --- |
 | `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them — and for threads, whether Discord has archived them, archived ones last |
+| `activity_since` | Whether the store recorded anything after an instant — counts and newest timestamps for new messages, mentions of you, and bookmark additions, on the store's own clock, with no content |
 | `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time |
 | `mentions_list` | The messages that pinged you since a moment in time — someone naming you, plus replies to you the sender left the ping on |
 | `bookmarks_add` | A bookmark from a Discord message link, filed under the reason you pick |
