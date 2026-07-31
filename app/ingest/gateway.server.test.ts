@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { type Client, Collection, Events } from 'discord.js'
+import { type Client, Collection, Events, MessageFlags } from 'discord.js'
 import { ownerContext } from '~/business/auth.server'
 import { backfillIngestedChannels } from '~/business/ingestion.server'
 import { newId } from '~/framework/db.server'
@@ -404,16 +404,64 @@ function fire(
   return handlers.get(event)?.(...(args as never[]))
 }
 
+function deliveredEmbed({
+  authorName,
+  description,
+  fields = [],
+  footerText,
+  imageUrl,
+  thumbnailUrl,
+  timestamp,
+  title,
+  url,
+}: {
+  authorName?: string
+  description?: string
+  fields?: { name: string; value: string }[]
+  footerText?: string
+  imageUrl?: string
+  thumbnailUrl?: string
+  timestamp?: string
+  title?: string
+  url?: string
+}) {
+  return {
+    author: authorName ? { name: authorName } : null,
+    description: description ?? null,
+    fields,
+    footer: footerText ? { text: footerText } : null,
+    image: imageUrl ? { url: imageUrl } : null,
+    thumbnail: thumbnailUrl ? { url: thumbnailUrl } : null,
+    timestamp: timestamp ?? null,
+    title: title ?? null,
+    url: url ?? null,
+  }
+}
+
 function deliveredMessage({
+  attachments = [],
   content = `content-${randomUUID()}`,
   discordMessageId = randomUUID(),
+  embeds = [],
   mentions = [],
+  suppressesEmbeds = false,
 }: {
+  attachments?: { name: string; size: number; url: string }[]
   content?: string
   discordMessageId?: string
+  embeds?: ReturnType<typeof deliveredEmbed>[]
   mentions?: string[]
+  suppressesEmbeds?: boolean
 } = {}) {
   return {
+    attachments: new Collection(
+      attachments.map((attachment) => [attachment.name, attachment])
+    ),
+    embeds,
+    flags: {
+      has: (flag: MessageFlags) =>
+        suppressesEmbeds && flag === MessageFlags.SuppressEmbeds,
+    },
     author: {
       displayName: `display-name-${randomUUID()}`,
       id: randomUUID(),
@@ -437,6 +485,41 @@ function deliveredMessage({
     },
     partial: false,
   }
+}
+
+function latestRevisionOf(discordMessageId: string) {
+  return db()
+    .selectFrom('messages')
+    .innerJoin('messageRevisions', 'messageRevisions.messageId', 'messages.id')
+    .select('messageRevisions.id')
+    .where('messages.discordMessageId', '=', discordMessageId)
+    .orderBy('messageRevisions.createdAt', 'desc')
+    .orderBy('messageRevisions.id', 'desc')
+    .limit(1)
+    .executeTakeFirstOrThrow()
+}
+
+async function embedsOf(discordMessageId: string) {
+  const revision = await latestRevisionOf(discordMessageId)
+
+  return await db()
+    .selectFrom('messageRevisionEmbeds')
+    .select('content')
+    .where('messageRevisionId', '=', revision.id)
+    .orderBy('position', 'asc')
+    .execute()
+    .then((rows) => rows.map((row) => row.content))
+}
+
+async function attachmentsOf(discordMessageId: string) {
+  const revision = await latestRevisionOf(discordMessageId)
+
+  return await db()
+    .selectFrom('messageRevisionAttachments')
+    .select(['filename', 'size', 'url'])
+    .where('messageRevisionId', '=', revision.id)
+    .orderBy('position', 'asc')
+    .execute()
 }
 
 function mentionedUserIdsOf(discordMessageId: string) {
@@ -595,6 +678,66 @@ describe('registerGatewayListeners', () => {
     await fire(handlers, Events.MessageCreate, delivered)
 
     expect(await mentionedUserIdsOf(delivered.id)).toHaveLength(0)
+  })
+
+  it('records what a live message carries in its embeds and attachments', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage({
+      attachments: [
+        {
+          name: 'latency.png',
+          size: 51200,
+          url: 'https://cdn.example.test/latency.png',
+        },
+      ],
+      content: '',
+      embeds: [
+        deliveredEmbed({
+          description: 'Response times crossed the alert threshold',
+          title: 'Checkout latency is high',
+        }),
+      ],
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await embedsOf(delivered.id)).toEqual([
+      'Checkout latency is high\nResponse times crossed the alert threshold',
+    ])
+    expect(await attachmentsOf(delivered.id)).toEqual([
+      {
+        filename: 'latency.png',
+        size: 51200,
+        url: 'https://cdn.example.test/latency.png',
+      },
+    ])
+  })
+
+  it('records nothing for the embeds Discord was told to suppress', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage({
+      content: 'a link nobody wants previewed',
+      embeds: [deliveredEmbed({ title: 'The preview Discord hid' })],
+      suppressesEmbeds: true,
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await embedsOf(delivered.id)).toHaveLength(0)
   })
 
   it('records the mention set Discord stamped on an edited message', async () => {

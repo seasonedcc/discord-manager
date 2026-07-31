@@ -17,6 +17,13 @@ import {
   gatewayHeartbeatIntervalMinutes,
   skipped,
 } from './ingestion.common'
+import {
+  type ObservedAttachment,
+  type ObservedEmbed,
+  observedAttachmentSchema,
+  observedEmbedSchema,
+  renderEmbed,
+} from './messages.common'
 
 const pageLimitReachedMessage =
   'Stopped at the page limit before reaching the newest messages'
@@ -30,6 +37,10 @@ const bookmarkReactionContextSchema = ownerContextSchema.extend({
 })
 
 const mentionedDiscordUserIdsSchema = z.array(z.string().min(1))
+
+const observedEmbedsSchema = z.array(observedEmbedSchema).default([])
+
+const observedAttachmentsSchema = z.array(observedAttachmentSchema).default([])
 
 const observedAuthorSchema = z.object({
   discordUserId: z.string().min(1),
@@ -71,11 +82,13 @@ const recordGatewayDisconnectionSchema = z.object({})
 const recordGatewayHeartbeatSchema = z.object({})
 
 const recordIncomingMessageSchema = z.object({
+  attachments: observedAttachmentsSchema,
   author: observedAuthorSchema,
   channel: observedChannelSchema,
   content: z.string(),
   discordCreatedAt: z.string().min(1),
   discordMessageId: z.string().min(1),
+  embeds: observedEmbedsSchema,
   mentionedDiscordUserIds: mentionedDiscordUserIdsSchema,
 })
 
@@ -84,8 +97,10 @@ const recordMessageDeletionSchema = z.object({
 })
 
 const recordMessageEditSchema = z.object({
+  attachments: observedAttachmentsSchema,
   content: z.string(),
   discordMessageId: z.string().min(1),
+  embeds: observedEmbedsSchema,
   mentionedDiscordUserIds: mentionedDiscordUserIdsSchema,
 })
 
@@ -379,10 +394,12 @@ async function findOrCreateMember(
   return record
 }
 
-async function insertRevisionWithMentions(
+async function insertMessageRevision(
   trx: Transaction<DB>,
   values: {
+    attachments: ObservedAttachment[]
     content: string
+    embeds: ObservedEmbed[]
     mentionedDiscordUserIds: string[]
     messageId: string
   }
@@ -411,16 +428,48 @@ async function insertRevisionWithMentions(
       )
       .execute()
   }
+
+  if (values.embeds.length > 0) {
+    await trx
+      .insertInto('messageRevisionEmbeds')
+      .values(
+        values.embeds.map((embed, position) => ({
+          content: renderEmbed(embed),
+          id: newId(),
+          messageRevisionId: revision.id,
+          position,
+        }))
+      )
+      .execute()
+  }
+
+  if (values.attachments.length > 0) {
+    await trx
+      .insertInto('messageRevisionAttachments')
+      .values(
+        values.attachments.map(({ filename, size, url }, position) => ({
+          filename,
+          id: newId(),
+          messageRevisionId: revision.id,
+          position,
+          size,
+          url,
+        }))
+      )
+      .execute()
+  }
 }
 
 async function insertMessageWithFirstRevision(
   trx: Transaction<DB>,
   values: {
+    attachments: ObservedAttachment[]
     authorMemberId: string
     channelId: string
     content: string
     discordCreatedAt: string
     discordMessageId: string
+    embeds: ObservedEmbed[]
     mentionedDiscordUserIds: string[]
   }
 ) {
@@ -447,8 +496,10 @@ async function insertMessageWithFirstRevision(
     return { messageId: existing.id, outcome: 'already_ingested' as const }
   }
 
-  await insertRevisionWithMentions(trx, {
+  await insertMessageRevision(trx, {
+    attachments: values.attachments,
     content: values.content,
+    embeds: values.embeds,
     mentionedDiscordUserIds: values.mentionedDiscordUserIds,
     messageId: inserted.id,
   })
@@ -601,11 +652,13 @@ const recordIncomingMessage = applySchema(
       const member = await findOrCreateMember(trx, input.author)
 
       return await insertMessageWithFirstRevision(trx, {
+        attachments: input.attachments,
         authorMemberId: member.id,
         channelId: channel.id,
         content: input.content,
         discordCreatedAt: input.discordCreatedAt,
         discordMessageId: input.discordMessageId,
+        embeds: input.embeds,
         mentionedDiscordUserIds: input.mentionedDiscordUserIds,
       })
     })
@@ -614,26 +667,33 @@ const recordIncomingMessage = applySchema(
 const recordMessageEdit = applySchema(
   recordMessageEditSchema,
   ingestionContextSchema
-)(async ({ content, discordMessageId, mentionedDiscordUserIds }, context) => {
-  const message = await findIngestedMessage(
-    discordMessageId,
-    context.owner.guildId
-  )
-
-  if (!message) return skipped('message_not_ingested')
-
-  await db()
-    .transaction()
-    .execute((trx) =>
-      insertRevisionWithMentions(trx, {
-        content,
-        mentionedDiscordUserIds,
-        messageId: message.id,
-      })
+)(
+  async (
+    { attachments, content, discordMessageId, embeds, mentionedDiscordUserIds },
+    context
+  ) => {
+    const message = await findIngestedMessage(
+      discordMessageId,
+      context.owner.guildId
     )
 
-  return { messageId: message.id, outcome: 'recorded' as const }
-})
+    if (!message) return skipped('message_not_ingested')
+
+    await db()
+      .transaction()
+      .execute((trx) =>
+        insertMessageRevision(trx, {
+          attachments,
+          content,
+          embeds,
+          mentionedDiscordUserIds,
+          messageId: message.id,
+        })
+      )
+
+    return { messageId: message.id, outcome: 'recorded' as const }
+  }
+)
 
 const recordMessageDeletion = applySchema(
   recordMessageDeletionSchema,
@@ -910,11 +970,13 @@ async function storeBackfilledPage(
       for (const message of page) {
         const member = await findOrCreateMember(trx, message.author)
         const stored = await insertMessageWithFirstRevision(trx, {
+          attachments: message.attachments ?? [],
           authorMemberId: member.id,
           channelId,
           content: message.content,
           discordCreatedAt: message.discordCreatedAt,
           discordMessageId: message.discordMessageId,
+          embeds: message.embeds ?? [],
           mentionedDiscordUserIds: message.mentionedDiscordUserIds,
         })
 

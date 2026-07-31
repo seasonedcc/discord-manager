@@ -124,6 +124,24 @@ function mentionedUserIdsOf(messageRevisionId: string) {
     .execute()
 }
 
+function embedsOf(messageRevisionId: string) {
+  return db()
+    .selectFrom('messageRevisionEmbeds')
+    .select(['content', 'position'])
+    .where('messageRevisionId', '=', messageRevisionId)
+    .orderBy('position', 'asc')
+    .execute()
+}
+
+function attachmentsOf(messageRevisionId: string) {
+  return db()
+    .selectFrom('messageRevisionAttachments')
+    .select(['filename', 'position', 'size', 'url'])
+    .where('messageRevisionId', '=', messageRevisionId)
+    .orderBy('position', 'asc')
+    .execute()
+}
+
 describe('recordIncomingMessage', () => {
   it('records the channel, the author and the first revision of a new message', async () => {
     const guild = await createGuild()
@@ -192,6 +210,61 @@ describe('recordIncomingMessage', () => {
     expect(mentioned.map((row) => row.mentionedDiscordUserId)).toEqual(
       [pinged, alsoPinged].sort()
     )
+  })
+
+  it('records what an alert message says in its embeds and attachments rather than in its text', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+
+    const result = await fromSuccess(recordIncomingMessage)(
+      {
+        attachments: [
+          {
+            filename: 'stack-trace.txt',
+            size: 4096,
+            url: 'https://cdn.example.test/stack-trace.txt',
+          },
+        ],
+        author: observedAuthor(),
+        channel: observedChannel(),
+        content: '',
+        discordCreatedAt: '2026-07-30T10:00:00.000Z',
+        discordMessageId: randomUUID(),
+        embeds: [
+          {
+            authorName: 'Checkout service',
+            description: 'TypeError: cannot read property id of undefined',
+            fields: [
+              { name: 'Environment', value: 'production' },
+              { name: 'Events', value: '18 in the last hour' },
+            ],
+            title: 'New issue: checkout crashes on empty carts',
+            url: 'https://alerts.example.test/issues/4821',
+          },
+        ],
+        mentionedDiscordUserIds: [],
+      },
+      context
+    )
+
+    const revisions = await messageRevisionsOf(result.messageId)
+
+    expect(revisions[0].content).toBe('')
+    expect(await embedsOf(revisions[0].id)).toEqual([
+      {
+        content:
+          'Checkout service\nNew issue: checkout crashes on empty carts (https://alerts.example.test/issues/4821)\nTypeError: cannot read property id of undefined\nEnvironment: production\nEvents: 18 in the last hour',
+        position: 0,
+      },
+    ])
+    expect(await attachmentsOf(revisions[0].id)).toEqual([
+      {
+        filename: 'stack-trace.txt',
+        position: 0,
+        size: 4096,
+        url: 'https://cdn.example.test/stack-trace.txt',
+      },
+    ])
   })
 
   it('records no mention when Discord says the message pinged nobody', async () => {
@@ -407,6 +480,84 @@ describe('recordMessageEdit', () => {
       )
     ).toEqual([pinged])
     expect(await mentionedUserIdsOf(second.id)).toHaveLength(0)
+  })
+
+  it('attaches the embeds and attachments Discord stamped on the edit to the new revision', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      content: 'the alert before it escalated',
+    })
+
+    await fromSuccess(recordMessageEdit)(
+      {
+        attachments: [
+          {
+            filename: 'incident.pdf',
+            size: 91234,
+            url: 'https://cdn.example.test/incident.pdf',
+          },
+        ],
+        content: '',
+        discordMessageId: message.discordMessageId,
+        embeds: [
+          { description: 'Paging the on-call engineer', title: 'Escalated' },
+        ],
+        mentionedDiscordUserIds: [],
+      },
+      context
+    )
+
+    const [first, second] = await messageRevisionsOf(message.id)
+
+    expect(await embedsOf(first.id)).toHaveLength(0)
+    expect(await embedsOf(second.id)).toEqual([
+      { content: 'Escalated\nPaging the on-call engineer', position: 0 },
+    ])
+    expect(await attachmentsOf(second.id)).toEqual([
+      {
+        filename: 'incident.pdf',
+        position: 0,
+        size: 91234,
+        url: 'https://cdn.example.test/incident.pdf',
+      },
+    ])
+  })
+
+  it('leaves the new revision without embeds when the edit took them away', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({
+      attachments: [
+        {
+          filename: 'chart.png',
+          size: 2048,
+          url: 'https://cdn.example.test/chart.png',
+        },
+      ],
+      channelId: channel.id,
+      content: 'have a look at this',
+      embeds: ['A preview of the dashboard'],
+    })
+
+    await fromSuccess(recordMessageEdit)(
+      {
+        content: 'never mind, the dashboard moved',
+        discordMessageId: message.discordMessageId,
+        mentionedDiscordUserIds: [],
+      },
+      context
+    )
+
+    const [first, second] = await messageRevisionsOf(message.id)
+
+    expect(await embedsOf(first.id)).toHaveLength(1)
+    expect(await attachmentsOf(first.id)).toHaveLength(1)
+    expect(await embedsOf(second.id)).toHaveLength(0)
+    expect(await attachmentsOf(second.id)).toHaveLength(0)
   })
 
   it('skips an edit of a message this deployment never ingested', async () => {
@@ -1285,6 +1436,60 @@ describe('runChannelBackfill', () => {
         ({ discordMessageId }) => discordMessageId === silent.discordMessageId
       )
     ).toHaveLength(0)
+  })
+
+  it('records the embeds and attachments the history it walked carried', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const alert = backfilledMessage({
+      attachments: [
+        {
+          filename: 'timeline.csv',
+          size: 733,
+          url: 'https://cdn.example.test/timeline.csv',
+        },
+      ],
+      content: '',
+      embeds: [
+        {
+          description: 'The queue drained on its own',
+          title: 'Backlog cleared',
+        },
+      ],
+    })
+    const history = fakeChannelHistory([[alert]])
+
+    await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      context
+    )
+
+    const stored = await db()
+      .selectFrom('messages')
+      .innerJoin(
+        'messageRevisions',
+        'messageRevisions.messageId',
+        'messages.id'
+      )
+      .select('messageRevisions.id')
+      .where('messages.discordMessageId', '=', alert.discordMessageId)
+      .executeTakeFirstOrThrow()
+
+    expect(await embedsOf(stored.id)).toEqual([
+      { content: 'Backlog cleared\nThe queue drained on its own', position: 0 },
+    ])
+    expect(await attachmentsOf(stored.id)).toEqual([
+      {
+        filename: 'timeline.csv',
+        position: 0,
+        size: 733,
+        url: 'https://cdn.example.test/timeline.csv',
+      },
+    ])
   })
 
   it('asks Discord for history after the newest message already stored', async () => {
