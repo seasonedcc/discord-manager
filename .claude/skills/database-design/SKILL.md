@@ -204,6 +204,8 @@ message_revisions
 
 When such an attribute can be **cleared after being set**, one table cannot say so without a sentinel value, and a sentinel is a lie the schema will keep telling. Model it as a reversible pair instead: `channel_topic_changes` carries the value, `channel_topic_clearings` carries nothing, and the newer of the two latest rows wins — a change row means the attribute is present, a clearing row or no rows at all means it is absent. Both tables get the usual `(parentId, createdAt desc)` index.
 
+A **set-valued attribute stamped per version of its parent** — the users a message pings, fixed by the vendor at each edit — attaches its zero-or-more rows to the *revision* row, not the parent: `message_revision_user_mentions` references `message_revisions`. The current set is simply the latest revision's rows, so "this version cleared the set" is zero rows under a new revision — no sentinel, no clearing table, and no latest-wins machinery beyond what the revisions already have. Keying such rows to the parent instead makes an emptied set indistinguishable from a set never observed. A unique constraint over `(revisionId, member)` is correct here — it states the set-membership fact and serves the reader's exact lookup.
+
 ## No `updatedAt` columns
 
 Never add `updatedAt` to any table, and never add `editedAt`. The event row's `createdAt` *is* the timestamp of the change. In a schema where rows are never updated, an `updatedAt` column is meaningless.
