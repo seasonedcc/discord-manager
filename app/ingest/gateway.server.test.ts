@@ -647,9 +647,11 @@ async function attachmentsOf(discordMessageId: string) {
 function deliveredReaction({
   emoji,
   message,
+  partial = false,
 }: {
   emoji: { animated?: boolean; id?: string; name: string }
   message: ReturnType<typeof deliveredMessage>
+  partial?: boolean
 }) {
   return {
     emoji: {
@@ -658,7 +660,7 @@ function deliveredReaction({
       name: emoji.name,
     },
     message,
-    partial: false,
+    partial,
   }
 }
 
@@ -1080,7 +1082,11 @@ describe('registerGatewayListeners', () => {
     await fire(
       handlers,
       Events.MessageReactionRemoveEmoji,
-      deliveredReaction({ emoji: { name: '🎉' }, message: delivered })
+      deliveredReaction({
+        emoji: { name: '🎉' },
+        message: delivered,
+        partial: true,
+      })
     )
 
     expect(await reactionRemovalsOf(await messageIdOf(delivered.id))).toEqual([

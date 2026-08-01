@@ -399,14 +399,12 @@ function registerGatewayListeners(
   })
 
   client.on(Events.MessageReactionRemoveEmoji, async (reaction) => {
-    const resolved = reaction.partial ? await reaction.fetch() : reaction
-
-    if (!resolved.message.guildId) return
+    if (!reaction.message.guildId) return
 
     await handleReactionsCleared({
-      discordGuildId: resolved.message.guildId,
-      discordMessageId: resolved.message.id,
-      emoji: observeEmoji(resolved.emoji),
+      discordGuildId: reaction.message.guildId,
+      discordMessageId: reaction.message.id,
+      emoji: observeEmoji(reaction.emoji),
     })
   })
 
