@@ -1,37 +1,87 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { openMcpSession } from './mcp-client'
 import { fixtures } from './seed'
+import { feed } from './seed/feed'
 import { test } from './spec'
+
+type Digest = {
+  messages: { messageId: string }[]
+}
 
 type Fetched = {
   message: {
     channelId: string
     messageId: string
     nextAction: string
+    reason?: string
     status: string
     summary: string
   }
 }
 
-const goneSummary = 'Discord no longer has this message — it was deleted there.'
+const goneSummary =
+  'Discord no longer has this message — it was deleted there, and the store has now recorded that.'
 const goneNextAction =
-  'Tell the owner it is gone, then read `channelId` back through messages_catch_up to see what stands in that channel now.'
+  'Tell the owner it is gone — it stops coming back in catch-ups, mentions and bookmarks from here on. Read `channelId` back through messages_catch_up to see what stands in that channel now.'
+const skipSummary =
+  'That message was deleted in Discord, so nothing was fetched.'
 
-test('fetching a message Discord no longer has says so instead of guessing', async () => {
-  const { messages } = fixtures()
+test('a message Discord no longer has says so, and stops coming back', async () => {
+  const { channels, clock, members } = fixtures()
   const session = await openMcpSession()
+  const postedAt = clock.at(50)
+  const doomed = await feed.postMessage({
+    author: members.omar,
+    channel: channels.engineering,
+    content: `The staging box is back up — ${randomUUID()}`,
+    discordCreatedAt: postedAt,
+  })
+  const timesDiscordWasAsked = () =>
+    session.discord.reads.filter(
+      ({ discordMessageId }) => discordMessageId === doomed.discordMessageId
+    ).length
+  const catchUp = () =>
+    session.call<Digest>('messages_catch_up', {
+      channelId: channels.engineering.id,
+      since: postedAt,
+    })
 
-  session.discord.forgetsMessage(messages.mention.discordMessageId)
+  const before = await catchUp()
+
+  assert.equal(
+    before.messages.filter(({ messageId }) => messageId === doomed.id).length,
+    1
+  )
+
+  session.discord.forgetsMessage(doomed.discordMessageId)
 
   const { message } = await session.call<Fetched>('messages_fetch', {
-    messageId: messages.mention.id,
+    messageId: doomed.id,
   })
 
   assert.equal(message.status, 'failed')
-  assert.equal(message.messageId, messages.mention.id)
-  assert.equal(message.channelId, messages.mention.channelId)
+  assert.equal(message.messageId, doomed.id)
+  assert.equal(message.channelId, doomed.channelId)
   assert.equal(message.summary, goneSummary)
   assert.equal(message.nextAction, goneNextAction)
   assert.equal(JSON.stringify(message).includes('Unknown Message'), false)
   assert.equal(JSON.stringify(message).includes('10008'), false)
+  assert.equal(timesDiscordWasAsked(), 1)
+
+  const after = await catchUp()
+
+  assert.equal(
+    after.messages.filter(({ messageId }) => messageId === doomed.id).length,
+    0
+  )
+
+  const again = await session.call<Fetched>('messages_fetch', {
+    messageId: doomed.id,
+  })
+
+  assert.equal(again.message.status, 'skipped')
+  assert.equal(again.message.reason, 'message_deleted')
+  assert.equal(again.message.summary, skipSummary)
+  assert.equal(timesDiscordWasAsked(), 1)
 })

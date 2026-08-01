@@ -42,6 +42,14 @@ function throwingTransport(error: Error) {
   return transport
 }
 
+async function deletionsOf(messageId: string) {
+  return await db()
+    .selectFrom('messageDeletions')
+    .selectAll()
+    .where('messageId', '=', messageId)
+    .execute()
+}
+
 function isRetrieved<Message extends { status: string }>(
   message: Message
 ): message is Extract<Message, { status: 'retrieved' }> {
@@ -209,24 +217,25 @@ describe('fetchMessage', () => {
     ])
   })
 
-  it('keeps the owner reacted when their reaction sits past the first hundred reactors', async () => {
+  it('says nothing about reactions when the transport could not read them', async () => {
     const { context, message } = await fetchGround()
-    const reactorDiscordUserIds = [
-      ...Array.from({ length: 149 }, () => snowflake()),
-      context.owner.discordUserId,
-    ]
-    const { transport } = answeringTransport({
-      reactions: [{ count: 150, emoji: '👍', reactorDiscordUserIds }],
+    const transport: MessageFetchTransport = async () => ({
+      attachments: [],
+      content: 'the wording it carries now',
+      embeds: [],
     })
 
     const answered = await fromSuccess(fetchMessage(transport))(
       { messageId: message.id },
       context
     )
+    const telemetry = telemetryOf(message.id)
 
-    expect(retrieved(answered.message).reactions).toEqual([
-      { count: 150, emoji: '👍', ownerReacted: true },
-    ])
+    expect(answered.message.status).toBe('retrieved')
+    expect(JSON.parse(JSON.stringify(answered.message))).not.toHaveProperty(
+      'reactions'
+    )
+    expect(await telemetry.retrievals()).toHaveLength(1)
   })
 
   it('never hands out the reactor ids it read to decide that', async () => {
@@ -290,6 +299,30 @@ describe('fetchMessage', () => {
     })
     expect(failures).toHaveLength(1)
     expect(failures[0].kind).toBe('gone')
+    expect(await deletionsOf(message.id)).toHaveLength(1)
+  })
+
+  it('leaves one deletion behind when the store recorded it while the fetch was out', async () => {
+    const { context, message } = await fetchGround()
+    const racingTransport: MessageFetchTransport = async () => {
+      await db()
+        .insertInto('messageDeletions')
+        .values({ id: newId(), messageId: message.id })
+        .execute()
+
+      throw new MessageFetchGoneError('Unknown Message')
+    }
+
+    const answered = await fromSuccess(fetchMessage(racingTransport))(
+      { messageId: message.id },
+      context
+    )
+
+    expect(answered.message).toMatchObject({
+      status: 'failed',
+      ...messageFetchFailureCopy.gone,
+    })
+    expect(await deletionsOf(message.id)).toHaveLength(1)
   })
 
   it('records a Discord that refused the read as a rejected failure', async () => {
@@ -309,6 +342,7 @@ describe('fetchMessage', () => {
     })
     expect(failures).toHaveLength(1)
     expect(failures[0].kind).toBe('rejected')
+    expect(await deletionsOf(message.id)).toHaveLength(0)
   })
 
   it('records a Discord that never answered as an unreachable failure', async () => {

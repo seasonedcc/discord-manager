@@ -435,20 +435,39 @@ store without touching the network.
   the REST client and translates `DiscordAPIError` into the domain's own error types, so
   the business layer stays vendor-free. The transport is duplicated rather than shared
   with sending — two small lazy clients beat one premature abstraction.
-- It never writes message data. The ingest daemon stays the only writer of messages,
-  revisions, embeds and attachments; a fetch appends telemetry and nothing else, so a live
-  read can never rewrite recorded history or resurrect content Discord deleted.
+- It writes no message *content*. The ingest daemon stays the only writer of messages,
+  revisions, embeds and attachments, so a live read can never rewrite recorded history or
+  resurrect content Discord deleted.
+- The one message event a fetch does append is a **deletion**. When Discord answers
+  `Unknown Message` for a message the store holds, the fetch has observed the same fact the
+  gateway's `MESSAGE_DELETE` carries, so the transaction that records the `gone` failure
+  also appends a `message_deletions` row unless one already stands. It is an observation,
+  not an inference, and it is what makes the `gone` next action true: readers exclude
+  deleted messages, so the message really does stop coming back. A duplicate raced in by the
+  daemon would be harmless anyway — existence is state — but the not-exists guard keeps the
+  history honest about how many deletions were observed.
 - A message the store already records as deleted is a **skip**, not a call: the store
   knows the answer, so asking Discord would burn a request to learn it, and skipping keeps
-  deleted content out of sight the way the rest of the product does.
+  deleted content out of sight the way the rest of the product does. A gone fetch therefore
+  answers `gone` once and `skipped` every time after.
 - Embeds come back structured and go through the same `renderEmbed`, so the live wording
   and the stored wording are the same projection. Empty renders drop out on both paths.
+  Embeds the poster suppressed are dropped, the way Discord itself stops showing them.
 - `ownerReacted` is derived, never read off the payload. Discord's `me` flag on a reaction
   means *the bot*, which is not the owner, so the transport walks
   `GET .../reactions/{emoji}` page by page (100 at a time, `after` until short) and the
-  business layer asks whether the owner's Discord user id is among the reactors. Custom
-  emoji are keyed the way Discord's own route wants them — `name:id`, `a:name:id` when
-  animated — and unicode emoji stay the glyph.
+  business layer asks whether the owner's Discord user id is among the reactors. A
+  reaction's `count` includes super reactions while that walk lists normal ones, so a
+  reaction with any burst count is walked a second time with `type=1` — otherwise an owner
+  who only super-reacted would read as not having reacted at all.
+- Custom emoji are keyed the way Discord's own route wants them — `name:id`, `a:name:id`
+  when animated — and unicode emoji stay the glyph. A custom emoji deleted from the server
+  comes back nameless; the route resolves it by id alone, so the walk sends a stand-in name
+  while the owner-facing emoji stays `:id`, never the string `null:id`.
+- The reactor walk is isolated from the read. A reaction listing Discord refuses cannot
+  void a message it already handed over: the fetch still records a retrieval and answers
+  `retrieved`, with `reactions` absent. Absent means *Discord would not say*; an empty array
+  means *no reaction stands* — two different answers that must not collapse into one.
 
 ## Scheduling
 

@@ -53,7 +53,7 @@ type MessageFetchTransport = (request: {
   attachments: ObservedAttachment[]
   content: string
   embeds: ObservedEmbed[]
-  reactions: ObservedReaction[]
+  reactions?: ObservedReaction[]
 }>
 
 class MessageFetchGoneError extends Error {}
@@ -68,9 +68,10 @@ const messageFetchRetrievalCopy = {
 
 const messageFetchFailureCopy = {
   gone: {
-    summary: 'Discord no longer has this message — it was deleted there.',
+    summary:
+      'Discord no longer has this message — it was deleted there, and the store has now recorded that.',
     nextAction:
-      'Tell the owner it is gone, then read `channelId` back through messages_catch_up to see what stands in that channel now.',
+      'Tell the owner it is gone — it stops coming back in catch-ups, mentions and bookmarks from here on. Read `channelId` back through messages_catch_up to see what stands in that channel now.',
   },
   rejected: {
     summary: 'Discord refused to hand this message over, so nothing was read.',

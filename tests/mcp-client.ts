@@ -28,12 +28,18 @@ const channelMessagePath =
 const messageReactionPath =
   /^\/v10\/channels\/(\d{17,20})\/messages\/(\d{17,20})\/reactions\/([^/]+)$/
 const unknownMessageCode = 10008
+const unknownChannelCode = 10003
 
 type RecordedSend = {
   content: string
   discordChannelId: string
   discordMessageId: string
   replyToDiscordMessageId: string | null
+}
+
+type RecordedRead = {
+  discordChannelId: string
+  discordMessageId: string
 }
 
 type LiveEmbed = {
@@ -48,14 +54,16 @@ type LiveEmbed = {
 
 type LiveReaction = {
   botReacted?: boolean
-  emoji: { animated?: boolean; id: string | null; name: string }
+  emoji: { animated?: boolean; id: string | null; name: string | null }
   reactorDiscordUserIds: string[]
+  superReactorDiscordUserIds?: string[]
 }
 
 type LiveMessage = {
   attachments?: { filename: string; size: number; url: string }[]
   content?: string
   embeds?: LiveEmbed[]
+  flags?: number
   reactions?: LiveReaction[]
 }
 
@@ -64,17 +72,19 @@ function answer(response: ServerResponse, status: number, body: unknown) {
   response.end(JSON.stringify(body))
 }
 
-function reactionKey({ animated, id, name }: LiveReaction['emoji']) {
-  if (!id) return name
+function reactionAnswersTo({ emoji }: LiveReaction, key: string) {
+  if (!emoji.id) return key === emoji.name
 
-  return animated ? `a:${name}:${id}` : `${name}:${id}`
+  return key.endsWith(`:${emoji.id}`)
 }
 
 async function startDiscordDouble() {
   const sends: RecordedSend[] = []
+  const reads: RecordedRead[] = []
   const refusedChannelIds = new Set<string>()
   const heldMessages = new Map<string, LiveMessage>()
   const forgottenMessageIds = new Set<string>()
+  const unlistableReactionMessageIds = new Set<string>()
 
   function serveSend(
     response: ServerResponse,
@@ -113,6 +123,8 @@ async function startDiscordDouble() {
     discordChannelId: string,
     discordMessageId: string
   ) {
+    reads.push({ discordChannelId, discordMessageId })
+
     if (forgottenMessageIds.has(discordMessageId)) {
       return answer(response, 404, {
         message: 'Unknown Message',
@@ -124,8 +136,8 @@ async function startDiscordDouble() {
 
     if (!held) {
       return answer(response, 404, {
-        message: `The Discord double holds no message ${discordMessageId}`,
-        code: 0,
+        message: 'Unknown Channel',
+        code: unknownChannelCode,
       })
     }
 
@@ -135,8 +147,15 @@ async function startDiscordDouble() {
       content: held.content ?? '',
       attachments: held.attachments ?? [],
       embeds: held.embeds ?? [],
+      flags: held.flags ?? 0,
       reactions: (held.reactions ?? []).map((reaction) => ({
-        count: reaction.reactorDiscordUserIds.length,
+        count:
+          reaction.reactorDiscordUserIds.length +
+          (reaction.superReactorDiscordUserIds ?? []).length,
+        count_details: {
+          burst: (reaction.superReactorDiscordUserIds ?? []).length,
+          normal: reaction.reactorDiscordUserIds.length,
+        },
         me: reaction.botReacted ?? false,
         emoji: reaction.emoji,
       })),
@@ -149,8 +168,12 @@ async function startDiscordDouble() {
     emoji: string,
     query: URLSearchParams
   ) {
+    if (unlistableReactionMessageIds.has(discordMessageId)) {
+      return answer(response, 403, { message: 'Missing Access', code: 50001 })
+    }
+
     const reaction = (heldMessages.get(discordMessageId)?.reactions ?? []).find(
-      (candidate) => reactionKey(candidate.emoji) === emoji
+      (candidate) => reactionAnswersTo(candidate, emoji)
     )
 
     if (!reaction) {
@@ -160,9 +183,13 @@ async function startDiscordDouble() {
       })
     }
 
+    const reactors =
+      query.get('type') === '1'
+        ? (reaction.superReactorDiscordUserIds ?? [])
+        : reaction.reactorDiscordUserIds
     const after = query.get('after')
     const limit = Number(query.get('limit') ?? '25')
-    const resumeAt = after ? reaction.reactorDiscordUserIds.indexOf(after) : -1
+    const resumeAt = after ? reactors.indexOf(after) : -1
 
     if (after && resumeAt === -1) {
       return answer(response, 400, {
@@ -176,9 +203,7 @@ async function startDiscordDouble() {
     answer(
       response,
       200,
-      reaction.reactorDiscordUserIds
-        .slice(start, start + limit)
-        .map((id) => ({ id }))
+      reactors.slice(start, start + limit).map((id) => ({ id }))
     )
   }
 
@@ -238,6 +263,10 @@ async function startDiscordDouble() {
     holdsMessage(discordMessageId: string, live: LiveMessage) {
       forgottenMessageIds.delete(discordMessageId)
       heldMessages.set(discordMessageId, live)
+    },
+    reads,
+    refuseReactorListingsOf(discordMessageId: string) {
+      unlistableReactionMessageIds.add(discordMessageId)
     },
     refuseSendsTo(discordChannelId: string) {
       refusedChannelIds.add(discordChannelId)

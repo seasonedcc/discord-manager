@@ -59,6 +59,10 @@ test('a live fetch brings back what Discord has now, not what the store kept', a
         },
         reactorDiscordUserIds: [members.omar.discordUserId],
       },
+      {
+        emoji: { id: '4100000000000000002', name: null },
+        reactorDiscordUserIds: [owner.discordUserId],
+      },
     ],
   })
 
@@ -89,6 +93,7 @@ test('a live fetch brings back what Discord has now, not what the store kept', a
       emoji: 'a:partyparrot:4100000000000000001',
       ownerReacted: false,
     },
+    { count: 1, emoji: ':4100000000000000002', ownerReacted: true },
   ])
   assert.equal(message.summary, retrievalSummary)
   assert.equal(message.nextAction, retrievalNextAction)

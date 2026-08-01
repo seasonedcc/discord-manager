@@ -1,4 +1,5 @@
 import { InputError, applySchema } from 'composable-functions'
+import type { Transaction } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -11,6 +12,7 @@ import {
   renderEmbed,
 } from '~/business/messages.common'
 import { db } from '~/db/db.server'
+import type { DB } from '~/db/types'
 import { newId } from '~/framework/db.server'
 
 const messagesContextSchema = ownerContextSchema.extend({
@@ -22,6 +24,28 @@ function failureKindOf(error: unknown): MessageFetchFailureKind {
   if (error instanceof MessageFetchRejectedError) return 'rejected'
 
   return 'unreachable'
+}
+
+async function recordObservedDeletion(trx: Transaction<DB>, messageId: string) {
+  await trx
+    .insertInto('messageDeletions')
+    .columns(['id', 'messageId'])
+    .expression((eb) =>
+      eb
+        .selectFrom('messages')
+        .select([eb.val(newId()).as('id'), 'messages.id as messageId'])
+        .where('messages.id', '=', messageId)
+        .where(({ exists, not, selectFrom }) =>
+          not(
+            exists(
+              selectFrom('messageDeletions')
+                .select('messageDeletions.id')
+                .whereRef('messageDeletions.messageId', '=', 'messages.id')
+            )
+          )
+        )
+    )
+    .execute()
 }
 
 function fetchMessage(transport: MessageFetchTransport) {
@@ -101,14 +125,23 @@ function fetchMessage(transport: MessageFetchTransport) {
       const kind = failureKindOf(error)
 
       await db()
-        .insertInto('messageFetchFailures')
-        .values({
-          id: newId(),
-          kind,
-          messageFetchRequestId: request.id,
-          errorMessage: error instanceof Error ? error.message : String(error),
+        .transaction()
+        .execute(async (trx) => {
+          await trx
+            .insertInto('messageFetchFailures')
+            .values({
+              id: newId(),
+              kind,
+              messageFetchRequestId: request.id,
+              errorMessage:
+                error instanceof Error ? error.message : String(error),
+            })
+            .execute()
+
+          if (kind === 'gone') {
+            await recordObservedDeletion(trx, message.messageId)
+          }
         })
-        .execute()
 
       return {
         message: {
@@ -136,7 +169,7 @@ function fetchMessage(transport: MessageFetchTransport) {
           return text ? [text] : []
         }),
         fetchedAt: retrieval.createdAt,
-        reactions: live.reactions.map(
+        reactions: live.reactions?.map(
           ({ count, emoji, reactorDiscordUserIds }) => ({
             count,
             emoji,
