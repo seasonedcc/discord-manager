@@ -455,7 +455,11 @@ function deliveredMessage({
 } = {}) {
   return {
     attachments: new Collection(
-      attachments.map((attachment) => [attachment.name, attachment])
+      attachments.map(({ name, size, url }) => {
+        const id = randomUUID()
+
+        return [id, { id, name, size, url }]
+      })
     ),
     embeds,
     flags: {
@@ -516,7 +520,7 @@ async function attachmentsOf(discordMessageId: string) {
 
   return await db()
     .selectFrom('messageRevisionAttachments')
-    .select(['filename', 'size', 'url'])
+    .select(['filename', 'position', 'size', 'url'])
     .where('messageRevisionId', '=', revision.id)
     .orderBy('position', 'asc')
     .execute()
@@ -714,8 +718,52 @@ describe('registerGatewayListeners', () => {
     expect(await attachmentsOf(delivered.id)).toEqual([
       {
         filename: 'latency.png',
+        position: 0,
         size: 51200,
         url: 'https://cdn.example.test/latency.png',
+      },
+    ])
+  })
+
+  it('records both files of a message that attached the same filename twice', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage({
+      attachments: [
+        {
+          name: 'screenshot.png',
+          size: 12000,
+          url: 'https://cdn.example.test/before/screenshot.png',
+        },
+        {
+          name: 'screenshot.png',
+          size: 13500,
+          url: 'https://cdn.example.test/after/screenshot.png',
+        },
+      ],
+      content: 'before and after',
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await attachmentsOf(delivered.id)).toEqual([
+      {
+        filename: 'screenshot.png',
+        position: 0,
+        size: 12000,
+        url: 'https://cdn.example.test/before/screenshot.png',
+      },
+      {
+        filename: 'screenshot.png',
+        position: 1,
+        size: 13500,
+        url: 'https://cdn.example.test/after/screenshot.png',
       },
     ])
   })
