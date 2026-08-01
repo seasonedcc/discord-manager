@@ -1,4 +1,6 @@
-function refusalForNonNumericIds({
+const discordSnowflakePattern = /^\d{17,20}$/
+
+function refusalForNonSnowflakeIds({
   guildId,
   ownerUserId,
 }: {
@@ -18,7 +20,9 @@ function refusalForNonNumericIds({
     },
   ]
 
-  const refused = configured.filter(({ value }) => !/^\d+$/.test(value))
+  const refused = configured.filter(
+    ({ value }) => !discordSnowflakePattern.test(value)
+  )
 
   if (refused.length === 0) return undefined
 
@@ -26,8 +30,9 @@ function refusalForNonNumericIds({
     .map(({ name, value }) => `${name} is set to "${value}"`)
     .join(' and ')
   const fix = refused.map(({ example }) => example).join(' and ')
+  const madeUp = refused.length === 1 ? 'a made-up id' : 'made-up ids'
 
-  return `This seed builds real Discord message links, so it only runs when DISCORD_GUILD_ID and DISCORD_OWNER_USER_ID hold digits, but ${holding}. Put made-up digits in .env — ${fix} — then seed it. Nothing was written.`
+  return `This seed builds real Discord message links, so it only runs when DISCORD_GUILD_ID and DISCORD_OWNER_USER_ID hold Discord ids — 17 to 20 digits, the length Discord hands out — but ${holding}. Put ${madeUp} of that length in .env — ${fix} — then seed it. Nothing was written.`
 }
 
-export { refusalForNonNumericIds }
+export { refusalForNonSnowflakeIds }

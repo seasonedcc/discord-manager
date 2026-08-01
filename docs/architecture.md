@@ -79,7 +79,7 @@ app/
                         export.ts, import.ts
     db.server.ts        the product's Kysely instance (makeDb<DB>())
     types.d.ts          generated — never hand-edited
-    dev-seed/           local seed, refused unless the ids are digits and the store is empty
+    dev-seed/           local seed, refused unless the ids are Discord-shaped and the store is empty
   env.server.ts     the product's typed env, plus the startup guard both entrypoints call
   mcp/
     tool.ts             McpTool shape
