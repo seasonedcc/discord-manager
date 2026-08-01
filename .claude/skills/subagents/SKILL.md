@@ -41,9 +41,17 @@ General shape that holds across repos: prefer **design (1 agent) → build coher
 
 Measured in this repo (issues #19/#20, 2026-07, opus/xhigh lanes):
 
-- **Full-feature build lane, one agent** (business function + MCP tool + migration + 13 unit tests + E2E spec + docs, gates until green): landed at 22% (215k). Same shape for a 500-line framework module + 18 tests + CLI proofs + docs: 18%. At this repo's feature size, one agent per feature is comfortably inside budget — the cross-repo overrun warning above starts biting at larger slices than these.
+- **Full-feature build lane, one agent** (business function + MCP tool + migration + 13 unit tests + E2E spec + docs, gates until green): landed at 22% (215k). Same shape for a 500-line framework module + 18 tests + CLI proofs + docs: 18%. At this repo's single-feature size one agent per feature is comfortably inside budget; see the #28/#29 entries for where that stops holding.
 - **Remediation lane on an existing branch** (a query redesign with spec rewrite, or a three-defect fix with 9 new tests): landed 15–19%; a small docs+guard fix lane: 9%.
 - **Review fan-out** (3 finder lenses over a ~700-line diff, one adversarial verifier per finding): peak agent 10–15%, 9–20 agents per audit.
+
+Measured in this repo (issues #28/#29, 2026-07/08, opus/xhigh build and remediation lanes, sonnet/xhigh verifiers):
+
+- **Full-feature build lane, one agent**, three measured on one effort: an ingest-capture slice (two sibling event tables, capture seams, three readers, tests, docs — +1383/−51 over 29 files) landed at **29%**; a new business domain with its own telemetry family and MCP tool (+1890/−48 over 22 files) at **27%**; a reactions slice spanning the gateway, the backfill and all three readers (+3129/−168 over 34 files) at **35%** — the first lane here to finish past the line. The shape says why: a build that touches the daemon *and* the backfill *and* every reader is two slices wearing one charter. Above roughly 2k added lines, or at the second subsystem, split it.
+- **Remediation lane on an existing branch** scales with the number of fixes, not the size of the branch: 7 fixes landed at **18%**, 8 at **24%**, 11 — including a gateway-handler redesign — at **34%**. Past ten fixes, split the remediation the way you would split a build. A test-only flake fix: **8%**.
+- **Review fan-out** (3 finder lenses over a lane diff, one adversarial verifier per finding), three of them: 18–23 agents each, finders **11–16%**, verifiers **3–8%**. Fan-out cost is flat in the diff size — the finders read the same diff whatever it contains.
+- **Release audit** over the merged mainline (3 read-only auditors with distinct lenses, then a verifier per finding): 16 agents, auditors **20–23%**, verifiers **4–7%**. An auditor reading a whole release costs about what a finder reading one lane costs, plus the mainline.
+- **Read-only design scout** answering a fixed question list across the tree: **7–11%**.
 
 ## Measure a live or finished agent's context
 
