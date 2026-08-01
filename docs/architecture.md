@@ -471,10 +471,14 @@ store without touching the network.
   `Unknown Message` for a message the store holds, the fetch has observed the same fact the
   gateway's `MESSAGE_DELETE` carries, so the transaction that records the `gone` failure
   also appends a `message_deletions` row unless one already stands. It is an observation,
-  not an inference, and it is what makes the `gone` next action true: readers exclude
-  deleted messages, so the message really does stop coming back. A duplicate raced in by the
-  daemon would be harmless anyway — existence is state — but the not-exists guard keeps the
-  history honest about how many deletions were observed.
+  not an inference, and it is what makes the `gone` next action true — but only as far as
+  the events go: the digest readers (`digestMessagesSince`, `listMentions`) exclude deleted
+  messages, so a catch-up and a mention listing really do stop showing it, while
+  `listBookmarks` deliberately keeps a bookmark on it and flags it `deletedUpstream` until
+  the owner resolves it. The next action says exactly that, because a bookmark the owner
+  never sees again is a bookmark they cannot close. A duplicate raced in by the daemon would
+  be harmless anyway — existence is state — but the not-exists guard keeps the history
+  honest about how many deletions were observed.
 - A message the store already records as deleted is a **skip**, not a call: the store
   knows the answer, so asking Discord would burn a request to learn it, and skipping keeps
   deleted content out of sight the way the rest of the product does. A gone fetch therefore
