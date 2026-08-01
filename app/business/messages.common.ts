@@ -159,6 +159,7 @@ function renderEmbed({
 
 function renderEmoji({ animated, id, name }: ObservedEmoji) {
   if (!id) return name
+  if (!name) return `:${id}`
 
   return animated ? `a:${name}:${id}` : `${name}:${id}`
 }

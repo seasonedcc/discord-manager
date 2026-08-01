@@ -494,9 +494,12 @@ store without touching the network.
   reaction with any burst count is walked a second time with `type=1` — otherwise an owner
   who only super-reacted would read as not having reacted at all.
 - Custom emoji are keyed the way Discord's own route wants them — `name:id`, `a:name:id`
-  when animated — and unicode emoji stay the glyph. A custom emoji deleted from the server
-  comes back nameless; the route resolves it by id alone, so the walk sends a stand-in name
-  while the owner-facing emoji stays `:id`, never the string `null:id`.
+  when animated — and unicode emoji stay the glyph. The fetch normalizes Discord's payload
+  into the same `{name, id, animated}` observation the gateway seam produces and renders it
+  through the one `renderEmoji`, so a live reaction and a stored one can never be spelled
+  differently. A custom emoji deleted from the server comes back nameless; the route
+  resolves it by id alone, so the walk sends a stand-in name while the owner-facing emoji
+  stays `:id`, never the string `null:id` and never `a::id`.
 - The reactor walk is isolated from the read. A reaction listing Discord refuses cannot
   void a message it already handed over: the fetch still records a retrieval and answers
   `retrieved`, with `reactions` absent. Absent means *Discord would not say*; an empty array
@@ -509,9 +512,13 @@ readers show what Discord shows. Three decisions carry the feature.
 - **One canonical emoji value.** `renderEmoji` in `app/business/messages.common.ts` turns
   the observed `{name, id, animated}` into the glyph or into `name:id` / `a:name:id`,
   exactly as `renderEmbed` renders an embed: structured in at the seam, rendered once in
-  the business layer, so the gateway and the backfill can never disagree about what an
-  emoji is called. Discord's percent-encoded `identifier` is deliberately not used — it is
-  a URL detail, unreadable in a digest.
+  the business layer, so the gateway, the backfill and the live fetch can never disagree
+  about what an emoji is called — there is one function, and every path normalizes its
+  payload into that observation rather than spelling the value itself. An emoji Discord has
+  forgotten the name of renders `:id` whether or not it is animated: a name-shaped slot
+  nobody can fill would only ever produce `a::id`, which names nothing. Discord's
+  percent-encoded `identifier` is deliberately not used — it is a URL detail, unreadable in
+  a digest.
 - **Standing reactions only.** The reader ranks the (message, emoji, reactor) triple's
   events newest-first and keeps the triples whose latest event is an addition, then groups
   by emoji for `count` and `ownerReacted`. The pills are ordered by when each emoji **first
