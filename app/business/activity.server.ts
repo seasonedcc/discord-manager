@@ -11,6 +11,10 @@ const activityContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
 })
 
+function sleep(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
 function latestRevisionOf(eb: ExpressionBuilder<DB, 'messages'>) {
   return eb
     .selectFrom('messageRevisions')
@@ -20,13 +24,15 @@ function latestRevisionOf(eb: ExpressionBuilder<DB, 'messages'>) {
     .limit(1)
 }
 
-const readActivitySince = applySchema(
-  activitySinceSchema,
-  activityContextSchema
-)(async ({ since }, context) => {
-  const cutoff = new Date(since).toISOString()
-  const { discordUserId, guildId } = context.owner
-
+async function countActivity({
+  cutoff,
+  discordUserId,
+  guildId,
+}: {
+  cutoff: string
+  discordUserId: string
+  guildId: string
+}) {
   const counted = await db()
     .with('newMessages', (qb) =>
       qb
@@ -126,21 +132,41 @@ const readActivitySince = applySchema(
     .executeTakeFirstOrThrow()
 
   return {
-    activity: {
-      messages: {
-        count: counted.messageCount,
-        newestAt: counted.messagesNewestAt,
-      },
-      mentions: {
-        count: counted.mentionCount,
-        newestAt: counted.mentionsNewestAt,
-      },
-      bookmarkAdditions: {
-        count: counted.bookmarkAdditionCount,
-        newestAt: counted.bookmarkAdditionsNewestAt,
-      },
+    messages: {
+      count: counted.messageCount,
+      newestAt: counted.messagesNewestAt,
+    },
+    mentions: {
+      count: counted.mentionCount,
+      newestAt: counted.mentionsNewestAt,
+    },
+    bookmarkAdditions: {
+      count: counted.bookmarkAdditionCount,
+      newestAt: counted.bookmarkAdditionsNewestAt,
     },
   }
+}
+
+const readActivitySince = applySchema(
+  activitySinceSchema,
+  activityContextSchema
+)(async ({ since, waitSeconds }, context) => {
+  const cutoff = new Date(since).toISOString()
+  const { discordUserId, guildId } = context.owner
+  const deadline = Date.now() + (waitSeconds ?? 0) * 1000
+
+  let activity = await countActivity({ cutoff, discordUserId, guildId })
+
+  while (
+    activity.messages.count === 0 &&
+    activity.bookmarkAdditions.count === 0 &&
+    Date.now() < deadline
+  ) {
+    await sleep(1000)
+    activity = await countActivity({ cutoff, discordUserId, guildId })
+  }
+
+  return { activity }
 })
 
 export { readActivitySince }

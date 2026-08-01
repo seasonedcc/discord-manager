@@ -47,6 +47,7 @@ test('ingestion status owns up to the channels no backfill has visited', async (
   assert.equal(ingestion.gateway.activity, 'receiving')
   assert.ok(ingestion.gateway.lastConnectedAt !== null)
   assert.ok(ingestion.gateway.lastDisconnectedAt !== null)
+  assert.ok(ingestion.gateway.lastDisconnectedAt >= clock.anchor)
   assert.ok(
     ingestion.gateway.lastDisconnectedAt <= ingestion.gateway.lastConnectedAt
   )

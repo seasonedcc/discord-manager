@@ -347,17 +347,26 @@ contains zero authorization — tools call business functions with the real cont
 
 ## MCP tools (v1)
 
-`channels_list`, `activity_since` (since), `messages_catch_up` (since + optional
-channel), `mentions_list`, `bookmarks_list` (optional limit, snoozed, reason filter),
-`bookmarks_add` (by message link + reason), `bookmarks_resolve`, `bookmarks_snooze`,
-`bookmarks_set_reason`, `bookmark_reasons_list`, `bookmark_reasons_add`,
-`bookmark_reasons_edit`, `bookmark_reasons_retire`, `messages_fetch` (by stored message
-id), `messages_send` (channel, content, optional reply, optional retry of an earlier
-request), `messages_send_status` (by request id), `ingestion_status`.
+`channels_list`, `activity_since` (since + optional waitSeconds), `messages_catch_up`
+(since + optional channel), `mentions_list`, `bookmarks_list` (optional limit, snoozed,
+reason filter), `bookmarks_add` (by message link + reason), `bookmarks_resolve`,
+`bookmarks_snooze`, `bookmarks_set_reason`, `bookmark_reasons_list`,
+`bookmark_reasons_add`, `bookmark_reasons_edit`, `bookmark_reasons_retire`,
+`messages_fetch` (by stored message id), `messages_send` (channel, content, optional
+reply, optional retry of an earlier request), `messages_send_status` (by request id),
+`ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the
 business functions' own exported schemas, dates cross the boundary as ISO strings. The
 parity test keeps the tool surface equal to the business surface.
+
+`activity_since` is the one tool that can block. Given `waitSeconds` it re-runs its
+counting query about once a second until a stream comes back non-zero or the deadline
+passes, and returns whatever that last check saw — a long poll, so a standing watch wakes
+within seconds of a message instead of costing the assistant a turn per polling interval,
+and needs no access to the database file. The cap of 55 seconds keeps a wait inside the
+one-minute request timeout MCP clients typically apply. Nothing about it is stateful: it
+is a read path, with no table and no event of its own.
 
 ## Ingestion design
 
@@ -381,6 +390,15 @@ Startup runs a backfill per readable channel from the newest stored message forw
 `backfill_runs` telemetry family with progress rows. A fresh identify (`shardReady`) and a
 resume (`shardResume`) both re-run the gap sweep; the sweep asks the scheduler to keep only
 one waiting copy of itself, so a reconnect storm queues one sweep rather than ten.
+
+Those same two events are the only ones that record a connection. `clientReady` fires
+alongside `shardReady` on every startup, so listening to both would pair every connection
+row and sweep the whole server twice. A drop is recorded from `shardReconnecting` and
+`shardDisconnect` together: discord.js raises the first for every close it intends to
+retry and the second only for the close codes it never will, so either one alone would
+leave the other's drops unrecorded. `shardError` records nothing — an error that breaks
+the link closes it too and therefore already arrives as one of those two, and an error
+that leaves the link standing is not a drop at all.
 
 ### Archived threads and the one-final-sweep rule
 
