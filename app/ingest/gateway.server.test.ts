@@ -1556,7 +1556,7 @@ describe('startGatewayHeartbeat', () => {
       .spyOn(globalThis, 'setInterval')
       .mockReturnValue(0 as unknown as NodeJS.Timeout)
 
-    startGatewayHeartbeat()()
+    startGatewayHeartbeat(() => true)()
 
     expect(startTimer).toHaveBeenCalledWith(
       expect.any(Function),
@@ -1567,6 +1567,42 @@ describe('startGatewayHeartbeat', () => {
     )
 
     startTimer.mockRestore()
+  })
+
+  it('stays silent while the link to Discord is down, and records once it is up', async () => {
+    type Beat = () => ReturnType<typeof handleGatewayHeartbeat> | undefined
+    let beat: Beat = () => undefined
+    const startTimer = vi.spyOn(globalThis, 'setInterval').mockImplementation(((
+      tick: Beat
+    ) => {
+      beat = tick
+
+      return 0 as unknown as NodeJS.Timeout
+    }) as unknown as typeof setInterval)
+
+    startGatewayHeartbeat(() => false)
+
+    const skipped = await beat()
+
+    startGatewayHeartbeat(() => true)
+
+    const recorded = await beat()
+
+    startTimer.mockRestore()
+
+    expect(skipped).toBeUndefined()
+
+    if (!recorded?.success) {
+      throw new Error('expected the heartbeat to be recorded')
+    }
+
+    expect(
+      await db()
+        .selectFrom('gatewayHeartbeats')
+        .selectAll()
+        .where('id', '=', recorded.data.gatewayHeartbeatId)
+        .execute()
+    ).toHaveLength(1)
   })
 })
 

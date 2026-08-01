@@ -311,9 +311,9 @@ async function handleGatewayHeartbeat() {
   return await recordGatewayHeartbeat({}, ownerContext())
 }
 
-function startGatewayHeartbeat() {
+function startGatewayHeartbeat(gatewayLinkIsUp: () => boolean) {
   const timer = setInterval(
-    handleGatewayHeartbeat,
+    () => (gatewayLinkIsUp() ? handleGatewayHeartbeat() : undefined),
     gatewayHeartbeatIntervalMinutes * 60_000
   )
 

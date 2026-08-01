@@ -31,7 +31,8 @@ Two processes share one SQLite database file (WAL mode makes this safe):
   startup backfill and the gap sweeps triggered on connect and resume. The liveness
   heartbeat runs on an interval timer of its own rather than on that queue: it is a local
   append needing neither retries nor dedupe, and a backfill busy for minutes is not a dead
-  gateway, so queueing it would let a long sweep read as silence.
+  gateway, so queueing it would let a long sweep read as silence. Each beat is gated on the
+  client actually being ready — a beat is a claim about the link, not about the process.
 - The MCP server — a stdio process the owner's AI client spawns per session (wired via
   `.mcp.json`). It only reads the store and calls Discord's REST API for sends.
 
@@ -229,7 +230,10 @@ skip-reason enum; no shared framework, no shared enums:
 - `gateway_connections` / `gateway_heartbeats` / `gateway_disconnections` — activity
   derivation reads `receiving | quiet | never` from the newest sign of life against a
   named silence-threshold constant, so a daemon that died without disconnecting goes
-  quiet instead of reading live forever.
+  quiet instead of reading live forever. A heartbeat is written only while the client is
+  ready, so it proves the *link* is up and not merely that the process is: a daemon whose
+  shard disconnected for good stops beating and goes quiet on the same threshold, exactly
+  as one that was killed does.
 - `message_fetch_requests` / `message_fetch_retrievals` / `message_fetch_failures` (with a
   `kind` of `gone`, `rejected` or `unreachable`) / `message_fetch_skips` (with a `reason`
   of `message_deleted`) — `messages_fetch` reading one message live. The family carries no
@@ -580,7 +584,9 @@ that starts the runner.
 Because that queue is serial, only work that can afford to wait behind a REST-heavy
 backfill belongs on it. The liveness heartbeat does not: it is `startGatewayHeartbeat` in
 the daemon wiring, a plain interval over a local insert, so ingestion health keeps reading
-`receiving` while a long sweep runs.
+`receiving` while a long sweep runs. The interval takes the liveness predicate the daemon
+gives it (`client.isReady()`) and skips the insert when the link is down — a skipped beat
+is silence, and silence is exactly what the quiet derivation reads.
 
 ## Testing
 

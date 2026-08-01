@@ -31,7 +31,7 @@ registerGatewayListeners(client, {
 
 scheduler.start()
 
-const stopGatewayHeartbeat = startGatewayHeartbeat()
+const stopGatewayHeartbeat = startGatewayHeartbeat(() => client.isReady())
 
 async function shutDown() {
   stopGatewayHeartbeat()
