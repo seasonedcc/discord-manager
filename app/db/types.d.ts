@@ -198,6 +198,33 @@ export interface MessageDeletions {
   messageId: string;
 }
 
+export interface MessageFetchFailures {
+  createdAt: Generated<string>;
+  errorMessage: string;
+  id: string;
+  kind: string;
+  messageFetchRequestId: string;
+}
+
+export interface MessageFetchRequests {
+  createdAt: Generated<string>;
+  id: string;
+  messageId: string;
+}
+
+export interface MessageFetchRetrievals {
+  createdAt: Generated<string>;
+  id: string;
+  messageFetchRequestId: string;
+}
+
+export interface MessageFetchSkips {
+  createdAt: Generated<string>;
+  id: string;
+  messageFetchRequestId: string;
+  reason: string;
+}
+
 export interface MessageRevisionAttachments {
   createdAt: Generated<string>;
   filename: string;
@@ -312,6 +339,10 @@ export interface DB {
   memberDetailRevisions: MemberDetailRevisions;
   members: Members;
   messageDeletions: MessageDeletions;
+  messageFetchFailures: MessageFetchFailures;
+  messageFetchRequests: MessageFetchRequests;
+  messageFetchRetrievals: MessageFetchRetrievals;
+  messageFetchSkips: MessageFetchSkips;
   messageRevisionAttachments: MessageRevisionAttachments;
   messageRevisionEmbeds: MessageRevisionEmbeds;
   messageRevisions: MessageRevisions;
