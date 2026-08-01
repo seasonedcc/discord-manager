@@ -5,6 +5,8 @@ description: Write Kysely queries and SQLite migrations following project conven
 
 # Kysely
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 These conventions govern every Kysely query and migration in this project. The database is SQLite through `better-sqlite3`, and the connection is built with `CamelCasePlugin`, which converts identifiers from camelCase to snake_case automatically.
 
 ## INSERT is the only write
