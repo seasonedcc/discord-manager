@@ -58,6 +58,7 @@ app/
     ingestion-status.server.ts gateway activity + backfill health derivations
     digests.server.ts          catch-up + mention triage derivations
     messages.common.ts         observed embed/attachment shapes + canonical embed rendering
+    messages.server.ts         one message read live from Discord, with its telemetry
     bookmarks.server.ts        add/remove/resolve/snooze + list derivation
     sending.server.ts          draft-and-send with its telemetry family
     jobs.server.ts             registered jobs array
@@ -212,6 +213,14 @@ skip-reason enum; no shared framework, no shared enums:
   derivation reads `receiving | quiet | never` from the newest sign of life against a
   named silence-threshold constant, so a daemon that died without disconnecting goes
   quiet instead of reading live forever.
+- `message_fetch_requests` / `message_fetch_retrievals` / `message_fetch_failures` (with a
+  `kind` of `gone`, `rejected` or `unreachable`) / `message_fetch_skips` (with a `reason`
+  of `message_deleted`) — `messages_fetch` reading one message live. The family carries no
+  silence window and no status reader: the operation is a single synchronous REST call
+  that returns its outcome inline, so no reading exists that a pending row could mislead.
+  `gone` is keyed on Discord's own `Unknown Message` code rather than on the 404 status,
+  because a bare 404 also covers a channel the bot can no longer see — a cause "it was
+  deleted there" would be a conclusion, not an observation.
 
 Owner-facing status is always mapped copy from exhaustive typed maps in `.common.ts`
 (summary + nextAction per reason), never raw vendor text — pinned by serialization tests.
@@ -317,9 +326,9 @@ contains zero authorization — tools call business functions with the real cont
 channel), `mentions_list`, `bookmarks_list` (optional limit, snoozed, reason filter),
 `bookmarks_add` (by message link + reason), `bookmarks_resolve`, `bookmarks_snooze`,
 `bookmarks_set_reason`, `bookmark_reasons_list`, `bookmark_reasons_add`,
-`bookmark_reasons_edit`, `bookmark_reasons_retire`, `messages_send` (channel, content,
-optional reply, optional retry of an earlier request), `messages_send_status` (by request
-id), `ingestion_status`.
+`bookmark_reasons_edit`, `bookmark_reasons_retire`, `messages_fetch` (by stored message
+id), `messages_send` (channel, content, optional reply, optional retry of an earlier
+request), `messages_send_status` (by request id), `ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the
 business functions' own exported schemas, dates cross the boundary as ISO strings. The
@@ -411,6 +420,54 @@ plain data, and written in the same transaction as the revision they belong to.
 - Capture is forward-only. The backfill cursor never revisits a message it already has, so
   messages ingested before this existed keep only their text. The README says so plainly
   rather than implying a rescan that does not exist.
+
+### The live escape hatch
+
+Three things the store cannot answer make `messages_fetch` necessary: an attachment URL
+Discord signed a day ago no longer opens, history ingested before embed capture carries
+none, and reaction facts only accumulate from the moment the daemon started watching.
+`fetchMessage` in `messages.server.ts` answers them by reading that one message from
+Discord's REST API — and its tool description and the README both steer routine reading
+back to `messages_catch_up`, `mentions_list` and `bookmarks_list`, which answer from the
+store without touching the network.
+
+- It is a transport-injected factory, exactly like `sendMessage`: the MCP tool file owns
+  the REST client and translates `DiscordAPIError` into the domain's own error types, so
+  the business layer stays vendor-free. The transport is duplicated rather than shared
+  with sending — two small lazy clients beat one premature abstraction.
+- It writes no message *content*. The ingest daemon stays the only writer of messages,
+  revisions, embeds and attachments, so a live read can never rewrite recorded history or
+  resurrect content Discord deleted.
+- The one message event a fetch does append is a **deletion**. When Discord answers
+  `Unknown Message` for a message the store holds, the fetch has observed the same fact the
+  gateway's `MESSAGE_DELETE` carries, so the transaction that records the `gone` failure
+  also appends a `message_deletions` row unless one already stands. It is an observation,
+  not an inference, and it is what makes the `gone` next action true: readers exclude
+  deleted messages, so the message really does stop coming back. A duplicate raced in by the
+  daemon would be harmless anyway — existence is state — but the not-exists guard keeps the
+  history honest about how many deletions were observed.
+- A message the store already records as deleted is a **skip**, not a call: the store
+  knows the answer, so asking Discord would burn a request to learn it, and skipping keeps
+  deleted content out of sight the way the rest of the product does. A gone fetch therefore
+  answers `gone` once and `skipped` every time after.
+- Embeds come back structured and go through the same `renderEmbed`, so the live wording
+  and the stored wording are the same projection. Empty renders drop out on both paths.
+  Embeds the poster suppressed are dropped, the way Discord itself stops showing them.
+- `ownerReacted` is derived, never read off the payload. Discord's `me` flag on a reaction
+  means *the bot*, which is not the owner, so the transport walks
+  `GET .../reactions/{emoji}` page by page (100 at a time, `after` until short) and the
+  business layer asks whether the owner's Discord user id is among the reactors. A
+  reaction's `count` includes super reactions while that walk lists normal ones, so a
+  reaction with any burst count is walked a second time with `type=1` — otherwise an owner
+  who only super-reacted would read as not having reacted at all.
+- Custom emoji are keyed the way Discord's own route wants them — `name:id`, `a:name:id`
+  when animated — and unicode emoji stay the glyph. A custom emoji deleted from the server
+  comes back nameless; the route resolves it by id alone, so the walk sends a stand-in name
+  while the owner-facing emoji stays `:id`, never the string `null:id`.
+- The reactor walk is isolated from the read. A reaction listing Discord refuses cannot
+  void a message it already handed over: the fetch still records a retrieval and answers
+  `retrieved`, with `reactions` absent. Absent means *Discord would not say*; an empty array
+  means *no reaction stands* — two different answers that must not collapse into one.
 
 ## Scheduling
 

@@ -17,6 +17,7 @@ import type {
   ObservedAttachment,
   ObservedEmbed,
 } from '~/business/messages.common'
+import { fetchMessage } from '~/business/messages.server'
 import { TransportRejectedError } from '~/business/sending.common'
 import { sendMessage } from '~/business/sending.server'
 import { db } from '~/db/db.server'
@@ -138,7 +139,7 @@ async function postMessage({
 }) {
   const discordMessageId = nextDiscordId()
 
-  await fromSuccess(recordIncomingMessage)(
+  const { messageId } = await fromSuccess(recordIncomingMessage)(
     {
       attachments,
       author,
@@ -152,7 +153,7 @@ async function postMessage({
     context
   )
 
-  return { discordMessageId }
+  return { discordMessageId, messageId }
 }
 
 guardTheConfiguredDiscordIds()
@@ -224,7 +225,7 @@ await postMessage({
   mentionedDiscordUserIds: [context.owner.discordUserId],
 })
 
-await postMessage({
+const alert = await postMessage({
   attachments: [
     {
       filename: 'checkout-errors.png',
@@ -312,8 +313,39 @@ const refusedSend = await fromSuccess(
   context
 )
 
+await fromSuccess(
+  fetchMessage(async () => ({
+    attachments: [
+      {
+        filename: 'checkout-errors.png',
+        size: 20480,
+        url: 'https://cdn.example.test/attachments/checkout-errors.png?signed=just-now',
+      },
+    ],
+    content: '',
+    embeds: [
+      {
+        authorName: 'Uptime Watch',
+        description: 'Checkout has been answering 200 again for ten minutes.',
+        title: 'Checkout recovered',
+        url: 'https://status.example.test/incidents/412',
+      },
+    ],
+    reactions: [
+      {
+        count: 2,
+        emoji: '🎉',
+        reactorDiscordUserIds: [
+          maya.discordUserId,
+          context.owner.discordUserId,
+        ],
+      },
+    ],
+  }))
+)({ messageId: alert.messageId }, context)
+
 await db().destroy()
 
 console.log(
-  `Seeded a development server: two channels, an archived thread, six messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you, one reply that pinged you without naming you, two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later — and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
+  `Seeded a development server: two channels, an archived thread, six messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you, one reply that pinged you without naming you, two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later — one send Discord refused, and one live fetch of that alert already recorded. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
 )

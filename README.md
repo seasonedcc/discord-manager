@@ -88,7 +88,7 @@ pnpm run db:migrate
 pnpm run db:seed:dev
 ```
 
-The seed only ever runs against a freshly created, empty database, and sending will fail with demo credentials — everything that reads works. It leaves one refused send behind so you can see `messages_send_status` offer a retry.
+The seed only ever runs against a freshly created, empty database. With demo credentials, everything that reads from the local store works — catch-ups, mentions, bookmarks, channels. Sending fails, and so does `messages_fetch`: both go to Discord live and need a real bot token and a real server. The seed leaves one refused send behind so you can see `messages_send_status` offer a retry.
 
 ## The tools
 
@@ -107,6 +107,7 @@ The seed only ever runs against a freshly created, empty database, and sending w
 | `bookmark_reasons_add` | A reason of your own, on top of the ones you started with |
 | `bookmark_reasons_edit` | A reason reworded, on every bookmark already carrying it |
 | `bookmark_reasons_retire` | A reason taken out of circulation, without disturbing the bookmarks that carry it |
+| `messages_fetch` | One message read live from Discord — the text, embeds, reactions and freshly signed attachment links it has right now — for when the stored copy has gone stale |
 | `messages_send` | A message posted to a channel as your bot, optionally as a reply, or as a guarded retry of an earlier send |
 | `messages_send_status` | Where a send ended up — delivered, skipped, failed, still on its way, or stalled when nothing was ever recorded — whether it can be retried, and every attempt already made at it |
 | `ingestion_status` | Whether the bot is receiving from Discord, and how far backfills have got |
@@ -116,8 +117,9 @@ The seed only ever runs against a freshly created, empty database, and sending w
 - **🔖 reactions are visible to the channel**, like any reaction. When you'd rather bookmark quietly, ask your assistant to `bookmarks_add` the message link — nothing appears in Discord.
 - **Every bookmark carries a reason**, so your assistant can triage by intent rather than guess. You start with six: *Answer later*, *To-do*, *Follow up*, *Read later*, *Reference*, and *Inbox*. Add, reword, and retire your own with the `bookmark_reasons_*` tools — retiring one leaves the bookmarks already carrying it untouched, still showing its name.
 - **A 🔖 reaction cannot carry intent**, so captures land in *Inbox* rather than have one invented for them. Ask your assistant to sort the inbox — *"what's in my bookmark inbox?"* — and it files each one with `bookmarks_set_reason`. Inbox is the one reason you cannot reword or retire, because it is where every unsorted capture has to land.
-- **Attachment links are fingerprints, not archives.** Discord signs the URL of every uploaded file and stops honouring it after about a day. The store keeps the filename, the size and that URL so your assistant can say what came with a message and open it while the link is fresh — nothing is ever downloaded, so an old bookmark names its attachment without being able to fetch it.
-- **Embeds are captured from the moment you start ingesting.** Messages the bot recorded before this — and any history it backfilled then — keep only their text, because the backfill walks forward from the newest message it already has and never revisits one. Everything ingested from now on carries its embeds and attachments.
+- **Attachment links are fingerprints, not archives.** Discord signs the URL of every uploaded file and stops honouring it after about a day. The store keeps the filename, the size and that URL so your assistant can say what came with a message and open it while the link is fresh — nothing is ever downloaded, so an old bookmark names its attachment without being able to fetch it. When the link has gone stale, `messages_fetch` asks Discord for that one message again and comes back with a freshly signed one.
+- **Embeds are captured from the moment you start ingesting.** Messages the bot recorded before this — and any history it backfilled then — keep only their text, because the backfill walks forward from the newest message it already has and never revisits one. Everything ingested from now on carries its embeds and attachments. For an older message, `messages_fetch` reads its embeds live rather than pretending they were never there.
+- **`messages_fetch` is the escape hatch, not the reading tool.** Catching up, listing mentions and listing bookmarks answer instantly out of the local store and never touch the network — that is where reading belongs. Reach for `messages_fetch` when you need what only Discord has right now: a fresh attachment link, the embeds of a message ingested before they were captured, or the reactions standing on a message — which emoji, how many of each, and whether you are among the people who reacted. It never tells you *who* the others are: reactor identities are read to answer that one question and never leave your machine. If Discord refuses to list them, the fetch still comes back with the message and simply says nothing about reactions, rather than claiming there are none.
 - **One deployment, one server, one owner.** The bot only records the server you configured, and only answers to you. Teammates clone the repo and create their own app — five minutes each, no shared infrastructure.
 - **This is a bot, not your account.** Automating a user account ("self-botting") violates Discord's Terms of Service and risks a ban; Discord Manager only ever acts through a bot you created, posting as itself.
 
