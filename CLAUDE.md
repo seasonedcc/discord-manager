@@ -129,6 +129,8 @@ When you need the user's input, ask in regular conversation, and keep working on
 
 Never edit permission settings to unblock yourself. A blocked action is either done differently, or asked for — authorization is the user's to give in conversation, and a standing allow rule is not a substitute for it.
 
+Merging is pre-authorized: when a task has passed every Definition of Done criterion except the closing self-improvement pass, merge its PR yourself with a merge commit — whether or not a `/goal` goal is running, and without waiting for a further go-ahead. The pre-authorization is exactly as wide as the Definition of Done: never merge work that is broken, unfinished, or short of a criterion, and never merge self-improvement PRs — the user reviews and merges those personally.
+
 When presenting a finding, bug, or proposal to the user, explain the problem first — what actually goes wrong, for whom, and why it matters — and only then the solution. A recommendation whose problem hasn't been established reads as noise and cannot be evaluated.
 
 ## Definition of Done
