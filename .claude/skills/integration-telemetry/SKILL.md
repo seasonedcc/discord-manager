@@ -5,7 +5,9 @@ description: The standard every Discord API operation follows — request and ou
 
 # Integration telemetry
 
-Every call this product makes to Discord is recorded, and every reading the owner sees is derived from those records. This is the standard those operations follow.
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
+Every call this product makes to Discord is recorded, and every reading the owner sees is derived from those records. This is the standard those operations follow. Read the canonical implementations too — `app/business/sending.server.ts` and `app/business/ingestion.server.ts` write these families, and `app/business/ingestion-status.server.ts` derives the readings — the code is the standard; this file is the rules it follows.
 
 Three families exist today, each with its own tables:
 
@@ -49,6 +51,8 @@ A request with no outcome must never read as running forever: without the stall 
 The cutoff is a named constant in the domain's `.common.ts` — never an interval inlined into a query — and one number serves every reading that speaks about that operation. `gateway` activity reads `receiving`, `quiet`, or `never` against its own named silence threshold; sends and backfills each own theirs. Where the length is not evident from the name, a comment beside it says why that long means "nothing is still working on this".
 
 The window has to outlast everything that could legitimately still be working on the request, including every retry the scheduler will perform. A window shorter than the operation's own retry span makes "nothing is retrying it" false while the work is still in flight. When an operation's retry behavior changes, its window is re-derived in the same change.
+
+The cap is enforced, not assumed: every Discord-calling job declares an explicit `maxAttempts`, and the registry test in `app/business/jobs.server.test.ts` both caps it and sums each job's whole backoff span to prove the retry chain finishes inside the stall window. That arithmetic is the point — a runner's default retry policy can keep retrying long past any window in this codebase, and the window's meaning holds only while the cap does.
 
 ## What the owner reads
 

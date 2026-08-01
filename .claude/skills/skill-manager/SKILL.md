@@ -5,6 +5,8 @@ description: Create, manage, and debug Claude Code Agent Skills. Use when creati
 
 # Skill Manager
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 Create and manage Agent Skills for Claude Code. Skills are modular capabilities packaged as folders containing instructions, scripts, and resources.
 
 **Skills are model-invoked**: Claude autonomously decides when to use them based on the request and the skill's description — unlike slash commands, which the user invokes explicitly.

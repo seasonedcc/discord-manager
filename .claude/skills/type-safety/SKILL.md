@@ -5,6 +5,8 @@ description: Write minimal, correct TypeScript — inference first, annotations 
 
 # Type Safety
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 TypeScript runs in strict mode and `any` is not allowed anywhere. Lean on inference: add an annotation only when removing it would lose type safety or cause a compile error. Before adding one, ask whether TypeScript would infer the correct type without it.
 
 ## Return types

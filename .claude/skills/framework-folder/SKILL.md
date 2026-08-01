@@ -5,6 +5,8 @@ description: Enforce the separation between reusable framework code and product 
 
 # Framework Folder
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 `app/framework/` contains **zero product-specific logic**. It stays self-contained enough to be extracted as a separate npm package at any moment — nothing in it may know that this product manages Discord.
 
 ## What belongs in `app/framework/`

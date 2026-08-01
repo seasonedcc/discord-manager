@@ -5,12 +5,14 @@ description: Codify lessons from a completed task into repo improvements — ski
 
 # Self-Improvement
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 The last step of every task: mine what just happened for durable lessons and codify the ones that earn it. This is the most valuable and most dangerous part of the process — a good instruction improves every future session; a bad one biases every future session. Generalize with the big picture in mind, and codify only with conviction.
 
 ## When to run
 
 - After every other Definition of Done criterion has passed, before declaring the task done.
-- For a multi-task effort, one pass over the whole arc when the effort concludes, with the full picture in view.
+- For a multi-task effort, one pass over the whole arc when the effort concludes, with the full picture in view. Individual tasks inside such an effort skip the per-task pass — their lessons are mined at the end, never piecemeal.
 - "No lessons worth codifying" is a valid and common outcome, especially for small tasks — state it explicitly and finish. Never manufacture a lesson to look productive.
 
 ## Source ranking
