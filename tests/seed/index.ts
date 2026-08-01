@@ -1,5 +1,6 @@
 import { ownerContext } from '~/business/auth.server'
 import { aChannelLeavesTheBotsView } from './a-channel-leaves-the-bots-view'
+import { aQuestionGetsAnsweredWithAReaction } from './a-question-gets-answered-with-a-reaction'
 import { aThreadArchivesWhileTheBotIsAway } from './a-thread-archives-while-the-bot-is-away'
 import { aWorkdayOfConversation } from './a-workday-of-conversation'
 import { anAlertArrivesAsAnEmbed } from './an-alert-arrives-as-an-embed'
@@ -35,6 +36,7 @@ async function feedEveryJourney() {
     channels,
     clock,
     members,
+    owner,
   })
   const messages = await aWorkdayOfConversation({
     channels,
@@ -43,6 +45,12 @@ async function feedEveryJourney() {
     owner,
   })
   const alert = await anAlertArrivesAsAnEmbed({
+    channels,
+    clock,
+    members,
+    owner,
+  })
+  const reactions = await aQuestionGetsAnsweredWithAReaction({
     channels,
     clock,
     members,
@@ -77,6 +85,7 @@ async function feedEveryJourney() {
     members,
     messages,
     owner,
+    reactions,
   }
 }
 
