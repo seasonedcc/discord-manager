@@ -5,6 +5,8 @@ description: Build business functions with the composable-functions library — 
 
 # Composable Functions
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 Every function in `app/business/` is a composable built with `composable-functions` (v5). This is what makes the layer callable identically from an MCP tool, a gateway handler, a scheduled job, a seed, and a test.
 
 ## Core types
@@ -307,6 +309,10 @@ const resolveBookmark = applySchema(resolveBookmarkSchema, bookmarksContextSchem
   }
 )
 ```
+
+## Complete documentation
+
+For the library's full API reference — including `mapParameters`, `trace`, `UnpackData`, custom error classes, and every combinator's exact signature — see [references/complete-docs.md](references/complete-docs.md). The reference is the library's own documentation, so it also covers helpers this product has no call site for.
 
 ## Best practices
 
