@@ -26,6 +26,92 @@ type ObservedEmbed = z.infer<typeof observedEmbedSchema>
 
 type ObservedAttachment = z.infer<typeof observedAttachmentSchema>
 
+type ObservedReaction = {
+  count: number
+  emoji: string
+  reactorDiscordUserIds: string[]
+}
+
+type MessageFetchFailureKind = 'gone' | 'rejected' | 'unreachable'
+
+type MessageFetchSkipReason = 'message_deleted'
+
+type MessageFetchOutcome =
+  | { status: 'retrieved' }
+  | { status: 'failed'; kind: MessageFetchFailureKind }
+  | { status: 'skipped'; reason: MessageFetchSkipReason }
+
+type MessageFetchGuidance = {
+  summary: string
+  nextAction: string
+}
+
+type MessageFetchTransport = (request: {
+  discordChannelId: string
+  discordMessageId: string
+}) => Promise<{
+  attachments: ObservedAttachment[]
+  content: string
+  embeds: ObservedEmbed[]
+  reactions: ObservedReaction[]
+}>
+
+class MessageFetchGoneError extends Error {}
+
+class MessageFetchRejectedError extends Error {}
+
+const messageFetchRetrievalCopy = {
+  summary: 'This is what Discord has for the message right now.',
+  nextAction:
+    'Read it to the owner — any attachment link in it is freshly signed and stops working after about a day.',
+} satisfies MessageFetchGuidance
+
+const messageFetchFailureCopy = {
+  gone: {
+    summary: 'Discord no longer has this message — it was deleted there.',
+    nextAction:
+      'Tell the owner it is gone, then read `channelId` back through messages_catch_up to see what stands in that channel now.',
+  },
+  rejected: {
+    summary: 'Discord refused to hand this message over, so nothing was read.',
+    nextAction:
+      'Open `jumpUrl` to find the channel, give the bot View Channel and Read Message History there, check DISCORD_BOT_TOKEN, then fetch it again.',
+  },
+  unreachable: {
+    summary: 'We could not reach Discord, so nothing was read.',
+    nextAction:
+      'Check this machine can reach Discord, then fetch it again — reading a message changes nothing there, so another attempt is safe.',
+  },
+} satisfies Record<MessageFetchFailureKind, MessageFetchGuidance>
+
+const messageFetchSkipCopy = {
+  message_deleted: {
+    summary: 'That message was deleted in Discord, so nothing was fetched.',
+    nextAction:
+      'Pick another message — read `channelId` back through messages_catch_up to see what stands in that channel now.',
+  },
+} satisfies Record<MessageFetchSkipReason, MessageFetchGuidance>
+
+function messageFetchGuidance(outcome: MessageFetchOutcome) {
+  switch (outcome.status) {
+    case 'failed':
+      return messageFetchFailureCopy[outcome.kind]
+    case 'skipped':
+      return messageFetchSkipCopy[outcome.reason]
+    default:
+      return messageFetchRetrievalCopy
+  }
+}
+
+const fetchMessageSchema = z.object({
+  messageId: z
+    .string()
+    .min(1)
+    .describe(
+      'The `messageId` from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake.'
+    ),
+})
+
 function renderEmbed({
   authorName,
   description,
@@ -52,10 +138,25 @@ function renderEmbed({
 }
 
 export {
+  MessageFetchGoneError,
+  MessageFetchRejectedError,
+  fetchMessageSchema,
   messageAttachmentsSchema,
   messageEmbedsSchema,
+  messageFetchFailureCopy,
+  messageFetchGuidance,
+  messageFetchRetrievalCopy,
+  messageFetchSkipCopy,
   observedAttachmentSchema,
   observedEmbedSchema,
   renderEmbed,
 }
-export type { ObservedAttachment, ObservedEmbed }
+export type {
+  MessageFetchFailureKind,
+  MessageFetchGuidance,
+  MessageFetchSkipReason,
+  MessageFetchTransport,
+  ObservedAttachment,
+  ObservedEmbed,
+  ObservedReaction,
+}

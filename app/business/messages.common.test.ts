@@ -1,5 +1,23 @@
 import { describe, expect, it } from '~/test/prelude'
-import { renderEmbed } from './messages.common'
+import type {
+  MessageFetchFailureKind,
+  MessageFetchSkipReason,
+} from './messages.common'
+import {
+  messageFetchFailureCopy,
+  messageFetchGuidance,
+  messageFetchRetrievalCopy,
+  messageFetchSkipCopy,
+  renderEmbed,
+} from './messages.common'
+
+const everyFailureKind = [
+  'gone',
+  'rejected',
+  'unreachable',
+] satisfies MessageFetchFailureKind[]
+
+const everySkipReason = ['message_deleted'] satisfies MessageFetchSkipReason[]
 
 describe('renderEmbed', () => {
   it('reads the embed in the order Discord shows it', () => {
@@ -61,5 +79,40 @@ describe('renderEmbed', () => {
 
   it('reads an embed carrying nothing renderable as empty text', () => {
     expect(renderEmbed({ description: '   ', fields: [] })).toBe('')
+  })
+})
+
+describe('messageFetchGuidance', () => {
+  it('speaks for every outcome a fetch can reach', () => {
+    expect([...everyFailureKind].sort()).toEqual(
+      Object.keys(messageFetchFailureCopy).sort()
+    )
+    expect([...everySkipReason].sort()).toEqual(
+      Object.keys(messageFetchSkipCopy).sort()
+    )
+  })
+
+  it('gives each outcome its own summary and a next action to take', () => {
+    const guidance = [
+      messageFetchGuidance({ status: 'retrieved' }),
+      ...everyFailureKind.map((kind) =>
+        messageFetchGuidance({ kind, status: 'failed' })
+      ),
+      ...everySkipReason.map((reason) =>
+        messageFetchGuidance({ reason, status: 'skipped' })
+      ),
+    ]
+
+    expect(guidance[0]).toEqual(messageFetchRetrievalCopy)
+    expect(guidance).toContainEqual(messageFetchFailureCopy.gone)
+    expect(guidance).toContainEqual(messageFetchSkipCopy.message_deleted)
+    expect(
+      guidance.filter(
+        ({ nextAction, summary }) => summary.trim() && nextAction.trim()
+      )
+    ).toHaveLength(guidance.length)
+    expect(new Set(guidance.map(({ summary }) => summary)).size).toBe(
+      guidance.length
+    )
   })
 })

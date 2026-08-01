@@ -23,6 +23,11 @@ const serverEnvironment = {
 }
 
 const channelMessagesPath = /^\/v10\/channels\/(\d{17,20})\/messages$/
+const channelMessagePath =
+  /^\/v10\/channels\/(\d{17,20})\/messages\/(\d{17,20})$/
+const messageReactionPath =
+  /^\/v10\/channels\/(\d{17,20})\/messages\/(\d{17,20})\/reactions\/([^/]+)$/
+const unknownMessageCode = 10008
 
 type RecordedSend = {
   content: string
@@ -31,59 +36,186 @@ type RecordedSend = {
   replyToDiscordMessageId: string | null
 }
 
+type LiveEmbed = {
+  author?: { name: string }
+  description?: string
+  fields?: { name: string; value: string }[]
+  footer?: { text: string }
+  timestamp?: string
+  title?: string
+  url?: string
+}
+
+type LiveReaction = {
+  botReacted?: boolean
+  emoji: { animated?: boolean; id: string | null; name: string }
+  reactorDiscordUserIds: string[]
+}
+
+type LiveMessage = {
+  attachments?: { filename: string; size: number; url: string }[]
+  content?: string
+  embeds?: LiveEmbed[]
+  reactions?: LiveReaction[]
+}
+
 function answer(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, { 'content-type': 'application/json' })
   response.end(JSON.stringify(body))
 }
 
+function reactionKey({ animated, id, name }: LiveReaction['emoji']) {
+  if (!id) return name
+
+  return animated ? `a:${name}:${id}` : `${name}:${id}`
+}
+
 async function startDiscordDouble() {
   const sends: RecordedSend[] = []
   const refusedChannelIds = new Set<string>()
+  const heldMessages = new Map<string, LiveMessage>()
+  const forgottenMessageIds = new Set<string>()
+
+  function serveSend(
+    response: ServerResponse,
+    discordChannelId: string,
+    body: Buffer
+  ) {
+    if (refusedChannelIds.has(discordChannelId)) {
+      return answer(response, 403, {
+        message: 'Missing Permissions',
+        code: 50013,
+      })
+    }
+
+    const sent = JSON.parse(body.toString('utf8')) as {
+      content: string
+      message_reference?: { message_id: string }
+    }
+    const discordMessageId = nextDiscordId()
+
+    sends.push({
+      content: sent.content,
+      discordChannelId,
+      discordMessageId,
+      replyToDiscordMessageId: sent.message_reference?.message_id ?? null,
+    })
+
+    answer(response, 200, {
+      id: discordMessageId,
+      channel_id: discordChannelId,
+      content: sent.content,
+    })
+  }
+
+  function serveMessage(
+    response: ServerResponse,
+    discordChannelId: string,
+    discordMessageId: string
+  ) {
+    if (forgottenMessageIds.has(discordMessageId)) {
+      return answer(response, 404, {
+        message: 'Unknown Message',
+        code: unknownMessageCode,
+      })
+    }
+
+    const held = heldMessages.get(discordMessageId)
+
+    if (!held) {
+      return answer(response, 404, {
+        message: `The Discord double holds no message ${discordMessageId}`,
+        code: 0,
+      })
+    }
+
+    answer(response, 200, {
+      id: discordMessageId,
+      channel_id: discordChannelId,
+      content: held.content ?? '',
+      attachments: held.attachments ?? [],
+      embeds: held.embeds ?? [],
+      reactions: (held.reactions ?? []).map((reaction) => ({
+        count: reaction.reactorDiscordUserIds.length,
+        me: reaction.botReacted ?? false,
+        emoji: reaction.emoji,
+      })),
+    })
+  }
+
+  function serveReactors(
+    response: ServerResponse,
+    discordMessageId: string,
+    emoji: string,
+    query: URLSearchParams
+  ) {
+    const reaction = (heldMessages.get(discordMessageId)?.reactions ?? []).find(
+      (candidate) => reactionKey(candidate.emoji) === emoji
+    )
+
+    if (!reaction) {
+      return answer(response, 404, {
+        message: `The Discord double holds no ${emoji} reaction on message ${discordMessageId}`,
+        code: 0,
+      })
+    }
+
+    const after = query.get('after')
+    const limit = Number(query.get('limit') ?? '25')
+    const resumeAt = after ? reaction.reactorDiscordUserIds.indexOf(after) : -1
+
+    if (after && resumeAt === -1) {
+      return answer(response, 400, {
+        message: `The Discord double has no reactor ${after} to page after`,
+        code: 0,
+      })
+    }
+
+    const start = resumeAt + 1
+
+    answer(
+      response,
+      200,
+      reaction.reactorDiscordUserIds
+        .slice(start, start + limit)
+        .map((id) => ({ id }))
+    )
+  }
 
   const server = createServer((request, response) => {
     const chunks: Buffer[] = []
 
     request.on('data', (chunk: Buffer) => chunks.push(chunk))
     request.on('end', () => {
-      const route =
-        request.method === 'POST'
-          ? (request.url ?? '').match(channelMessagesPath)
-          : null
+      const { pathname, searchParams } = new URL(
+        request.url ?? '',
+        'http://discord.double'
+      )
+      const posted =
+        request.method === 'POST' ? pathname.match(channelMessagesPath) : null
+      const read =
+        request.method === 'GET' ? pathname.match(channelMessagePath) : null
+      const reactors =
+        request.method === 'GET' ? pathname.match(messageReactionPath) : null
 
-      if (!route) {
-        answer(response, 404, {
-          message: `The Discord double serves no ${request.method} ${request.url}`,
-          code: 0,
-        })
-
-        return
+      if (posted) {
+        return serveSend(response, posted[1], Buffer.concat(chunks))
       }
 
-      const discordChannelId = route[1]
+      if (read) return serveMessage(response, read[1], read[2])
 
-      if (refusedChannelIds.has(discordChannelId)) {
-        answer(response, 403, { message: 'Missing Permissions', code: 50013 })
-
-        return
+      if (reactors) {
+        return serveReactors(
+          response,
+          reactors[2],
+          decodeURIComponent(reactors[3]),
+          searchParams
+        )
       }
 
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
-        content: string
-        message_reference?: { message_id: string }
-      }
-      const discordMessageId = nextDiscordId()
-
-      sends.push({
-        content: body.content,
-        discordChannelId,
-        discordMessageId,
-        replyToDiscordMessageId: body.message_reference?.message_id ?? null,
-      })
-
-      answer(response, 200, {
-        id: discordMessageId,
-        channel_id: discordChannelId,
-        content: body.content,
+      answer(response, 404, {
+        message: `The Discord double serves no ${request.method} ${request.url}`,
+        code: 0,
       })
     })
   })
@@ -99,6 +231,14 @@ async function startDiscordDouble() {
       refusedChannelIds.delete(discordChannelId)
     },
     baseUrl: `http://127.0.0.1:${port}`,
+    forgetsMessage(discordMessageId: string) {
+      heldMessages.delete(discordMessageId)
+      forgottenMessageIds.add(discordMessageId)
+    },
+    holdsMessage(discordMessageId: string, live: LiveMessage) {
+      forgottenMessageIds.delete(discordMessageId)
+      heldMessages.set(discordMessageId, live)
+    },
     refuseSendsTo(discordChannelId: string) {
       refusedChannelIds.add(discordChannelId)
     },
