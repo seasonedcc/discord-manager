@@ -29,7 +29,7 @@ import {
 } from '~/business/sending.common'
 import { sendMessage } from '~/business/sending.server'
 import { db } from '~/db/db.server'
-import { refusalForNonNumericIds } from '~/db/dev-seed/configured-ids'
+import { refusalForNonSnowflakeIds } from '~/db/dev-seed/configured-ids'
 import {
   type ObservedReaction,
   handleReactionAdded,
@@ -83,7 +83,7 @@ async function applicationTables() {
 }
 
 function guardTheConfiguredDiscordIds() {
-  const refusal = refusalForNonNumericIds({
+  const refusal = refusalForNonSnowflakeIds({
     guildId: context.owner.guildId,
     ownerUserId: context.owner.discordUserId,
   })

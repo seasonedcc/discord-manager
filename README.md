@@ -84,7 +84,7 @@ Want to feel the product before touching the Developer Portal? Seed a demo store
 
 ```bash
 pnpm install
-cp .env.example .env    # any bot token; both Discord ids need made-up digits, e.g. 123456789012345678
+cp .env.example .env    # any bot token; both Discord ids can be made up, at Discord's own 17 to 20 digits, e.g. 123456789012345678
 pnpm run db:migrate
 pnpm run db:seed:dev
 ```
