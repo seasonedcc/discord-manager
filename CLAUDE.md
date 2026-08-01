@@ -41,9 +41,10 @@ pnpm run db:seed:dev            # Seed a freshly created, empty development data
 
 **Testing:**
 ```bash
-pnpm run test                   # Unit tests, then the end-to-end suite
+pnpm run test                   # Unit tests, the end-to-end suite, then the dev-seed coverage gate
 pnpm run test:unit              # Vitest against a throwaway SQLite database
 pnpm run test:e2e               # Behavior specs driving the real MCP server over stdio
+pnpm run test:seed-coverage     # Every tool answers with demo state from a freshly dev-seeded store
 ```
 
 Never hand-edit `app/db/types.d.ts` — it is generated. Write migration column names in camelCase; the Kysely `CamelCasePlugin` converts them to snake_case at compile time, and snake_case appears only inside raw SQL. Unless a migration is genuinely irreversible, run `pnpm run db:migrate`, then `pnpm run db:rollback`, then `pnpm run db:migrate` again to prove both directions before finishing.
@@ -141,3 +142,4 @@ When presenting a finding, bug, or proposal to the user, explain the problem fir
 6. A task is not done if it has not passed a code-review audit (the built-in `/code-review`) based on your judgement. Do not take the subagent suggestions at face value. Loop until YOU are satisfied with the quality.
 7. A task is not done if you haven't exercised it end to end through a real MCP client session against the real server — calling the tools a user would call and reading what comes back.
 8. After every other criterion passes, load the `self-improvement` skill: derive the task's lessons and open self-improvement PRs for the ones worth codifying. Never merge these PRs — the user reviews and merges them personally. Finding nothing to codify is a valid outcome.
+9. A task is not done if it adds or changes a capability without shipping, in the same PR, the dev-seed state that makes it demonstrable through a real MCP session against a store built by `pnpm run db:seed:dev` — or, when the capability genuinely cannot answer without live Discord, a `declaredUnseedable` entry whose reason says so honestly. `pnpm run test:seed-coverage` enforces this: a newly registered tool fails the build until it either proves a demo-meaningful answer against the freshly seeded store or is declared unseedable. The demo store is what a self-hoster meets before they ever invite a bot, so a tool that answers empty there is a tool that does not exist to them.
