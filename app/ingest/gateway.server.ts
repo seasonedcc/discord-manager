@@ -1,4 +1,10 @@
-import type { Client, GuildBasedChannel, Message } from 'discord.js'
+import type {
+  Client,
+  Emoji,
+  GuildBasedChannel,
+  Message,
+  MessageReaction,
+} from 'discord.js'
 import { Events, MessageFlags } from 'discord.js'
 import type { z } from 'zod'
 import { ownerContext } from '~/business/auth.server'
@@ -18,6 +24,11 @@ import {
   recordMessageDeletion,
   recordMessageEdit,
   type recordMessageEditSchema,
+  recordMessageReaction,
+  recordMessageReactionClearing,
+  type recordMessageReactionClearingSchema,
+  recordMessageReactionRemoval,
+  type recordMessageReactionSchema,
   recordOwnerBookmarkReaction,
   recordOwnerBookmarkReactionRemoval,
 } from '~/business/ingestion.server'
@@ -39,9 +50,48 @@ type ObservedMessageReference = {
 type ObservedEditedMessage = ObservedMessageReference &
   z.input<typeof recordMessageEditSchema>
 
-type ObservedReaction = ObservedMessageReference & {
-  emoji: string
-  reactorDiscordUserId: string
+type ObservedReaction = ObservedMessageReference &
+  z.input<typeof recordMessageReactionSchema>
+
+type ObservedReactionClearing = ObservedMessageReference &
+  z.input<typeof recordMessageReactionClearingSchema>
+
+function observeEmoji(emoji: Emoji) {
+  return {
+    animated: emoji.animated ?? false,
+    id: emoji.id ?? undefined,
+    name: emoji.name ?? '',
+  }
+}
+
+const reactorPageSize = 100
+
+async function fetchReactorDiscordUserIds(reaction: MessageReaction) {
+  const reactorDiscordUserIds: string[] = []
+  let after: string | undefined
+
+  for (;;) {
+    const page = await reaction.users.fetch({ after, limit: reactorPageSize })
+    const newestReactorId = [...page.keys()].at(-1)
+
+    if (!newestReactorId || newestReactorId === after) {
+      return reactorDiscordUserIds
+    }
+
+    reactorDiscordUserIds.push(...page.keys())
+    after = newestReactorId
+
+    if (page.size < reactorPageSize) return reactorDiscordUserIds
+  }
+}
+
+function observeReactions(message: Message) {
+  return Promise.all(
+    message.reactions.cache.map(async (reaction) => ({
+      emoji: observeEmoji(reaction.emoji),
+      reactorDiscordUserIds: await fetchReactorDiscordUserIds(reaction),
+    }))
+  )
 }
 
 function observeEmbeds(message: Message) {
@@ -133,25 +183,41 @@ async function handleChannelRemoval(channel: ObservedChannel) {
 async function handleReactionAdded(reaction: ObservedReaction) {
   if (!belongsToTheOwnersGuild(reaction.discordGuildId)) return
 
-  return await recordOwnerBookmarkReaction(
-    {
-      discordMessageId: reaction.discordMessageId,
-      emoji: reaction.emoji,
-      reactorDiscordUserId: reaction.reactorDiscordUserId,
-    },
-    ownerContext()
-  )
+  const observed = {
+    discordMessageId: reaction.discordMessageId,
+    emoji: reaction.emoji,
+    reactorDiscordUserId: reaction.reactorDiscordUserId,
+  }
+
+  return {
+    bookmark: await recordOwnerBookmarkReaction(observed, ownerContext()),
+    reaction: await recordMessageReaction(observed, ownerContext()),
+  }
 }
 
 async function handleReactionRemoved(reaction: ObservedReaction) {
   if (!belongsToTheOwnersGuild(reaction.discordGuildId)) return
 
-  return await recordOwnerBookmarkReactionRemoval(
-    {
-      discordMessageId: reaction.discordMessageId,
-      emoji: reaction.emoji,
-      reactorDiscordUserId: reaction.reactorDiscordUserId,
-    },
+  const observed = {
+    discordMessageId: reaction.discordMessageId,
+    emoji: reaction.emoji,
+    reactorDiscordUserId: reaction.reactorDiscordUserId,
+  }
+
+  return {
+    bookmark: await recordOwnerBookmarkReactionRemoval(
+      observed,
+      ownerContext()
+    ),
+    reaction: await recordMessageReactionRemoval(observed, ownerContext()),
+  }
+}
+
+async function handleReactionsCleared(clearing: ObservedReactionClearing) {
+  if (!belongsToTheOwnersGuild(clearing.discordGuildId)) return
+
+  return await recordMessageReactionClearing(
+    { discordMessageId: clearing.discordMessageId, emoji: clearing.emoji },
     ownerContext()
   )
 }
@@ -305,7 +371,7 @@ function registerGatewayListeners(
     await handleReactionAdded({
       discordGuildId: resolved.message.guildId,
       discordMessageId: resolved.message.id,
-      emoji: resolved.emoji.name ?? '',
+      emoji: observeEmoji(resolved.emoji),
       reactorDiscordUserId: user.id,
     })
   })
@@ -318,8 +384,29 @@ function registerGatewayListeners(
     await handleReactionRemoved({
       discordGuildId: resolved.message.guildId,
       discordMessageId: resolved.message.id,
-      emoji: resolved.emoji.name ?? '',
+      emoji: observeEmoji(resolved.emoji),
       reactorDiscordUserId: user.id,
+    })
+  })
+
+  client.on(Events.MessageReactionRemoveAll, async (message) => {
+    if (!message.guildId) return
+
+    await handleReactionsCleared({
+      discordGuildId: message.guildId,
+      discordMessageId: message.id,
+    })
+  })
+
+  client.on(Events.MessageReactionRemoveEmoji, async (reaction) => {
+    const resolved = reaction.partial ? await reaction.fetch() : reaction
+
+    if (!resolved.message.guildId) return
+
+    await handleReactionsCleared({
+      discordGuildId: resolved.message.guildId,
+      discordMessageId: resolved.message.id,
+      emoji: observeEmoji(resolved.emoji),
     })
   })
 
@@ -362,8 +449,10 @@ export {
   handleMessageEdit,
   handleReactionAdded,
   handleReactionRemoved,
+  handleReactionsCleared,
   observeAttachments,
   observeEmbeds,
+  observeReactions,
   registerGatewayListeners,
 }
 export type {
@@ -372,4 +461,5 @@ export type {
   ObservedMessage,
   ObservedMessageReference,
   ObservedReaction,
+  ObservedReactionClearing,
 }

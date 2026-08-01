@@ -90,6 +90,21 @@ const parityExemptions: ParityExemption[] = [
       'Records an edit the gateway just delivered, called by the daemon on every messageUpdate event.',
   },
   {
+    functionName: 'ingestion.recordMessageReaction',
+    reason:
+      'Records a reaction the gateway just delivered, called by the daemon on every messageReactionAdd event. The owner reads the resulting summary on each message in messages_catch_up, mentions_list and bookmarks_list.',
+  },
+  {
+    functionName: 'ingestion.recordMessageReactionClearing',
+    reason:
+      'Records Discord clearing every reaction off a message, or every reaction of one emoji, called by the daemon on a messageReactionRemoveAll or messageReactionRemoveEmoji event.',
+  },
+  {
+    functionName: 'ingestion.recordMessageReactionRemoval',
+    reason:
+      'Records a reaction taken back in Discord, called by the daemon on every messageReactionRemove event. The owner sees it leave the summary on that message.',
+  },
+  {
     functionName: 'ingestion.recordOwnerBookmarkReaction',
     reason:
       'Turns a 🔖 reaction in Discord into a bookmark, called by the daemon on a reaction event. Bookmarking from an assistant is bookmarks_add.',

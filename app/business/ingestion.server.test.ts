@@ -25,6 +25,9 @@ import {
   recordIncomingMessage,
   recordMessageDeletion,
   recordMessageEdit,
+  recordMessageReaction,
+  recordMessageReactionClearing,
+  recordMessageReactionRemoval,
   recordOwnerBookmarkReaction,
   recordOwnerBookmarkReactionRemoval,
   runChannelBackfill,
@@ -72,6 +75,7 @@ function backfilledMessage(
     discordMessageId: snowflake(),
     embeds: [],
     mentionedDiscordUserIds: [],
+    reactions: [],
     ...overrides,
   }
 }
@@ -132,6 +136,26 @@ function embedsOf(messageRevisionId: string) {
     .select(['content', 'position'])
     .where('messageRevisionId', '=', messageRevisionId)
     .orderBy('position', 'asc')
+    .execute()
+}
+
+function reactionAdditionsOf(messageId: string) {
+  return db()
+    .selectFrom('messageReactionAdditions')
+    .select(['emoji', 'reactorDiscordUserId'])
+    .where('messageId', '=', messageId)
+    .orderBy('emoji', 'asc')
+    .orderBy('reactorDiscordUserId', 'asc')
+    .execute()
+}
+
+function reactionRemovalsOf(messageId: string) {
+  return db()
+    .selectFrom('messageReactionRemovals')
+    .select(['emoji', 'reactorDiscordUserId'])
+    .where('messageId', '=', messageId)
+    .orderBy('emoji', 'asc')
+    .orderBy('reactorDiscordUserId', 'asc')
     .execute()
 }
 
@@ -1188,7 +1212,7 @@ describe('recordOwnerBookmarkReaction', () => {
     const result = await fromSuccess(recordOwnerBookmarkReaction)(
       {
         discordMessageId: message.discordMessageId,
-        emoji: '🔖',
+        emoji: { name: '🔖' },
         reactorDiscordUserId: context.owner.discordUserId,
       },
       context
@@ -1215,7 +1239,7 @@ describe('recordOwnerBookmarkReaction', () => {
     const result = await fromSuccess(recordOwnerBookmarkReaction)(
       {
         discordMessageId: message.discordMessageId,
-        emoji: '🔖',
+        emoji: { name: '🔖' },
         reactorDiscordUserId: randomUUID(),
       },
       context
@@ -1244,7 +1268,7 @@ describe('recordOwnerBookmarkReaction', () => {
     const result = await fromSuccess(recordOwnerBookmarkReaction)(
       {
         discordMessageId: message.discordMessageId,
-        emoji: '🎉',
+        emoji: { name: '🎉' },
         reactorDiscordUserId: context.owner.discordUserId,
       },
       context
@@ -1271,7 +1295,7 @@ describe('recordOwnerBookmarkReaction', () => {
     const result = await fromSuccess(recordOwnerBookmarkReaction)(
       {
         discordMessageId: randomUUID(),
-        emoji: '🔖',
+        emoji: { name: '🔖' },
         reactorDiscordUserId: context.owner.discordUserId,
       },
       context
@@ -1294,7 +1318,7 @@ describe('recordOwnerBookmarkReactionRemoval', () => {
     await fromSuccess(recordOwnerBookmarkReaction)(
       {
         discordMessageId: message.discordMessageId,
-        emoji: '🔖',
+        emoji: { name: '🔖' },
         reactorDiscordUserId: context.owner.discordUserId,
       },
       context
@@ -1302,7 +1326,7 @@ describe('recordOwnerBookmarkReactionRemoval', () => {
     await fromSuccess(recordOwnerBookmarkReactionRemoval)(
       {
         discordMessageId: message.discordMessageId,
-        emoji: '🔖',
+        emoji: { name: '🔖' },
         reactorDiscordUserId: context.owner.discordUserId,
       },
       context
@@ -1327,7 +1351,7 @@ describe('recordOwnerBookmarkReactionRemoval', () => {
     const result = await fromSuccess(recordOwnerBookmarkReactionRemoval)(
       {
         discordMessageId: message.discordMessageId,
-        emoji: '🔖',
+        emoji: { name: '🔖' },
         reactorDiscordUserId: randomUUID(),
       },
       context
@@ -1345,6 +1369,329 @@ describe('recordOwnerBookmarkReactionRemoval', () => {
       .execute()
 
     expect(removals).toHaveLength(0)
+  })
+})
+
+describe('recordMessageReaction', () => {
+  it('records the reaction whoever left it and whichever emoji it is', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const teammate = snowflake()
+
+    const result = await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '👍' },
+        reactorDiscordUserId: teammate,
+      },
+      context
+    )
+
+    expect(result).toEqual({ messageId: message.id, outcome: 'recorded' })
+    expect(await reactionAdditionsOf(message.id)).toEqual([
+      { emoji: '👍', reactorDiscordUserId: teammate },
+    ])
+  })
+
+  it('keeps a row per reactor and a row per emoji', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const [agreeing, alsoAgreeing] = [snowflake(), snowflake()].sort()
+
+    for (const reaction of [
+      { emoji: { name: '👍' }, reactorDiscordUserId: agreeing },
+      { emoji: { name: '👍' }, reactorDiscordUserId: alsoAgreeing },
+      { emoji: { name: '🎉' }, reactorDiscordUserId: agreeing },
+    ]) {
+      await fromSuccess(recordMessageReaction)(
+        { discordMessageId: message.discordMessageId, ...reaction },
+        context
+      )
+    }
+
+    expect(await reactionAdditionsOf(message.id)).toEqual([
+      { emoji: '🎉', reactorDiscordUserId: agreeing },
+      { emoji: '👍', reactorDiscordUserId: agreeing },
+      { emoji: '👍', reactorDiscordUserId: alsoAgreeing },
+    ])
+  })
+
+  it('writes the custom emoji as its name and its id together', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const reactor = snowflake()
+
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { animated: true, id: '1234567890123456789', name: 'party' },
+        reactorDiscordUserId: reactor,
+      },
+      context
+    )
+
+    expect(await reactionAdditionsOf(message.id)).toEqual([
+      {
+        emoji: 'a:party:1234567890123456789',
+        reactorDiscordUserId: reactor,
+      },
+    ])
+  })
+
+  it('skips a reaction on a message this deployment never ingested', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+
+    const result = await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: snowflake(),
+        emoji: { name: '👍' },
+        reactorDiscordUserId: snowflake(),
+      },
+      context
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'message_not_ingested',
+    })
+  })
+
+  it('refuses a context that cannot read messages', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+
+    const result = await recordMessageReaction(
+      {
+        discordMessageId: snowflake(),
+        emoji: { name: '👍' },
+        reactorDiscordUserId: snowflake(),
+      },
+      { ...context, canReadMessages: false }
+    )
+
+    expect(result.success).toBe(false)
+    expect(isContextError(result.errors[0])).toBe(true)
+  })
+})
+
+describe('recordMessageReactionRemoval', () => {
+  it('records the reaction leaving the message', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const reactor = snowflake()
+
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '👀' },
+        reactorDiscordUserId: reactor,
+      },
+      context
+    )
+    const result = await fromSuccess(recordMessageReactionRemoval)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '👀' },
+        reactorDiscordUserId: reactor,
+      },
+      context
+    )
+
+    expect(result).toEqual({ messageId: message.id, outcome: 'recorded' })
+    expect(await reactionRemovalsOf(message.id)).toEqual([
+      { emoji: '👀', reactorDiscordUserId: reactor },
+    ])
+    expect(await reactionAdditionsOf(message.id)).toHaveLength(1)
+  })
+
+  it('skips a removal on a message this deployment never ingested', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+
+    const result = await fromSuccess(recordMessageReactionRemoval)(
+      {
+        discordMessageId: snowflake(),
+        emoji: { name: '👀' },
+        reactorDiscordUserId: snowflake(),
+      },
+      context
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'message_not_ingested',
+    })
+  })
+})
+
+describe('recordMessageReactionClearing', () => {
+  it('takes back every reaction still standing on the message', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const cheering = snowflake()
+    const agreeing = snowflake()
+
+    for (const reaction of [
+      { emoji: { name: '🎉' }, reactorDiscordUserId: cheering },
+      { emoji: { name: '👍' }, reactorDiscordUserId: agreeing },
+    ]) {
+      await fromSuccess(recordMessageReaction)(
+        { discordMessageId: message.discordMessageId, ...reaction },
+        context
+      )
+    }
+
+    const result = await fromSuccess(recordMessageReactionClearing)(
+      { discordMessageId: message.discordMessageId },
+      context
+    )
+
+    expect(result).toEqual({
+      clearedReactionCount: 2,
+      messageId: message.id,
+      outcome: 'recorded',
+    })
+    expect(await reactionRemovalsOf(message.id)).toEqual([
+      { emoji: '🎉', reactorDiscordUserId: cheering },
+      { emoji: '👍', reactorDiscordUserId: agreeing },
+    ])
+  })
+
+  it('takes back only the named emoji when Discord clears one of them', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const cheering = snowflake()
+    const agreeing = snowflake()
+
+    for (const reaction of [
+      { emoji: { name: '🎉' }, reactorDiscordUserId: cheering },
+      { emoji: { name: '👍' }, reactorDiscordUserId: agreeing },
+    ]) {
+      await fromSuccess(recordMessageReaction)(
+        { discordMessageId: message.discordMessageId, ...reaction },
+        context
+      )
+    }
+
+    const result = await fromSuccess(recordMessageReactionClearing)(
+      { discordMessageId: message.discordMessageId, emoji: { name: '👍' } },
+      context
+    )
+
+    expect(result).toEqual({
+      clearedReactionCount: 1,
+      messageId: message.id,
+      outcome: 'recorded',
+    })
+    expect(await reactionRemovalsOf(message.id)).toEqual([
+      { emoji: '👍', reactorDiscordUserId: agreeing },
+    ])
+  })
+
+  it('leaves a reaction already taken back out of the clearing', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const fickle = snowflake()
+
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '👀' },
+        reactorDiscordUserId: fickle,
+      },
+      context
+    )
+    await fromSuccess(recordMessageReactionRemoval)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '👀' },
+        reactorDiscordUserId: fickle,
+      },
+      context
+    )
+
+    const result = await fromSuccess(recordMessageReactionClearing)(
+      { discordMessageId: message.discordMessageId },
+      context
+    )
+
+    expect(result).toEqual({
+      clearedReactionCount: 0,
+      messageId: message.id,
+      outcome: 'recorded',
+    })
+    expect(await reactionRemovalsOf(message.id)).toHaveLength(1)
+  })
+
+  it('clears a reaction left again after the message was cleared once', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const persistent = snowflake()
+
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '🚀' },
+        reactorDiscordUserId: persistent,
+      },
+      context
+    )
+    await fromSuccess(recordMessageReactionClearing)(
+      { discordMessageId: message.discordMessageId },
+      context
+    )
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '🚀' },
+        reactorDiscordUserId: persistent,
+      },
+      context
+    )
+
+    const result = await fromSuccess(recordMessageReactionClearing)(
+      { discordMessageId: message.discordMessageId },
+      context
+    )
+
+    expect(result).toEqual({
+      clearedReactionCount: 1,
+      messageId: message.id,
+      outcome: 'recorded',
+    })
+    expect(await reactionRemovalsOf(message.id)).toHaveLength(2)
+  })
+
+  it('skips a clearing on a message this deployment never ingested', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+
+    const result = await fromSuccess(recordMessageReactionClearing)(
+      { discordMessageId: snowflake() },
+      context
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'message_not_ingested',
+    })
   })
 })
 
@@ -1516,6 +1863,80 @@ describe('runChannelBackfill', () => {
         url: 'https://cdn.example.test/timeline.csv',
       },
     ])
+  })
+
+  it('records the reactions the history it walked already carried', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const [agreeing, alsoAgreeing] = [snowflake(), snowflake()].sort()
+    const cheering = snowflake()
+    const reactedTo = backfilledMessage({
+      reactions: [
+        {
+          emoji: { animated: false, name: '👍' },
+          reactorDiscordUserIds: [agreeing, alsoAgreeing],
+        },
+        {
+          emoji: { animated: true, id: '1234567890123456789', name: 'party' },
+          reactorDiscordUserIds: [cheering],
+        },
+      ],
+    })
+    const history = fakeChannelHistory([[reactedTo, backfilledMessage()]])
+
+    await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      context
+    )
+
+    const stored = await db()
+      .selectFrom('messages')
+      .select('id')
+      .where('discordMessageId', '=', reactedTo.discordMessageId)
+      .executeTakeFirstOrThrow()
+
+    expect(await reactionAdditionsOf(stored.id)).toEqual([
+      { emoji: 'a:party:1234567890123456789', reactorDiscordUserId: cheering },
+      { emoji: '👍', reactorDiscordUserId: agreeing },
+      { emoji: '👍', reactorDiscordUserId: alsoAgreeing },
+    ])
+  })
+
+  it('leaves the reactions of a message it had already ingested alone', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const alreadyStored = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2026-07-30T08:00:00.000Z',
+    })
+    const history = fakeChannelHistory([
+      [
+        backfilledMessage({
+          discordMessageId: alreadyStored.discordMessageId,
+          reactions: [
+            {
+              emoji: { animated: false, name: '👍' },
+              reactorDiscordUserIds: [snowflake()],
+            },
+          ],
+        }),
+      ],
+    ])
+
+    await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      context
+    )
+
+    expect(await reactionAdditionsOf(alreadyStored.id)).toHaveLength(0)
   })
 
   it('asks Discord for history after the newest message already stored', async () => {

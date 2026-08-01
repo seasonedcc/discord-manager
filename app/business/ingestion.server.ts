@@ -22,7 +22,9 @@ import {
   type ObservedEmbed,
   observedAttachmentSchema,
   observedEmbedSchema,
+  observedEmojiSchema,
   renderEmbed,
+  renderEmoji,
 } from './messages.common'
 
 const pageLimitReachedMessage =
@@ -104,10 +106,15 @@ const recordMessageEditSchema = z.object({
   mentionedDiscordUserIds: mentionedDiscordUserIdsSchema,
 })
 
-const recordOwnerBookmarkReactionSchema = z.object({
+const recordMessageReactionSchema = z.object({
   discordMessageId: z.string().min(1),
-  emoji: z.string().min(1),
+  emoji: observedEmojiSchema,
   reactorDiscordUserId: z.string().min(1),
+})
+
+const recordMessageReactionClearingSchema = z.object({
+  discordMessageId: z.string().min(1),
+  emoji: observedEmojiSchema.optional(),
 })
 
 const runChannelBackfillSchema = z.object({
@@ -880,14 +887,14 @@ const reconcileThreadArchivings = applySchema(
 })
 
 const recordOwnerBookmarkReaction = applySchema(
-  recordOwnerBookmarkReactionSchema,
+  recordMessageReactionSchema,
   bookmarkReactionContextSchema
 )(async ({ discordMessageId, emoji, reactorDiscordUserId }, context) => {
   if (reactorDiscordUserId !== context.owner.discordUserId) {
     return skipped('reactor_is_not_the_owner')
   }
 
-  if (emoji !== bookmarkReactionEmoji) {
+  if (renderEmoji(emoji) !== bookmarkReactionEmoji) {
     return skipped('emoji_is_not_the_bookmark_reaction')
   }
 
@@ -907,14 +914,14 @@ const recordOwnerBookmarkReaction = applySchema(
 })
 
 const recordOwnerBookmarkReactionRemoval = applySchema(
-  recordOwnerBookmarkReactionSchema,
+  recordMessageReactionSchema,
   bookmarkReactionContextSchema
 )(async ({ discordMessageId, emoji, reactorDiscordUserId }, context) => {
   if (reactorDiscordUserId !== context.owner.discordUserId) {
     return skipped('reactor_is_not_the_owner')
   }
 
-  if (emoji !== bookmarkReactionEmoji) {
+  if (renderEmoji(emoji) !== bookmarkReactionEmoji) {
     return skipped('emoji_is_not_the_bookmark_reaction')
   }
 
@@ -931,6 +938,143 @@ const recordOwnerBookmarkReactionRemoval = applySchema(
     .execute()
 
   return { messageId: message.id, outcome: 'recorded' as const }
+})
+
+function standingReactionsOf(messageId: string) {
+  const reactionEvents = db()
+    .selectFrom('messageReactionAdditions')
+    .select([
+      'id',
+      'emoji',
+      'reactorDiscordUserId',
+      'createdAt',
+      sql<number>`1`.as('reacted'),
+    ])
+    .where('messageId', '=', messageId)
+    .unionAll(
+      db()
+        .selectFrom('messageReactionRemovals')
+        .select([
+          'id',
+          'emoji',
+          'reactorDiscordUserId',
+          'createdAt',
+          sql<number>`0`.as('reacted'),
+        ])
+        .where('messageId', '=', messageId)
+    )
+
+  const ranked = db()
+    .selectFrom(reactionEvents.as('reactionEvents'))
+    .select((eb) => [
+      'emoji',
+      'reactorDiscordUserId',
+      'reacted',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy(['emoji', 'reactorDiscordUserId'])
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('rankedReactionEvents')
+
+  return db()
+    .selectFrom(ranked)
+    .select(['emoji', 'reactorDiscordUserId'])
+    .where('rowNumber', '=', 1)
+    .where('reacted', '=', 1)
+    .orderBy('emoji', 'asc')
+    .orderBy('reactorDiscordUserId', 'asc')
+}
+
+const recordMessageReaction = applySchema(
+  recordMessageReactionSchema,
+  ingestionContextSchema
+)(async ({ discordMessageId, emoji, reactorDiscordUserId }, context) => {
+  const message = await findIngestedMessage(
+    discordMessageId,
+    context.owner.guildId
+  )
+
+  if (!message) return skipped('message_not_ingested')
+
+  await db()
+    .insertInto('messageReactionAdditions')
+    .values({
+      emoji: renderEmoji(emoji),
+      id: newId(),
+      messageId: message.id,
+      reactorDiscordUserId,
+    })
+    .execute()
+
+  return { messageId: message.id, outcome: 'recorded' as const }
+})
+
+const recordMessageReactionRemoval = applySchema(
+  recordMessageReactionSchema,
+  ingestionContextSchema
+)(async ({ discordMessageId, emoji, reactorDiscordUserId }, context) => {
+  const message = await findIngestedMessage(
+    discordMessageId,
+    context.owner.guildId
+  )
+
+  if (!message) return skipped('message_not_ingested')
+
+  await db()
+    .insertInto('messageReactionRemovals')
+    .values({
+      emoji: renderEmoji(emoji),
+      id: newId(),
+      messageId: message.id,
+      reactorDiscordUserId,
+    })
+    .execute()
+
+  return { messageId: message.id, outcome: 'recorded' as const }
+})
+
+const recordMessageReactionClearing = applySchema(
+  recordMessageReactionClearingSchema,
+  ingestionContextSchema
+)(async ({ discordMessageId, emoji }, context) => {
+  const message = await findIngestedMessage(
+    discordMessageId,
+    context.owner.guildId
+  )
+
+  if (!message) return skipped('message_not_ingested')
+
+  const standing = standingReactionsOf(message.id)
+  const cleared = await (emoji
+    ? standing.where('emoji', '=', renderEmoji(emoji))
+    : standing
+  ).execute()
+
+  if (cleared.length > 0) {
+    await db()
+      .insertInto('messageReactionRemovals')
+      .values(
+        cleared.map((reaction) => ({
+          emoji: reaction.emoji,
+          id: newId(),
+          messageId: message.id,
+          reactorDiscordUserId: reaction.reactorDiscordUserId,
+        }))
+      )
+      .execute()
+  }
+
+  return {
+    clearedReactionCount: cleared.length,
+    messageId: message.id,
+    outcome: 'recorded' as const,
+  }
 })
 
 function newestBackfillCursor(channelId: string) {
@@ -959,6 +1103,25 @@ function lastMessageOfPage(page: BackfilledMessage[]) {
   )[page.length - 1]
 }
 
+async function insertMessageReactions(
+  trx: Transaction<DB>,
+  messageId: string,
+  reactions: BackfilledMessage['reactions']
+) {
+  const rows = reactions.flatMap(({ emoji, reactorDiscordUserIds }) =>
+    reactorDiscordUserIds.map((reactorDiscordUserId) => ({
+      emoji: renderEmoji(emoji),
+      id: newId(),
+      messageId,
+      reactorDiscordUserId,
+    }))
+  )
+
+  if (rows.length === 0) return
+
+  await trx.insertInto('messageReactionAdditions').values(rows).execute()
+}
+
 async function storeBackfilledPage(
   channelId: string,
   page: BackfilledMessage[]
@@ -981,7 +1144,11 @@ async function storeBackfilledPage(
           mentionedDiscordUserIds: message.mentionedDiscordUserIds,
         })
 
-        if (stored.outcome === 'recorded') storedMessageCount += 1
+        if (stored.outcome !== 'recorded') continue
+
+        storedMessageCount += 1
+
+        await insertMessageReactions(trx, stored.messageId, message.reactions)
       }
 
       return storedMessageCount
@@ -1231,9 +1398,13 @@ export {
   recordMessageDeletionSchema,
   recordMessageEdit,
   recordMessageEditSchema,
+  recordMessageReaction,
+  recordMessageReactionClearing,
+  recordMessageReactionClearingSchema,
+  recordMessageReactionRemoval,
+  recordMessageReactionSchema,
   recordOwnerBookmarkReaction,
   recordOwnerBookmarkReactionRemoval,
-  recordOwnerBookmarkReactionSchema,
   runChannelBackfill,
   runChannelBackfillSchema,
 }

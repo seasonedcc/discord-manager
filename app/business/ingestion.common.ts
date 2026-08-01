@@ -1,4 +1,8 @@
-import type { ObservedAttachment, ObservedEmbed } from './messages.common'
+import type {
+  ObservedAttachment,
+  ObservedEmbed,
+  ObservedEmoji,
+} from './messages.common'
 
 type BackfilledMessage = {
   attachments: ObservedAttachment[]
@@ -12,6 +16,7 @@ type BackfilledMessage = {
   discordMessageId: string
   embeds: ObservedEmbed[]
   mentionedDiscordUserIds: string[]
+  reactions: { emoji: ObservedEmoji; reactorDiscordUserIds: string[] }[]
 }
 
 type FetchChannelHistory = (request: {

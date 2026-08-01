@@ -1,4 +1,4 @@
-import { fromSuccess } from 'composable-functions'
+import { type Result, fromSuccess } from 'composable-functions'
 import { ownerContext } from '~/business/auth.server'
 import type {
   BackfilledMessage,
@@ -14,14 +14,17 @@ import {
   recordIncomingMessage,
   recordMessageDeletion,
   recordMessageEdit,
-  recordOwnerBookmarkReaction,
-  recordOwnerBookmarkReactionRemoval,
   runChannelBackfill,
 } from '~/business/ingestion.server'
 import type {
   ObservedAttachment,
   ObservedEmbed,
 } from '~/business/messages.common'
+import {
+  handleReactionAdded,
+  handleReactionRemoved,
+  handleReactionsCleared,
+} from '~/ingest/gateway.server'
 import { nextDiscordId } from '../discord-ids'
 import { waitForTheStoreClockToTick } from './clock'
 
@@ -214,6 +217,26 @@ async function deleteMessage(message: SeededMessage) {
   return message
 }
 
+function recordedByTheGateway(
+  recorded: Record<string, Result<unknown>> | undefined
+) {
+  if (!recorded) {
+    throw new Error(
+      'The fake gateway feed aimed a reaction at a server this deployment does not manage'
+    )
+  }
+
+  for (const [what, result] of Object.entries(recorded)) {
+    if (!result.success) {
+      throw new Error(
+        `The fake gateway feed could not record the ${what} of a reaction: ${result.errors.map((error) => error.message).join(', ')}`
+      )
+    }
+  }
+
+  return recorded
+}
+
 async function reactToMessage({
   emoji,
   message,
@@ -223,14 +246,14 @@ async function reactToMessage({
   message: SeededMessage
   reactor: SeededMember
 }) {
-  return await withADistinctInstant(
-    fromSuccess(recordOwnerBookmarkReaction)(
-      {
+  return recordedByTheGateway(
+    await withADistinctInstant(
+      handleReactionAdded({
+        discordGuildId: ownerContext().owner.guildId,
         discordMessageId: message.discordMessageId,
-        emoji,
+        emoji: { name: emoji },
         reactorDiscordUserId: reactor.discordUserId,
-      },
-      ownerContext()
+      })
     )
   )
 }
@@ -244,16 +267,34 @@ async function undoReaction({
   message: SeededMessage
   reactor: SeededMember
 }) {
-  return await withADistinctInstant(
-    fromSuccess(recordOwnerBookmarkReactionRemoval)(
-      {
+  return recordedByTheGateway(
+    await withADistinctInstant(
+      handleReactionRemoved({
+        discordGuildId: ownerContext().owner.guildId,
         discordMessageId: message.discordMessageId,
-        emoji,
+        emoji: { name: emoji },
         reactorDiscordUserId: reactor.discordUserId,
-      },
-      ownerContext()
+      })
     )
   )
+}
+
+async function clearReactions({
+  emoji,
+  message,
+}: {
+  emoji?: string
+  message: SeededMessage
+}) {
+  const cleared = await withADistinctInstant(
+    handleReactionsCleared({
+      discordGuildId: ownerContext().owner.guildId,
+      discordMessageId: message.discordMessageId,
+      emoji: emoji === undefined ? undefined : { name: emoji },
+    })
+  )
+
+  return recordedByTheGateway(cleared && { clearing: cleared })
 }
 
 function draftHistory({
@@ -263,6 +304,7 @@ function draftHistory({
   discordCreatedAt,
   embeds = [],
   mentioning = [],
+  reactedTo = [],
 }: {
   attachments?: ObservedAttachment[]
   author: SeededMember
@@ -270,6 +312,7 @@ function draftHistory({
   discordCreatedAt: string
   embeds?: ObservedEmbed[]
   mentioning?: SeededMember[]
+  reactedTo?: { emoji: string; reactors: SeededMember[] }[]
 }): BackfilledMessage {
   return {
     attachments,
@@ -279,6 +322,10 @@ function draftHistory({
     discordMessageId: nextDiscordId(),
     embeds,
     mentionedDiscordUserIds: mentioning.map((member) => member.discordUserId),
+    reactions: reactedTo.map(({ emoji, reactors }) => ({
+      emoji: { animated: false, name: emoji },
+      reactorDiscordUserIds: reactors.map((member) => member.discordUserId),
+    })),
   }
 }
 
@@ -354,6 +401,7 @@ async function reconnectGateway({
 
 const feed = {
   backfillChannel,
+  clearReactions,
   connectGateway,
   deleteMessage,
   disconnectGateway,

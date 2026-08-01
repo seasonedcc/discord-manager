@@ -8,7 +8,9 @@ import {
   messageFetchGuidance,
   messageFetchRetrievalCopy,
   messageFetchSkipCopy,
+  observedEmojiSchema,
   renderEmbed,
+  renderEmoji,
 } from './messages.common'
 
 const everyFailureKind = [
@@ -114,5 +116,53 @@ describe('messageFetchGuidance', () => {
     expect(new Set(guidance.map(({ summary }) => summary)).size).toBe(
       guidance.length
     )
+  })
+})
+describe('renderEmoji', () => {
+  it('reads a standard emoji as the glyph Discord shows', () => {
+    expect(renderEmoji({ animated: false, name: '👍' })).toBe('👍')
+  })
+
+  it('keeps the name and the id of a custom emoji together', () => {
+    expect(
+      renderEmoji({
+        animated: false,
+        id: '1234567890123456789',
+        name: 'shipit',
+      })
+    ).toBe('shipit:1234567890123456789')
+  })
+
+  it('marks an animated custom emoji the way Discord writes it', () => {
+    expect(
+      renderEmoji({ animated: true, id: '1234567890123456789', name: 'party' })
+    ).toBe('a:party:1234567890123456789')
+  })
+
+  it('still names a custom emoji deleted from the server by its id', () => {
+    expect(
+      renderEmoji({ animated: false, id: '1234567890123456789', name: '' })
+    ).toBe(':1234567890123456789')
+  })
+
+  it('tells apart two custom emoji sharing a name', () => {
+    expect(
+      renderEmoji({ animated: false, id: '111111111111111111', name: 'shipit' })
+    ).not.toBe(
+      renderEmoji({ animated: false, id: '222222222222222222', name: 'shipit' })
+    )
+  })
+})
+
+describe('observedEmojiSchema', () => {
+  it('takes an emoji Discord named without an id', () => {
+    expect(observedEmojiSchema.parse({ name: '🎉' })).toEqual({
+      animated: false,
+      name: '🎉',
+    })
+  })
+
+  it('refuses an emoji carrying neither a name nor an id', () => {
+    expect(observedEmojiSchema.safeParse({ name: '' }).success).toBe(false)
   })
 })
