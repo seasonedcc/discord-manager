@@ -589,8 +589,10 @@ wrong, `messages_fetch` reads what Discord has right now.
 **Reactions are live-only, and the store says so.** The backfill cursor walks forward to
 messages the store has never seen, so a reaction added or taken back while the daemon was
 down, on a message already stored, is never recovered — the summary keeps showing what the
-daemon last saw. Only newly stored messages arrive with their current reactions. The README
-and the tool descriptions state this rather than promising completeness.
+daemon last saw. Only newly stored messages arrive with their current reactions, and only
+when Discord agreed to list who left them — a refused listing leaves that one message's
+reactions unread, recorded as such. The README and the tool descriptions state both rather
+than promising completeness.
 
 ## Scheduling
 
