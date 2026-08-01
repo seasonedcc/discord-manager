@@ -1920,6 +1920,78 @@ describe('runChannelBackfill', () => {
     expect(telemetry.completions[0].storedMessageCount).toBe(2)
   })
 
+  it('stores a message whose reactors Discord would not list, and records them as unread', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const cheered = snowflake()
+    const listed = backfilledMessage({
+      reactions: [
+        {
+          emoji: { animated: false, name: '🎉' },
+          reactorDiscordUserIds: [cheered],
+        },
+      ],
+    })
+    const unread = backfilledMessage({ reactions: undefined })
+    const history = fakeChannelHistory([[listed, unread]])
+
+    const result = await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      context
+    )
+
+    expect(result.outcome).toBe('completed')
+    expect(result.storedMessageCount).toBe(2)
+
+    const stored = await db()
+      .selectFrom('messages')
+      .select(['discordMessageId', 'id'])
+      .where('channelId', '=', channel.id)
+      .execute()
+
+    expect(
+      stored.map(({ discordMessageId }) => discordMessageId).sort()
+    ).toEqual([listed.discordMessageId, unread.discordMessageId].sort())
+
+    const unreadReactions = await db()
+      .selectFrom('backfillRunUnreadReactions')
+      .innerJoin(
+        'messages',
+        'messages.id',
+        'backfillRunUnreadReactions.messageId'
+      )
+      .select('messages.discordMessageId')
+      .where(
+        'backfillRunUnreadReactions.backfillRunId',
+        '=',
+        result.backfillRunId
+      )
+      .execute()
+
+    expect(unreadReactions).toEqual([
+      { discordMessageId: unread.discordMessageId },
+    ])
+
+    const reactions = await db()
+      .selectFrom('messageReactionAdditions')
+      .innerJoin(
+        'messages',
+        'messages.id',
+        'messageReactionAdditions.messageId'
+      )
+      .select(['messages.discordMessageId', 'messageReactionAdditions.emoji'])
+      .where('messages.channelId', '=', channel.id)
+      .execute()
+
+    expect(reactions).toEqual([
+      { discordMessageId: listed.discordMessageId, emoji: '🎉' },
+    ])
+  })
+
   it('records the mentions Discord stamped on the history it walked', async () => {
     const guild = await createGuild()
     const context = ownerContextFor(guild)

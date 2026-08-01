@@ -1,13 +1,10 @@
 import { existsSync } from 'node:fs'
 import { Client, GatewayIntentBits, Partials } from 'discord.js'
-import type { BackfilledMessage } from '~/business/ingestion.common'
 import { jobs } from '~/business/jobs.server'
 import { env, requireEnvironment } from '~/env.server'
 import { makeSchedulerRunner } from '~/framework/scheduler.server'
 import {
-  observeAttachments,
-  observeEmbeds,
-  observeReactions,
+  makeChannelHistoryFetcher,
   registerGatewayListeners,
   startGatewayHeartbeat,
 } from './gateway.server'
@@ -15,44 +12,6 @@ import {
 if (existsSync('.env')) process.loadEnvFile()
 
 requireEnvironment()
-
-function makeChannelHistoryFetcher(client: Client) {
-  return async ({
-    afterDiscordMessageId,
-    discordChannelId,
-    limit,
-  }: {
-    afterDiscordMessageId: string
-    discordChannelId: string
-    limit: number
-  }): Promise<BackfilledMessage[]> => {
-    const channel = await client.channels.fetch(discordChannelId)
-
-    if (!channel?.isTextBased()) return []
-
-    const messages = await channel.messages.fetch({
-      after: afterDiscordMessageId,
-      limit,
-    })
-
-    return await Promise.all(
-      messages.map(async (message) => ({
-        attachments: observeAttachments(message),
-        author: {
-          discordUserId: message.author.id,
-          displayName: message.author.displayName,
-          username: message.author.username,
-        },
-        content: message.content,
-        discordCreatedAt: message.createdAt.toISOString(),
-        discordMessageId: message.id,
-        embeds: observeEmbeds(message),
-        mentionedDiscordUserIds: [...message.mentions.users.keys()],
-        reactions: await observeReactions(message),
-      }))
-    )
-  }
-}
 
 const client = new Client({
   intents: [

@@ -154,6 +154,31 @@ function channelBackfillStates(guildId: string) {
         )
         .then('failed')
         .when(
+          eb.and([
+            eb.exists(
+              eb
+                .selectFrom('backfillRunCompletions')
+                .select('backfillRunCompletions.id')
+                .whereRef(
+                  'backfillRunCompletions.backfillRunId',
+                  '=',
+                  'newestRuns.id'
+                )
+            ),
+            eb.exists(
+              eb
+                .selectFrom('backfillRunUnreadReactions')
+                .select('backfillRunUnreadReactions.id')
+                .whereRef(
+                  'backfillRunUnreadReactions.backfillRunId',
+                  '=',
+                  'newestRuns.id'
+                )
+            ),
+          ])
+        )
+        .then('reactionsUnread')
+        .when(
           eb.exists(
             eb
               .selectFrom('backfillRunCompletions')
@@ -189,6 +214,7 @@ function worstChannelState({
   channels: {
     completed: number
     failed: number
+    reactionsUnread: number
     running: number
     stalled: number
   }
@@ -197,6 +223,7 @@ function worstChannelState({
   if (channels.failed > 0) return 'failed'
   if (channels.stalled > 0) return 'stalled'
   if (channels.running > 0 || neverRanChannelCount > 0) return 'running'
+  if (channels.reactionsUnread > 0) return 'reactionsUnread'
   if (channels.completed > 0) return 'completed'
 
   return 'never'
@@ -226,6 +253,7 @@ const readIngestionStatus = applySchema(
   const channels = {
     completed: channelsIn('completed').length,
     failed: channelsIn('failed').length,
+    reactionsUnread: channelsIn('reactionsUnread').length,
     running: channelsIn('running').length,
     stalled: channelsIn('stalled').length,
   }
@@ -247,6 +275,9 @@ const readIngestionStatus = applySchema(
         channels,
         neverRanChannelCount,
         failedChannelNames: channelsIn('failed').map(({ name }) => name),
+        reactionsUnreadChannelNames: channelsIn('reactionsUnread').map(
+          ({ name }) => name
+        ),
         fetchedMessageCount: states.reduce(
           (total, channel) => total + channel.fetchedMessageCount,
           0

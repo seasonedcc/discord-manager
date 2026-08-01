@@ -7,7 +7,12 @@ import {
 import { readIngestionStatus } from '~/business/ingestion-status.server'
 import { backfillStallThresholdMinutes } from '~/business/ingestion.common'
 import { newId } from '~/framework/db.server'
-import { createChannel, createGuild, ownerContext } from '~/test/fixtures'
+import {
+  createChannel,
+  createGuild,
+  createMessage,
+  ownerContext,
+} from '~/test/fixtures'
 import { db, describe, expect, it } from '~/test/prelude'
 
 function minutesAgo(minutes: number) {
@@ -130,9 +135,16 @@ describe('readIngestionStatus', () => {
 
     expect(ingestion.backfill).toEqual({
       status: 'completed',
-      channels: { completed: 1, failed: 0, running: 0, stalled: 0 },
+      channels: {
+        completed: 1,
+        failed: 0,
+        reactionsUnread: 0,
+        running: 0,
+        stalled: 0,
+      },
       failedChannelNames: [],
       neverRanChannelCount: 0,
+      reactionsUnreadChannelNames: [],
       fetchedMessageCount: 250,
       storedMessageCount: 90,
       lastRunStartedAt: run.createdAt,
@@ -314,6 +326,100 @@ describe('readIngestionStatus', () => {
     })
   })
 
+  it('names the channels whose finished backfill could not read some reactions', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({
+      guildId: guild.id,
+      name: 'design-review',
+    })
+    const message = await createMessage({ channelId: channel.id })
+    const run = await startBackfillRun(channel.id)
+
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: run.id,
+        fetchedMessageCount: 3,
+        storedMessageCount: 3,
+      })
+      .execute()
+    await db()
+      .insertInto('backfillRunUnreadReactions')
+      .values({ id: newId(), backfillRunId: run.id, messageId: message.id })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'reactionsUnread',
+      channels: {
+        completed: 0,
+        failed: 0,
+        reactionsUnread: 1,
+        running: 0,
+        stalled: 0,
+      },
+      reactionsUnreadChannelNames: ['design-review'],
+      ...backfillStatusCopy.reactionsUnread,
+    })
+  })
+
+  it('still speaks for the failed channel when another one only missed its reactions', async () => {
+    const guild = await createGuild()
+    const failing = await createChannel({ guildId: guild.id })
+    const partial = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: partial.id })
+    const failedRun = await startBackfillRun(failing.id)
+    const partialRun = await startBackfillRun(partial.id)
+
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        id: newId(),
+        backfillRunId: failedRun.id,
+        errorMessage: 'Missing Access',
+      })
+      .execute()
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: partialRun.id,
+        fetchedMessageCount: 4,
+        storedMessageCount: 4,
+      })
+      .execute()
+    await db()
+      .insertInto('backfillRunUnreadReactions')
+      .values({
+        id: newId(),
+        backfillRunId: partialRun.id,
+        messageId: message.id,
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'failed',
+      channels: {
+        completed: 0,
+        failed: 1,
+        reactionsUnread: 1,
+        running: 0,
+        stalled: 0,
+      },
+      ...backfillStatusCopy.failed,
+    })
+  })
+
   it('never repeats what Discord said about a failed backfill', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
@@ -404,9 +510,16 @@ describe('readIngestionStatus', () => {
 
     expect(ingestion.backfill).toEqual({
       status: 'never',
-      channels: { completed: 0, failed: 0, running: 0, stalled: 0 },
+      channels: {
+        completed: 0,
+        failed: 0,
+        reactionsUnread: 0,
+        running: 0,
+        stalled: 0,
+      },
       failedChannelNames: [],
       neverRanChannelCount: 0,
+      reactionsUnreadChannelNames: [],
       fetchedMessageCount: 0,
       storedMessageCount: 0,
       lastRunStartedAt: null,

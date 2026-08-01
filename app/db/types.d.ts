@@ -38,6 +38,13 @@ export interface BackfillRuns {
   id: string;
 }
 
+export interface BackfillRunUnreadReactions {
+  backfillRunId: string;
+  createdAt: Generated<string>;
+  id: string;
+  messageId: string;
+}
+
 export interface BookmarkAdditions {
   createdAt: Generated<string>;
   id: string;
@@ -330,6 +337,7 @@ export interface DB {
   backfillRunFailures: BackfillRunFailures;
   backfillRunProgress: BackfillRunProgress;
   backfillRuns: BackfillRuns;
+  backfillRunUnreadReactions: BackfillRunUnreadReactions;
   bookmarkAdditions: BookmarkAdditions;
   bookmarkReasonAssignments: BookmarkReasonAssignments;
   bookmarkReasonDetailRevisions: BookmarkReasonDetailRevisions;

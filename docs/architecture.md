@@ -221,10 +221,11 @@ skip-reason enum; no shared framework, no shared enums:
 
 - `message_send_requests` / `...reply_targets` / `...retries` / `...deliveries` /
   `...failures` (with a `kind` of `rejected` or `unreachable`) / `...skips` — MCP sends.
-- `backfill_runs` / `backfill_run_progress` / `...completions` / `...failures` — REST
-  history backfills. Each channel's newest run gives a state, and the reading rolls those
-  states up worst-first into counts, the names of the channels whose newest run failed,
-  and how many channels no run has ever visited.
+- `backfill_runs` / `backfill_run_progress` / `...completions` / `...failures` /
+  `...unread_reactions` — REST history backfills. Each channel's newest run gives a state,
+  and the reading rolls those states up worst-first into counts, the names of the channels
+  whose newest run failed, the names of those whose newest run stored messages Discord
+  would not list the reactors of, and how many channels no run has ever visited.
 - `gateway_connections` / `gateway_heartbeats` / `gateway_disconnections` — activity
   derivation reads `receiving | quiet | never` from the newest sign of life against a
   named silence-threshold constant, so a daemon that died without disconnecting goes
@@ -432,9 +433,27 @@ plain data, and written in the same transaction as the revision they belong to.
   counts for free, but the reactor ids need a paginated `reaction.users.fetch` per emoji —
   once for normal reactors and once for burst (super) ones, since Discord lists them
   separately and a super-reacted emoji would otherwise come back with nobody on it — so only
-  messages that actually have reactions pay, and a failure lands in `backfill_run_failures`
-  like any other backfill failure. It is the one reaction path that talks to Discord, and it
-  runs in the backfill job, never in a gateway handler.
+  messages that actually have reactions pay. It is the one reaction path that talks to
+  Discord, and it runs in the backfill job, never in a gateway handler.
+- **The reactor walk is isolated from the history it belongs to**, exactly as it is in the
+  live fetch: a reaction listing Discord refuses cannot void a message it already handed
+  over. `makeChannelHistoryFetcher` wraps each message's walk on its own, so one refusal
+  leaves that message's `reactions` **absent** and every sibling in the page intact. Without
+  that isolation a single refused listing rejected the whole `fetchChannelHistory` call: up
+  to a hundred already-retrieved messages were dropped, the scheduler burned its retries in
+  seconds, and — with the gateway link healthy, so nothing re-enqueued the sweep — the
+  channel's cursor stayed where it was until the daemon restarted.
+- Absent reactions are *unread*, never *none*. `storeBackfilledPage` stores the message and
+  appends a `backfill_run_unread_reactions` row naming it, so the store can tell "Discord
+  would not say" from "nobody reacted" — the same distinction `messages_fetch` draws by
+  omitting its `reactions` field. Those reactions are readable live at any time through
+  `messages_fetch`; the backfill walks forward and never goes back for them.
+- That row is the run's own outcome vocabulary, not a failure. A run that stored every
+  message it fetched did not fail, so writing `backfill_run_failures` would make
+  `ingestion_status` claim missing history and tell the owner to restart the daemon over
+  work that finished. A newest run carrying a completion **and** an unread-reactions row
+  reads `reactionsUnread` instead, with its own copy and its own
+  `reactionsUnreadChannelNames`, ranked below `running` and above `completed`.
 - Embeds cross into the business layer **structured** and are rendered once, on the way in,
   by `renderEmbed` in `app/business/messages.common.ts` — author, title with its link,
   description, each field as `name: value`, image, thumbnail, footer, timestamp, empty

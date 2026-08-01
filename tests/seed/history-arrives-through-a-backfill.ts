@@ -41,14 +41,21 @@ async function historyArrivesThroughABackfill({
     discordCreatedAt: clock.at(3),
     reactedTo: [{ emoji: '🔖', reactors: [owner] }],
   })
+  const reactedToOutOfSight = feed.draftHistory({
+    author: priya,
+    content: 'The retro notes are up — react if you want a follow-up.',
+    discordCreatedAt: clock.at(4),
+    reactorsDiscordRefusedToList: true,
+  })
 
   const walked = await feed.backfillChannel({
     channel,
-    history: [welcome, handbookNote, keptForLater],
+    history: [welcome, handbookNote, keptForLater, reactedToOutOfSight],
   })
 
   return {
     ...walked,
+    reactionsUnread: { channel, message: reactedToOutOfSight },
     bookmarkedInDiscord: {
       message: keptForLater,
       reactions: [{ emoji: '🔖', count: 1, ownerReacted: true }],

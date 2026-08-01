@@ -29,6 +29,7 @@ import {
   handleReactionAdded,
   handleReactionRemoved,
   handleReactionsCleared,
+  makeChannelHistoryFetcher,
   observeReactions,
   registerGatewayListeners,
   startGatewayHeartbeat,
@@ -1413,6 +1414,109 @@ describe('observeReactions', () => {
         reactorDiscordUserIds: [enthusiastic],
       },
     ])
+  })
+})
+
+describe('makeChannelHistoryFetcher', () => {
+  function fetchedMessage({
+    discordMessageId,
+    reactors,
+  }: {
+    discordMessageId: string
+    reactors: (() => Promise<Collection<string, { id: string }>>) | undefined
+  }) {
+    return {
+      attachments: new Collection(),
+      author: {
+        displayName: `display-name-${randomUUID()}`,
+        id: randomUUID(),
+        username: `username-${randomUUID()}`,
+      },
+      content: `content-${randomUUID()}`,
+      createdAt: new Date('2026-07-30T11:00:00.000Z'),
+      embeds: [],
+      flags: { has: () => false },
+      id: discordMessageId,
+      mentions: { users: new Collection() },
+      reactions: {
+        cache: reactors
+          ? new Collection([
+              [
+                '🎉',
+                {
+                  emoji: { animated: false, id: null, name: '🎉' },
+                  users: { fetch: reactors },
+                },
+              ],
+            ])
+          : new Collection(),
+      },
+    } as unknown as Message
+  }
+
+  function clientHolding(messages: Message[]) {
+    return {
+      channels: {
+        fetch: async () => ({
+          isTextBased: () => true,
+          messages: {
+            fetch: async () =>
+              new Collection(
+                messages.map((message) => [message.id, message] as const)
+              ),
+          },
+        }),
+      },
+    } as unknown as Client
+  }
+
+  it('keeps every message Discord handed over when it refuses to list one of their reactors', async () => {
+    const reactor = randomUUID()
+    const listed = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: async () => new Collection([[reactor, { id: reactor }]]),
+    })
+    const refused = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: async () => {
+        throw new Error('Missing Access')
+      },
+    })
+
+    const page = await makeChannelHistoryFetcher(
+      clientHolding([listed, refused])
+    )({
+      afterDiscordMessageId: '0',
+      discordChannelId: randomUUID(),
+      limit: 100,
+    })
+
+    expect(page.map(({ discordMessageId }) => discordMessageId)).toEqual([
+      listed.id,
+      refused.id,
+    ])
+    expect(page[0].reactions).toEqual([
+      {
+        emoji: { animated: false, id: undefined, name: '🎉' },
+        reactorDiscordUserIds: [reactor],
+      },
+    ])
+    expect(page[1].reactions).toBeUndefined()
+  })
+
+  it('tells a message with no reactions apart from one whose reactors it could not read', async () => {
+    const quiet = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: undefined,
+    })
+
+    const [observed] = await makeChannelHistoryFetcher(clientHolding([quiet]))({
+      afterDiscordMessageId: '0',
+      discordChannelId: randomUUID(),
+      limit: 100,
+    })
+
+    expect(observed.reactions).toEqual([])
   })
 })
 

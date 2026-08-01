@@ -305,6 +305,7 @@ function draftHistory({
   embeds = [],
   mentioning = [],
   reactedTo = [],
+  reactorsDiscordRefusedToList = false,
 }: {
   attachments?: ObservedAttachment[]
   author: SeededMember
@@ -313,6 +314,7 @@ function draftHistory({
   embeds?: ObservedEmbed[]
   mentioning?: SeededMember[]
   reactedTo?: { emoji: string; reactors: SeededMember[] }[]
+  reactorsDiscordRefusedToList?: boolean
 }): BackfilledMessage {
   return {
     attachments,
@@ -322,10 +324,12 @@ function draftHistory({
     discordMessageId: nextDiscordId(),
     embeds,
     mentionedDiscordUserIds: mentioning.map((member) => member.discordUserId),
-    reactions: reactedTo.map(({ emoji, reactors }) => ({
-      emoji: { animated: false, name: emoji },
-      reactorDiscordUserIds: reactors.map((member) => member.discordUserId),
-    })),
+    reactions: reactorsDiscordRefusedToList
+      ? undefined
+      : reactedTo.map(({ emoji, reactors }) => ({
+          emoji: { animated: false, name: emoji },
+          reactorDiscordUserIds: reactors.map((member) => member.discordUserId),
+        })),
   }
 }
 

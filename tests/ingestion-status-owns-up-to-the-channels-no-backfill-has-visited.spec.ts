@@ -9,6 +9,7 @@ type IngestionStatus = {
       channels: {
         completed: number
         failed: number
+        reactionsUnread: number
         running: number
         stalled: number
       }
@@ -17,6 +18,7 @@ type IngestionStatus = {
       lastRunStartedAt: string | null
       neverRanChannelCount: number
       nextAction: string
+      reactionsUnreadChannelNames: string[]
       status: string
       storedMessageCount: number
       summary: string
@@ -60,13 +62,17 @@ test('ingestion status owns up to the channels no backfill has visited', async (
 
   assert.equal(ingestion.backfill.status, 'running')
   assert.deepEqual(ingestion.backfill.channels, {
-    completed: 2,
+    completed: 1,
     failed: 0,
+    reactionsUnread: 1,
     running: 0,
     stalled: 0,
   })
   assert.equal(ingestion.backfill.neverRanChannelCount, 3)
   assert.deepEqual(ingestion.backfill.failedChannelNames, [])
+  assert.deepEqual(ingestion.backfill.reactionsUnreadChannelNames, [
+    backfill.reactionsUnread.channel.name,
+  ])
   assert.equal(
     ingestion.backfill.fetchedMessageCount,
     backfill.fetchedMessageCount + finalSweep.fetchedMessageCount

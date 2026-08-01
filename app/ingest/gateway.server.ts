@@ -120,6 +120,14 @@ function observeReactions(message: Message) {
   )
 }
 
+async function observeReactionsUnlessDiscordRefuses(message: Message) {
+  try {
+    return await observeReactions(message)
+  } catch {
+    return undefined
+  }
+}
+
 function observeEmbeds(message: Message) {
   if (message.flags.has(MessageFlags.SuppressEmbeds)) return []
 
@@ -310,6 +318,36 @@ function startGatewayHeartbeat() {
   )
 
   return () => clearInterval(timer)
+}
+
+function makeChannelHistoryFetcher(client: Client): FetchChannelHistory {
+  return async ({ afterDiscordMessageId, discordChannelId, limit }) => {
+    const channel = await client.channels.fetch(discordChannelId)
+
+    if (!channel?.isTextBased()) return []
+
+    const messages = await channel.messages.fetch({
+      after: afterDiscordMessageId,
+      limit,
+    })
+
+    return await Promise.all(
+      messages.map(async (message) => ({
+        attachments: observeAttachments(message),
+        author: {
+          discordUserId: message.author.id,
+          displayName: message.author.displayName,
+          username: message.author.username,
+        },
+        content: message.content,
+        discordCreatedAt: message.createdAt.toISOString(),
+        discordMessageId: message.id,
+        embeds: observeEmbeds(message),
+        mentionedDiscordUserIds: [...message.mentions.users.keys()],
+        reactions: await observeReactionsUnlessDiscordRefuses(message),
+      }))
+    )
+  }
 }
 
 function observeChannel(channel: GuildBasedChannel): ObservedChannel {
@@ -504,6 +542,7 @@ export {
   handleReactionAdded,
   handleReactionRemoved,
   handleReactionsCleared,
+  makeChannelHistoryFetcher,
   observeAttachments,
   observeEmbeds,
   observeReactions,
