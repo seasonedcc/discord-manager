@@ -7,11 +7,27 @@ import {
   digestMessageLimit,
   listMentionsSchema,
 } from '~/business/digests.common'
+import {
+  messageAttachmentsSchema,
+  messageEmbedsSchema,
+} from '~/business/messages.common'
 import { db } from '~/db/db.server'
 
 const digestsContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
 })
+
+const embedsAsJsonArray = sql<string>`json_group_array(
+  message_revision_embeds.content order by message_revision_embeds.position
+)`.as('embeds')
+
+const attachmentsAsJsonArray = sql<string>`json_group_array(
+  json_object(
+    'filename', message_revision_attachments.filename,
+    'size', message_revision_attachments.size,
+    'url', message_revision_attachments.url
+  ) order by message_revision_attachments.position
+)`.as('attachments')
 
 function digestMessagesSince({
   since,
@@ -101,7 +117,7 @@ function digestMessagesSince({
         )
       )
     )
-    .select([
+    .select((eb) => [
       'messages.id as messageId',
       'messages.discordMessageId',
       'messages.discordCreatedAt',
@@ -111,6 +127,24 @@ function digestMessagesSince({
       'latestChannelDetails.name as channelName',
       'latestMemberDetails.displayName as authorDisplayName',
       'latestRevisions.content',
+      eb
+        .selectFrom('messageRevisionEmbeds')
+        .select(embedsAsJsonArray)
+        .whereRef(
+          'messageRevisionEmbeds.messageRevisionId',
+          '=',
+          'latestRevisions.revisionId'
+        )
+        .as('embeds'),
+      eb
+        .selectFrom('messageRevisionAttachments')
+        .select(attachmentsAsJsonArray)
+        .whereRef(
+          'messageRevisionAttachments.messageRevisionId',
+          '=',
+          'latestRevisions.revisionId'
+        )
+        .as('attachments'),
     ])
     .orderBy('messages.discordCreatedAt', 'asc')
     .orderBy(sql`cast(messages.discord_message_id as integer)`, 'asc')
@@ -123,8 +157,12 @@ async function readDigest(query: ReturnType<typeof digestMessagesSince>) {
   return {
     messages: rows
       .slice(0, digestMessageLimit)
-      .map(({ discordGuildId, ...message }) => ({
+      .map(({ attachments, discordGuildId, embeds, ...message }) => ({
         ...message,
+        attachments: messageAttachmentsSchema.parse(
+          JSON.parse(attachments ?? '[]')
+        ),
+        embeds: messageEmbedsSchema.parse(JSON.parse(embeds ?? '[]')),
         jumpUrl: `https://discord.com/channels/${discordGuildId}/${message.discordChannelId}/${message.discordMessageId}`,
       })),
     truncated: rows.length > digestMessageLimit,

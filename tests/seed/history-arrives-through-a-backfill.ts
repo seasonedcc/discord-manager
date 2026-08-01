@@ -14,8 +14,18 @@ async function historyArrivesThroughABackfill({
   const channel = requireSeeded(channels, 'announcements', 'channel')
   const maya = requireSeeded(members, 'maya', 'member')
   const priya = requireSeeded(members, 'priya', 'member')
+  const preview = {
+    description: 'Every decision the team agreed to keep, in one place.',
+    url: 'https://handbook.example.test/decisions',
+  }
+  const handbookNote = feed.draftHistory({
+    author: priya,
+    content: 'Everything worth keeping is in the handbook.',
+    discordCreatedAt: clock.at(2),
+    embeds: [preview],
+  })
 
-  return await feed.backfillChannel({
+  const walked = await feed.backfillChannel({
     channel,
     history: [
       feed.draftHistory({
@@ -23,13 +33,17 @@ async function historyArrivesThroughABackfill({
         content: 'This server replaces the old group chat.',
         discordCreatedAt: clock.at(1),
       }),
-      feed.draftHistory({
-        author: priya,
-        content: 'Everything worth keeping is in the handbook.',
-        discordCreatedAt: clock.at(2),
-      }),
+      handbookNote,
     ],
   })
+
+  return {
+    ...walked,
+    linkPreview: {
+      message: handbookNote,
+      text: `${preview.url}\n${preview.description}`,
+    },
+  }
 }
 
 export { historyArrivesThroughABackfill }

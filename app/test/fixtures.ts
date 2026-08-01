@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { ownerCaps } from '~/business/auth.server'
+import type { ObservedAttachment } from '~/business/messages.common'
 import { db } from '~/db/db.server'
 import { env } from '~/env.server'
 import { newId } from '~/framework/db.server'
@@ -27,6 +28,8 @@ type MessageAttributes = {
   discordCreatedAt?: string
   recordedAt?: string
   mentionedDiscordUserIds?: string[]
+  embeds?: string[]
+  attachments?: ObservedAttachment[]
 }
 
 type BookmarkedMessageAttributes = MessageAttributes & {
@@ -163,6 +166,8 @@ async function createMessage({
   discordCreatedAt = new Date().toISOString(),
   recordedAt,
   mentionedDiscordUserIds = [],
+  embeds = [],
+  attachments = [],
 }: MessageAttributes = {}) {
   const resolvedChannelId = channelId ?? (await createChannel()).id
   const resolvedAuthorMemberId = authorMemberId ?? (await createMember()).id
@@ -197,6 +202,36 @@ async function createMessage({
               id: newId(),
               mentionedDiscordUserId,
               messageRevisionId: revision.id,
+            }))
+          )
+          .execute()
+      }
+
+      if (embeds.length > 0) {
+        await trx
+          .insertInto('messageRevisionEmbeds')
+          .values(
+            embeds.map((embed, position) => ({
+              content: embed,
+              id: newId(),
+              messageRevisionId: revision.id,
+              position,
+            }))
+          )
+          .execute()
+      }
+
+      if (attachments.length > 0) {
+        await trx
+          .insertInto('messageRevisionAttachments')
+          .values(
+            attachments.map(({ filename, size, url }, position) => ({
+              filename,
+              id: newId(),
+              messageRevisionId: revision.id,
+              position,
+              size,
+              url,
             }))
           )
           .execute()

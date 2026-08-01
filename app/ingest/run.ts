@@ -4,7 +4,11 @@ import type { BackfilledMessage } from '~/business/ingestion.common'
 import { jobs } from '~/business/jobs.server'
 import { env, requireEnvironment } from '~/env.server'
 import { makeSchedulerRunner } from '~/framework/scheduler.server'
-import { registerGatewayListeners } from './gateway.server'
+import {
+  observeAttachments,
+  observeEmbeds,
+  registerGatewayListeners,
+} from './gateway.server'
 
 if (existsSync('.env')) process.loadEnvFile()
 
@@ -30,6 +34,7 @@ function makeChannelHistoryFetcher(client: Client) {
     })
 
     return messages.map((message) => ({
+      attachments: observeAttachments(message),
       author: {
         discordUserId: message.author.id,
         displayName: message.author.displayName,
@@ -38,6 +43,7 @@ function makeChannelHistoryFetcher(client: Client) {
       content: message.content,
       discordCreatedAt: message.createdAt.toISOString(),
       discordMessageId: message.id,
+      embeds: observeEmbeds(message),
       mentionedDiscordUserIds: [...message.mentions.users.keys()],
     }))
   }

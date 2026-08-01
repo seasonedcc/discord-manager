@@ -638,10 +638,88 @@ describe('listBookmarks', () => {
         reasonId: inboxBookmarkReasonId,
         reasonName: 'Inbox',
         snoozedUntil: null,
+        attachments: [],
+        embeds: [],
         deletedUpstream: false,
         jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
       },
     ])
+  })
+
+  it('reads what a bookmarked alert says in its embeds and attachments', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createBookmarkedMessage({
+      attachments: [
+        {
+          filename: 'runbook.md',
+          size: 3120,
+          url: 'https://cdn.example.test/runbook.md',
+        },
+      ],
+      channelId: channel.id,
+      content: '',
+      embeds: ['Deploy blocked\nThe migration has not finished'],
+    })
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const bookmarked = bookmarks.find(
+      ({ messageId }) => messageId === message.id
+    )
+
+    expect(bookmarked?.embeds).toEqual([
+      'Deploy blocked\nThe migration has not finished',
+    ])
+    expect(bookmarked?.attachments).toEqual([
+      {
+        filename: 'runbook.md',
+        size: 3120,
+        url: 'https://cdn.example.test/runbook.md',
+      },
+    ])
+  })
+
+  it('reads the embeds of the newest revision only', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createBookmarkedMessage({
+      channelId: channel.id,
+      content: 'the first wording',
+      embeds: ['A preview nobody kept'],
+    })
+
+    const newerRevision = await db()
+      .insertInto('messageRevisions')
+      .values({
+        content: 'the wording that stuck',
+        id: newId(),
+        messageId: message.id,
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow()
+
+    await db()
+      .insertInto('messageRevisionEmbeds')
+      .values({
+        content: 'The preview that replaced it',
+        id: newId(),
+        messageRevisionId: newerRevision.id,
+        position: 0,
+      })
+      .execute()
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const bookmarked = bookmarks.find(
+      ({ messageId }) => messageId === message.id
+    )
+
+    expect(bookmarked?.embeds).toEqual(['The preview that replaced it'])
   })
 
   it('keeps a message that was deleted upstream and flags it', async () => {

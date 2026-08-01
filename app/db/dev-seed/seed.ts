@@ -13,6 +13,10 @@ import {
   recordIncomingMessage,
   recordOwnerBookmarkReaction,
 } from '~/business/ingestion.server'
+import type {
+  ObservedAttachment,
+  ObservedEmbed,
+} from '~/business/messages.common'
 import { TransportRejectedError } from '~/business/sending.common'
 import { sendMessage } from '~/business/sending.server'
 import { db } from '~/db/db.server'
@@ -116,27 +120,33 @@ async function observeThread(thread: { category: string; name: string }) {
 }
 
 async function postMessage({
+  attachments = [],
   author,
   channel,
   content,
   discordCreatedAt,
+  embeds = [],
   mentionedDiscordUserIds = [],
 }: {
+  attachments?: ObservedAttachment[]
   author: { discordUserId: string; displayName: string; username: string }
   channel: Awaited<ReturnType<typeof observeChannel | typeof observeThread>>
   content: string
   discordCreatedAt: string
+  embeds?: ObservedEmbed[]
   mentionedDiscordUserIds?: string[]
 }) {
   const discordMessageId = nextDiscordId()
 
   await fromSuccess(recordIncomingMessage)(
     {
+      attachments,
       author,
       channel,
       content,
       discordCreatedAt,
       discordMessageId,
+      embeds,
       mentionedDiscordUserIds,
     },
     context
@@ -161,6 +171,11 @@ const omar = {
   discordUserId: nextDiscordId(),
   displayName: 'Omar Duarte',
   username: 'omar',
+}
+const uptimeWatch = {
+  discordUserId: nextDiscordId(),
+  displayName: 'Uptime Watch',
+  username: 'uptime-watch',
 }
 
 await fromSuccess(recordGatewayConnection)({}, context)
@@ -207,6 +222,33 @@ await postMessage({
   content: 'Reading them now — I will leave comments before lunch.',
   discordCreatedAt: secondsAfterTheAnchor(4),
   mentionedDiscordUserIds: [context.owner.discordUserId],
+})
+
+await postMessage({
+  attachments: [
+    {
+      filename: 'checkout-errors.png',
+      size: 20480,
+      url: 'https://cdn.example.test/attachments/checkout-errors.png',
+    },
+  ],
+  author: uptimeWatch,
+  channel: engineering,
+  content: '',
+  discordCreatedAt: secondsAfterTheAnchor(6),
+  embeds: [
+    {
+      authorName: 'Uptime Watch',
+      description: 'Checkout answered 502 five times in a row.',
+      fields: [
+        { name: 'Region', value: 'eu-west-1' },
+        { name: 'Since', value: '4 minutes ago' },
+      ],
+      footerText: 'Acknowledge to stop the reminders',
+      title: 'Checkout is failing',
+      url: 'https://status.example.test/incidents/412',
+    },
+  ],
 })
 
 await fromSuccess(recordOwnerBookmarkReaction)(
@@ -273,5 +315,5 @@ const refusedSend = await fromSuccess(
 await db().destroy()
 
 console.log(
-  `Seeded a development server: two channels, an archived thread, five messages, one mention of you, one reply that pinged you without naming you, two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later — and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to list the channels, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
+  `Seeded a development server: two channels, an archived thread, six messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you, one reply that pinged you without naming you, two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later — and one send Discord refused. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers.`
 )

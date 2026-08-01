@@ -6,11 +6,13 @@ import { test } from './spec'
 type BookmarkList = {
   truncated: boolean
   bookmarks: {
+    attachments: { filename: string; size: number; url: string }[]
     authorDisplayName: string
     channelName: string
     content: string
     deletedUpstream: boolean
     discordMessageId: string
+    embeds: string[]
     jumpUrl: string
     messageId: string
     snoozedUntil: string | null
@@ -19,7 +21,7 @@ type BookmarkList = {
 }
 
 test("the owner's bookmark reaction shows up in the bookmark list", async () => {
-  const { bookmarks, channels } = fixtures()
+  const { alert, bookmarks, channels } = fixtures()
   const session = await openMcpSession()
 
   const whole = await session.call<BookmarkList>('bookmarks_list')
@@ -43,6 +45,17 @@ test("the owner's bookmark reaction shows up in the bookmark list", async () => 
   assert.equal(reacted[0].jumpUrl, bookmarks.bookmarked.jumpUrl)
   assert.equal(reacted[0].deletedUpstream, false)
   assert.equal(reacted[0].snoozedUntil, null)
+  assert.deepEqual(reacted[0].embeds, [])
+  assert.deepEqual(reacted[0].attachments, [])
+
+  const captured = listed.filter(
+    ({ messageId }) => messageId === bookmarks.bookmarkedAlert.id
+  )
+
+  assert.equal(captured.length, 1)
+  assert.equal(captured[0].content, '')
+  assert.deepEqual(captured[0].embeds, [alert.text])
+  assert.deepEqual(captured[0].attachments, alert.message.attachments)
 
   assert.equal(
     listed.filter(

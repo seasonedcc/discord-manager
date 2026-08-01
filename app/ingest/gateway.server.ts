@@ -1,5 +1,5 @@
-import type { Client, GuildBasedChannel } from 'discord.js'
-import { Events } from 'discord.js'
+import type { Client, GuildBasedChannel, Message } from 'discord.js'
+import { Events, MessageFlags } from 'discord.js'
 import type { z } from 'zod'
 import { ownerContext } from '~/business/auth.server'
 import type { FetchChannelHistory } from '~/business/ingestion.common'
@@ -17,6 +17,7 @@ import {
   type recordIncomingMessageSchema,
   recordMessageDeletion,
   recordMessageEdit,
+  type recordMessageEditSchema,
   recordOwnerBookmarkReaction,
   recordOwnerBookmarkReactionRemoval,
 } from '~/business/ingestion.server'
@@ -35,14 +36,36 @@ type ObservedMessageReference = {
   discordMessageId: string
 }
 
-type ObservedEditedMessage = ObservedMessageReference & {
-  content: string
-  mentionedDiscordUserIds: string[]
-}
+type ObservedEditedMessage = ObservedMessageReference &
+  z.input<typeof recordMessageEditSchema>
 
 type ObservedReaction = ObservedMessageReference & {
   emoji: string
   reactorDiscordUserId: string
+}
+
+function observeEmbeds(message: Message) {
+  if (message.flags.has(MessageFlags.SuppressEmbeds)) return []
+
+  return message.embeds.map((embed) => ({
+    authorName: embed.author?.name,
+    description: embed.description ?? undefined,
+    fields: embed.fields.map(({ name, value }) => ({ name, value })),
+    footerText: embed.footer?.text,
+    imageUrl: embed.image?.url,
+    thumbnailUrl: embed.thumbnail?.url,
+    timestamp: embed.timestamp ?? undefined,
+    title: embed.title ?? undefined,
+    url: embed.url ?? undefined,
+  }))
+}
+
+function observeAttachments(message: Message) {
+  return [...message.attachments.values()].map(({ name, size, url }) => ({
+    filename: name,
+    size,
+    url,
+  }))
 }
 
 function belongsToTheOwnersGuild(discordGuildId: string) {
@@ -60,8 +83,10 @@ async function handleMessageEdit(message: ObservedEditedMessage) {
 
   return await recordMessageEdit(
     {
+      attachments: message.attachments,
       content: message.content,
       discordMessageId: message.discordMessageId,
+      embeds: message.embeds,
       mentionedDiscordUserIds: message.mentionedDiscordUserIds,
     },
     ownerContext()
@@ -233,6 +258,7 @@ function registerGatewayListeners(
     if (!message.inGuild() || !message.channel.isTextBased()) return
 
     await handleIncomingMessage({
+      attachments: observeAttachments(message),
       author: {
         discordUserId: message.author.id,
         displayName: message.author.displayName,
@@ -242,6 +268,7 @@ function registerGatewayListeners(
       content: message.content,
       discordCreatedAt: message.createdAt.toISOString(),
       discordMessageId: message.id,
+      embeds: observeEmbeds(message),
       mentionedDiscordUserIds: [...message.mentions.users.keys()],
     })
   })
@@ -252,9 +279,11 @@ function registerGatewayListeners(
     if (!message.inGuild()) return
 
     await handleMessageEdit({
+      attachments: observeAttachments(message),
       content: message.content,
       discordGuildId: message.guildId,
       discordMessageId: message.id,
+      embeds: observeEmbeds(message),
       mentionedDiscordUserIds: [...message.mentions.users.keys()],
     })
   })
@@ -333,6 +362,8 @@ export {
   handleMessageEdit,
   handleReactionAdded,
   handleReactionRemoved,
+  observeAttachments,
+  observeEmbeds,
   registerGatewayListeners,
 }
 export type {
