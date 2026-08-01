@@ -1,5 +1,9 @@
-import { describe, expect, it } from '~/test/prelude'
+import { afterEach, describe, expect, it, vi } from '~/test/prelude'
 import { makeCronJob, makeJob, makeSchedulerRunner } from './scheduler.server'
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 function deferred() {
   let resolve: () => void = () => {}
@@ -67,14 +71,13 @@ describe('makeJob', () => {
   })
 
   it('retries a throwing job with a growing delay until it succeeds', async () => {
-    const finished = deferred()
+    vi.useFakeTimers()
     const attemptsAt: number[] = []
     const failTwice = makeJob(
       'failTwice',
       async () => {
         attemptsAt.push(Date.now())
         if (attemptsAt.length < 3) throw new Error('Discord said no')
-        finished.resolve()
       },
       { retryDelayMs: 10 }
     )
@@ -82,12 +85,12 @@ describe('makeJob', () => {
 
     runner.start()
     failTwice.enqueue(undefined)
-    await finished.promise
+    await vi.advanceTimersByTimeAsync(100)
     await runner.stop()
 
     expect(attemptsAt).toHaveLength(3)
-    expect(attemptsAt[1] - attemptsAt[0]).toBeGreaterThanOrEqual(10)
-    expect(attemptsAt[2] - attemptsAt[1]).toBeGreaterThanOrEqual(20)
+    expect(attemptsAt[1] - attemptsAt[0]).toBe(10)
+    expect(attemptsAt[2] - attemptsAt[1]).toBe(20)
   })
 
   it('skips a deduped enqueue while an identical one is still waiting', async () => {
@@ -135,6 +138,7 @@ describe('makeJob', () => {
   })
 
   it('stops retrying once the attempt cap is reached', async () => {
+    vi.useFakeTimers()
     let attempts = 0
     const failForever = makeJob(
       'failForever',
@@ -148,7 +152,7 @@ describe('makeJob', () => {
 
     runner.start()
     failForever.enqueue(undefined)
-    await new Promise((resolve) => setTimeout(resolve, 60))
+    await vi.advanceTimersByTimeAsync(60)
     await runner.stop()
 
     expect(attempts).toBe(2)
@@ -157,23 +161,21 @@ describe('makeJob', () => {
 
 describe('makeCronJob', () => {
   it('enqueues its work on every interval until the runner stops', async () => {
-    const finished = deferred()
+    vi.useFakeTimers()
     let ticks = 0
     const sweepSomething = makeCronJob('sweepSomething', 5, async () => {
       ticks += 1
-      if (ticks === 2) finished.resolve()
     })
     const runner = makeSchedulerRunner([sweepSomething])
 
     runner.start()
-    await finished.promise
+    await vi.advanceTimersByTimeAsync(12)
+    const ticksWhileRunning = ticks
     await runner.stop()
+    await vi.advanceTimersByTimeAsync(30)
 
-    const ticksAtStop = ticks
-    await new Promise((resolve) => setTimeout(resolve, 30))
-
-    expect(ticksAtStop).toBeGreaterThanOrEqual(2)
-    expect(ticks).toBe(ticksAtStop)
+    expect(ticksWhileRunning).toBe(2)
+    expect(ticks).toBe(2)
   })
 })
 
@@ -187,6 +189,19 @@ describe('makeSchedulerRunner', () => {
     expect(() => runner.start()).toThrow(
       'Two jobs are registered under the same name: doTheSameThing'
     )
+  })
+
+  it('leaves no interval timer behind when it stops', async () => {
+    vi.useFakeTimers()
+    const runner = makeSchedulerRunner([
+      makeCronJob('sweepUntilShutdown', 5, async () => {}),
+    ])
+
+    runner.start()
+    await vi.advanceTimersByTimeAsync(12)
+    await runner.stop()
+
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('lets the running job finish before shutdown resolves', async () => {
