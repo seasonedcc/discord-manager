@@ -18,7 +18,7 @@ env:
 
 jobs:
   ci:
-    name: Lint, tsc, and unit tests
+    name: Lint, tsc, unit tests, and the dev seed
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +37,12 @@ jobs:
         run: pnpm run tsc
       - name: Run unit tests
         run: pnpm run test:unit
+      - name: Seed a scratch database
+        run: pnpm run db:migrate && pnpm run db:seed:dev
+        env:
+          DATABASE_PATH: './data/seed-smoke.db'
+          DISCORD_GUILD_ID: '123456789012345678'
+          DISCORD_OWNER_USER_ID: '987654321098765432'
 
   e2e:
     name: E2E tests
