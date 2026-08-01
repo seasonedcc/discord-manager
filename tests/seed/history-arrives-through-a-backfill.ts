@@ -35,14 +35,24 @@ async function historyArrivesThroughABackfill({
     discordCreatedAt: clock.at(2),
     embeds: [preview],
   })
+  const keptForLater = feed.draftHistory({
+    author: maya,
+    content: 'The onboarding checklist everyone new should read first.',
+    discordCreatedAt: clock.at(3),
+    reactedTo: [{ emoji: '🔖', reactors: [owner] }],
+  })
 
   const walked = await feed.backfillChannel({
     channel,
-    history: [welcome, handbookNote],
+    history: [welcome, handbookNote, keptForLater],
   })
 
   return {
     ...walked,
+    bookmarkedInDiscord: {
+      message: keptForLater,
+      reactions: [{ emoji: '🔖', count: 1, ownerReacted: true }],
+    },
     linkPreview: {
       message: handbookNote,
       text: `${preview.url}\n${preview.description}`,

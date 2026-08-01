@@ -11,6 +11,10 @@ type Digest = {
   }[]
 }
 
+type BookmarkList = {
+  bookmarks: { discordMessageId: string; source: string }[]
+}
+
 test('history the backfill walked arrives with its reactions', async () => {
   const { backfill, channels, clock } = fixtures()
   const session = await openMcpSession()
@@ -35,4 +39,24 @@ test('history the backfill walked arrives with its reactions', async () => {
 
   assert.equal(previewed.length, 1)
   assert.deepEqual(previewed[0].reactions, [])
+
+  const captured = digest.messages.filter(
+    ({ discordMessageId }) =>
+      discordMessageId === backfill.bookmarkedInDiscord.message.discordMessageId
+  )
+
+  assert.equal(captured.length, 1)
+  assert.deepEqual(
+    captured[0].reactions,
+    backfill.bookmarkedInDiscord.reactions
+  )
+
+  const { bookmarks } = await session.call<BookmarkList>('bookmarks_list')
+  const listed = bookmarks.filter(
+    ({ discordMessageId }) =>
+      discordMessageId === backfill.bookmarkedInDiscord.message.discordMessageId
+  )
+
+  assert.equal(listed.length, 1)
+  assert.equal(listed[0].source, 'reaction')
 })

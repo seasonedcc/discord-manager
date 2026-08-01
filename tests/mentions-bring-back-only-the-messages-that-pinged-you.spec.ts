@@ -11,6 +11,7 @@ type Digest = {
     embeds: string[]
     messageId: string
     jumpUrl: string
+    reactions: { emoji: string; count: number; ownerReacted: boolean }[]
   }[]
   truncated: boolean
 }
@@ -30,6 +31,9 @@ test('mentions bring back only the messages that pinged you', async () => {
   assert.equal(mention[0].content, messages.mention.content)
   assert.equal(mention[0].channelName, channels.engineering.name)
   assert.equal(mention[0].jumpUrl, messages.mention.jumpUrl)
+  assert.deepEqual(mention[0].reactions, [
+    { emoji: '❤️', count: 1, ownerReacted: true },
+  ])
   assert.equal(digest.truncated, false)
 
   const paged = digest.messages.filter(
