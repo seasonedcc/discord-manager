@@ -11,6 +11,8 @@ import {
   recordChannelSnapshot,
   recordGatewayConnection,
   recordIncomingMessage,
+  recordMessageReaction,
+  recordMessageReactionRemoval,
   recordOwnerBookmarkReaction,
 } from '~/business/ingestion.server'
 import type {
@@ -255,8 +257,42 @@ const alert = await postMessage({
 await fromSuccess(recordOwnerBookmarkReaction)(
   {
     discordMessageId: bookmarkWorthy.discordMessageId,
-    emoji: '🔖',
+    emoji: { name: '🔖' },
     reactorDiscordUserId: context.owner.discordUserId,
+  },
+  context
+)
+
+for (const reaction of [
+  {
+    discordMessageId: awaitingAnAnswer.discordMessageId,
+    emoji: { name: '👍' },
+    reactorDiscordUserId: context.owner.discordUserId,
+  },
+  {
+    discordMessageId: awaitingAnAnswer.discordMessageId,
+    emoji: { name: '👀' },
+    reactorDiscordUserId: maya.discordUserId,
+  },
+  {
+    discordMessageId: bookmarkWorthy.discordMessageId,
+    emoji: { animated: true, id: nextDiscordId(), name: 'shipit' },
+    reactorDiscordUserId: omar.discordUserId,
+  },
+  {
+    discordMessageId: bookmarkWorthy.discordMessageId,
+    emoji: { name: '🎉' },
+    reactorDiscordUserId: maya.discordUserId,
+  },
+]) {
+  await fromSuccess(recordMessageReaction)(reaction, context)
+}
+
+await fromSuccess(recordMessageReactionRemoval)(
+  {
+    discordMessageId: bookmarkWorthy.discordMessageId,
+    emoji: { name: '🎉' },
+    reactorDiscordUserId: maya.discordUserId,
   },
   context
 )
@@ -347,5 +383,5 @@ await fromSuccess(
 await db().destroy()
 
 console.log(
-  `Seeded a development server: two channels, an archived thread, six messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you, one reply that pinged you without naming you, two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later — one send Discord refused, and one live fetch of that alert already recorded. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
+  `Seeded a development server: two channels, an archived thread, six messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you that you answered with a 👍 rather than words, one reply that pinged you without naming you, reactions on two messages including a custom one and one a teammate took back, two bookmarks — one captured with the 🔖 reaction and still sitting in Inbox, one filed under Answer later — one send Discord refused, and one live fetch of that alert already recorded. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
 )
