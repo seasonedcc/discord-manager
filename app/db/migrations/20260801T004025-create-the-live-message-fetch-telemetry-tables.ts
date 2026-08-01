@@ -16,24 +16,12 @@ export async function up(db: Kysely<any>): Promise<void> {
     .execute()
 
   await db.schema
-    .createIndex('messageFetchRequestsMessageIdCreatedAtIndex')
-    .on('messageFetchRequests')
-    .columns(['messageId', 'createdAt desc'])
-    .execute()
-
-  await db.schema
     .createTable('messageFetchRetrievals')
     .addColumn('id', 'text', (col) => col.primaryKey().notNull())
     .addColumn('messageFetchRequestId', 'text', (col) =>
       col.notNull().references('messageFetchRequests.id')
     )
     .addColumn('createdAt', 'text', (col) => col.notNull().defaultTo(nowIso))
-    .execute()
-
-  await db.schema
-    .createIndex('messageFetchRetrievalsRequestIdCreatedAtIndex')
-    .on('messageFetchRetrievals')
-    .columns(['messageFetchRequestId', 'createdAt desc'])
     .execute()
 
   await db.schema
@@ -50,12 +38,6 @@ export async function up(db: Kysely<any>): Promise<void> {
     .execute()
 
   await db.schema
-    .createIndex('messageFetchFailuresRequestIdCreatedAtIndex')
-    .on('messageFetchFailures')
-    .columns(['messageFetchRequestId', 'createdAt desc'])
-    .execute()
-
-  await db.schema
     .createTable('messageFetchSkips')
     .addColumn('id', 'text', (col) => col.primaryKey().notNull())
     .addColumn('messageFetchRequestId', 'text', (col) =>
@@ -65,12 +47,6 @@ export async function up(db: Kysely<any>): Promise<void> {
       col.notNull().check(messageFetchSkipReason)
     )
     .addColumn('createdAt', 'text', (col) => col.notNull().defaultTo(nowIso))
-    .execute()
-
-  await db.schema
-    .createIndex('messageFetchSkipsRequestIdCreatedAtIndex')
-    .on('messageFetchSkips')
-    .columns(['messageFetchRequestId', 'createdAt desc'])
     .execute()
 }
 
