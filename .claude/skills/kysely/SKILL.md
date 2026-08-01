@@ -97,11 +97,13 @@ Migration files import only from `kysely` and Node built-ins. Never from `~/busi
 ## Migration scripts and generated types
 
 - `pnpm run db:migration` scaffolds a timestamped, prose-named migration file in `app/db/migrations/`.
-- `pnpm run db:migrate` runs pending migrations and then regenerates `app/db/types.d.ts`.
-- `pnpm run db:rollback` reverts the most-recently-executed migration and regenerates types.
+- `pnpm run db:migrate` runs pending migrations against the configured store and then regenerates `app/db/types.d.ts`.
+- `pnpm run db:rollback` reverts the most-recently-executed migration on the configured store and regenerates types.
 - `pnpm run db:generate` regenerates types alone.
 
-**Never hand-merge `app/db/types.d.ts`.** After any rebase or conflict, take either side, then regenerate from a freshly migrated database and diff: expect byte-identical, or a clean additions-only result. Git happily auto-merges a semantically wrong types file. When two branches both carry migrations, the one merging second re-rebases and regenerates after the first lands.
+**Generation never reads the configured store.** `app/db/scripts/generate.ts` applies every migration in `app/db/migrations` to a throwaway SQLite file under `tests/.artifacts/`, runs kysely-codegen against that, and deletes it, so `app/db/types.d.ts` is a pure function of the migrations folder — identical on every machine whatever `DATABASE_PATH` points at. That is also why `db:rollback` leaves the types fully migrated: rolling a store back to N-1 removes no migration file, and the migrate → rollback → migrate ritual ends fully migrated anyway. `app/db/scripts/generate.test.ts` regenerates the file on every `test:unit` run and fails when the committed copy has drifted.
+
+**Never hand-merge `app/db/types.d.ts`.** After any rebase or conflict, take either side, then run `pnpm run db:generate` and diff: expect byte-identical, or a clean additions-only result. Git happily auto-merges a semantically wrong types file. When two branches both carry migrations, the one merging second re-rebases and regenerates after the first lands.
 
 **`db:rollback` reverts the most-recently-EXECUTED migration on that database, not the highest-timestamped file.** After a rebase, migrations can have run out of filename order, so a rollback may hit a different migration than intended. To prove a specific migration's `down()`, point `DATABASE_PATH` at a throwaway file where the exact set of executed migrations is known.
 
