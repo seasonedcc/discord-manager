@@ -11,7 +11,10 @@ import {
   addBookmarkByLink,
   listBookmarkReasons,
 } from '~/business/bookmarks.server'
+import type { FetchChannelHistory } from '~/business/ingestion.common'
 import {
+  listBackfillableChannels,
+  type listBackfillableChannelsSchema,
   recordChannelArchiving,
   type recordChannelArchivingSchema,
   recordChannelSnapshot,
@@ -20,6 +23,8 @@ import {
   type recordGatewayConnectionSchema,
   recordIncomingMessage,
   type recordIncomingMessageSchema,
+  runChannelBackfill,
+  type runChannelBackfillSchema,
 } from '~/business/ingestion.server'
 import type { fetchMessageSchema } from '~/business/messages.common'
 import { fetchMessage } from '~/business/messages.server'
@@ -385,6 +390,23 @@ await fromSuccess(recordChannelArchiving)(
   context
 )
 
+const discordHasNothingNewerThanTheStore: FetchChannelHistory = async () => []
+
+const backfillableChannels = await fromSuccess(listBackfillableChannels)(
+  {} satisfies z.input<typeof listBackfillableChannelsSchema>,
+  context
+)
+
+for (const channel of backfillableChannels) {
+  await fromSuccess(runChannelBackfill)(
+    {
+      channelId: channel.id,
+      fetchChannelHistory: discordHasNothingNewerThanTheStore,
+    } satisfies z.input<typeof runChannelBackfillSchema>,
+    context
+  )
+}
+
 const engineeringChannel = await db()
   .selectFrom('channels')
   .select('id')
@@ -440,5 +462,5 @@ await fromSuccess(
 await db().destroy()
 
 console.log(
-  `Seeded a development server: two channels, an archived thread, six messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you that you answered with a 👍 rather than words, one reply that pinged you without naming you, reactions on two messages including a custom one and one a teammate took back, two bookmarks — one captured with the 🔖 reaction that still shows on the message and still sitting in Inbox, one filed under Answer later — one send Discord refused, and one live fetch of that alert already recorded. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
+  `Seeded a development server: two channels, an archived thread, six messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you that you answered with a 👍 rather than words, one reply that pinged you without naming you, reactions on two messages including a custom one and one a teammate took back, two bookmarks — one captured with the 🔖 reaction that still shows on the message and still sitting in Inbox, one filed under Answer later — one send Discord refused, one live fetch of that alert already recorded, and a finished history backfill on every channel, so ingestion_status reads as a bot that is connected and caught up. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
 )

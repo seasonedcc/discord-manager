@@ -89,7 +89,7 @@ pnpm run db:migrate
 pnpm run db:seed:dev
 ```
 
-The seed only ever runs against a freshly created, empty database. With demo credentials, everything that reads from the local store works — catch-ups, mentions, bookmarks, channels. Sending fails, and so does `messages_fetch`: both go to Discord live and need a real bot token and a real server. The seed leaves one refused send behind so you can see `messages_send_status` offer a retry.
+The seed only ever runs against a freshly created, empty database. With demo credentials, everything that reads from the local store works — catch-ups, mentions, bookmarks, channels, and `ingestion_status`, which reads as a bot connected and caught up on every channel. Sending fails, and so does `messages_fetch`: both go to Discord live and need a real bot token and a real server. The seed leaves one refused send behind so you can see `messages_send_status` offer a retry.
 
 ## The tools
 
