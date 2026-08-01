@@ -49,7 +49,7 @@ const reactionsAsJsonArray = sql<string>`json_group_array(
     'emoji', standing_reactions.emoji,
     'count', standing_reactions.reactor_count,
     'ownerReacted', standing_reactions.owner_reacted
-  ) order by standing_reactions.first_reacted_at, standing_reactions.first_reaction_id
+  ) order by first_appearances.first_appeared_at, first_appearances.first_appearance_id
 )`.as('reactions')
 
 function standingReactionsOfTheMessage(ownerDiscordUserId: string) {
@@ -79,10 +79,8 @@ function standingReactionsOfTheMessage(ownerDiscordUserId: string) {
   const rankedReactionEvents = db()
     .selectFrom(reactionEvents.as('reactionEvents'))
     .select((eb) => [
-      'id',
       'emoji',
       'reactorDiscordUserId',
-      'createdAt',
       'reacted',
       eb.fn
         .agg<number>('row_number')
@@ -111,15 +109,31 @@ function standingReactionsOfTheMessage(ownerDiscordUserId: string) {
             .end()
         )
         .as('ownerReacted'),
-      eb.fn.min('createdAt').as('firstReactedAt'),
-      eb.fn.min('id').as('firstReactionId'),
     ])
     .where('rowNumber', '=', 1)
     .where('reacted', '=', 1)
     .groupBy('emoji')
     .as('standingReactions')
 
-  return db().selectFrom(standingReactions).select(reactionsAsJsonArray)
+  const firstAppearances = db()
+    .selectFrom('messageReactionAdditions')
+    .select((eb) => [
+      'emoji',
+      eb.fn.min('createdAt').as('firstAppearedAt'),
+      eb.fn.min('id').as('firstAppearanceId'),
+    ])
+    .where(sql<SqlBool>`message_reaction_additions.message_id = messages.id`)
+    .groupBy('emoji')
+    .as('firstAppearances')
+
+  return db()
+    .selectFrom(standingReactions)
+    .innerJoin(
+      firstAppearances,
+      'firstAppearances.emoji',
+      'standingReactions.emoji'
+    )
+    .select(reactionsAsJsonArray)
 }
 
 function latestBookmarkEvents() {
