@@ -34,7 +34,7 @@ A gateway handler or a tool that contains a domain decision is a bug in the laye
 
 ### Acceptable framework wrappers
 
-`makeJob` and `makeCronJob` from `~/framework/scheduler.server` are acceptable inside business files. Scheduling is a business concern, and these wrap the in-process runner without dragging in a transport. `app/business/jobs.server.ts` holds the registered jobs array; the daemon only runs it.
+`makeJob` and `makeCronJob` from `~/framework/scheduler.server` are acceptable inside business files. Scheduling is a business concern, and these wrap the in-process runner without dragging in a transport. `app/business/jobs.server.ts` holds the registered jobs array; the daemon only runs it. Load `background-jobs` before writing or changing a job.
 
 ### The context file
 
