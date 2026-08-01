@@ -1,4 +1,9 @@
-import { fromSuccess, isContextError, isInputError } from 'composable-functions'
+import {
+  InputError,
+  fromSuccess,
+  isContextError,
+  isInputError,
+} from 'composable-functions'
 import { readActivitySince } from '~/business/activity.server'
 import { db } from '~/db/db.server'
 import { newId } from '~/framework/db.server'
@@ -10,9 +15,13 @@ import {
   ownerContext,
   snowflake,
 } from '~/test/fixtures'
-import { describe, expect, it } from '~/test/prelude'
+import { afterEach, describe, expect, it, vi } from '~/test/prelude'
 
 describe('readActivitySince', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('counts only the messages the store recorded strictly after the cutoff', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
@@ -295,6 +304,187 @@ describe('readActivitySince', () => {
       mentions: { count: 1, newestAt: '2100-07-01T00:00:00.000Z' },
       bookmarkAdditions: { count: 1, newestAt: '2100-07-01T00:05:00.000Z' },
     })
+  })
+
+  it('answers straight away when the caller asked for no wait', async () => {
+    const guild = await createGuild()
+    const context = await ownerContext({ guildId: guild.id })
+
+    vi.useFakeTimers()
+
+    let answered = false
+    const answering = fromSuccess(readActivitySince)(
+      { since: '2110-01-01T00:00:00.000Z' },
+      context
+    ).then((answer) => {
+      answered = true
+
+      return answer
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(answered).toBe(true)
+
+    const { activity } = await answering
+
+    expect(activity.messages).toEqual({ count: 0, newestAt: null })
+  })
+
+  it('holds a waiting answer back until the wait runs out while the store stays quiet', async () => {
+    const guild = await createGuild()
+    const context = await ownerContext({ guildId: guild.id })
+
+    vi.useFakeTimers()
+
+    let answered = false
+    const answering = fromSuccess(readActivitySince)(
+      { since: '2111-01-01T00:00:00.000Z', waitSeconds: 3 },
+      context
+    ).then((answer) => {
+      answered = true
+
+      return answer
+    })
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(answered).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const { activity } = await answering
+
+    expect(answered).toBe(true)
+    expect(activity).toEqual({
+      messages: { count: 0, newestAt: null },
+      mentions: { count: 0, newestAt: null },
+      bookmarkAdditions: { count: 0, newestAt: null },
+    })
+  })
+
+  it('comes back the moment a message lands, without seeing the wait out', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+
+    vi.useFakeTimers()
+
+    let answered = false
+    const answering = fromSuccess(readActivitySince)(
+      { since: '2112-01-01T00:00:00.000Z', waitSeconds: 55 },
+      context
+    ).then((answer) => {
+      answered = true
+
+      return answer
+    })
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(answered).toBe(false)
+
+    await createMessage({
+      channelId: channel.id,
+      content: `<@${context.owner.discordUserId}> the staging deploy is stuck`,
+      recordedAt: '2112-01-02T00:00:00.000Z',
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const { activity } = await answering
+
+    expect(answered).toBe(true)
+    expect(activity.messages).toEqual({
+      count: 1,
+      newestAt: '2112-01-02T00:00:00.000Z',
+    })
+    expect(activity.mentions).toEqual({
+      count: 1,
+      newestAt: '2112-01-02T00:00:00.000Z',
+    })
+  })
+
+  it('comes back the moment a bookmark lands, even with no new message behind it', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+
+    vi.useFakeTimers()
+
+    let answered = false
+    const answering = fromSuccess(readActivitySince)(
+      { since: '2113-01-02T00:00:00.000Z', waitSeconds: 55 },
+      context
+    ).then((answer) => {
+      answered = true
+
+      return answer
+    })
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(answered).toBe(false)
+
+    await createBookmarkedMessage({
+      channelId: channel.id,
+      recordedAt: '2113-01-01T00:00:00.000Z',
+      bookmarkedAt: '2113-01-03T00:00:00.000Z',
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const { activity } = await answering
+
+    expect(answered).toBe(true)
+    expect(activity.messages).toEqual({ count: 0, newestAt: null })
+    expect(activity.bookmarkAdditions).toEqual({
+      count: 1,
+      newestAt: '2113-01-03T00:00:00.000Z',
+    })
+  })
+
+  it('refuses a wait outside the one to fifty-five second range', async () => {
+    const guild = await createGuild()
+    const context = await ownerContext({ guildId: guild.id })
+
+    for (const waitSeconds of [0, -5, 56]) {
+      const result = await readActivitySince(
+        { since: '2100-01-01T00:00:00.000Z', waitSeconds },
+        context
+      )
+
+      expect(result.success).toBe(false)
+      if (result.success) throw new Error('expected a failure')
+
+      const [error] = result.errors
+
+      if (!(error instanceof InputError)) {
+        throw new Error('expected an input error')
+      }
+
+      expect(error.message).toBe('Wait a whole number of seconds, from 1 to 55')
+      expect(error.path).toEqual(['waitSeconds'])
+    }
+  })
+
+  it('refuses a wait that is not a whole number of seconds', async () => {
+    const guild = await createGuild()
+
+    const result = await readActivitySince(
+      { since: '2100-01-01T00:00:00.000Z', waitSeconds: 1.5 },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+
+    const [error] = result.errors
+
+    if (!(error instanceof InputError)) {
+      throw new Error('expected an input error')
+    }
+
+    expect(error.message).toBe('Wait a whole number of seconds, from 1 to 55')
+    expect(error.path).toEqual(['waitSeconds'])
   })
 
   it('reads only the activity of the Discord server this deployment manages', async () => {
