@@ -61,6 +61,16 @@ describe('deriveGatewayActivity', () => {
     ).toBe('quiet')
   })
 
+  it('reads a daemon whose shard died and whose beats stopped as quiet', () => {
+    expect(
+      deriveGatewayActivity({
+        lastAliveAt: minutesBefore(gatewaySilenceThresholdMinutes + 2),
+        lastDisconnectedAt: minutesBefore(gatewaySilenceThresholdMinutes + 1),
+        observedAt,
+      })
+    ).toBe('quiet')
+  })
+
   it('reads a heartbeat that landed after a disconnection as receiving', () => {
     expect(
       deriveGatewayActivity({

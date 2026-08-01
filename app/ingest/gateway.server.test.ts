@@ -29,6 +29,7 @@ import {
   handleReactionAdded,
   handleReactionRemoved,
   handleReactionsCleared,
+  makeChannelHistoryFetcher,
   observeReactions,
   registerGatewayListeners,
   startGatewayHeartbeat,
@@ -141,9 +142,11 @@ describe('handleMessageEdit', () => {
     const ingested = await ingest(message)
 
     await handleMessageEdit({
+      attachments: [],
       content: 'the corrected wording',
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
+      embeds: [],
       mentionedDiscordUserIds: [],
     })
 
@@ -1099,6 +1102,57 @@ describe('registerGatewayListeners', () => {
     expect(await embedsOf(delivered.id)).toHaveLength(0)
   })
 
+  it('records the preview and the files an edit brought with it', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage({ content: 'the decision log moved' })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await embedsOf(delivered.id)).toHaveLength(0)
+
+    await fire(
+      handlers,
+      Events.MessageUpdate,
+      delivered,
+      deliveredMessage({
+        attachments: [
+          {
+            name: 'decisions.pdf',
+            size: 8400,
+            url: 'https://cdn.example.test/decisions.pdf',
+          },
+        ],
+        content: 'the decision log moved to https://handbook.example.test',
+        discordMessageId: delivered.id,
+        embeds: [
+          deliveredEmbed({
+            description: 'Every decision the team agreed to keep.',
+            title: 'Decisions',
+          }),
+        ],
+      })
+    )
+
+    expect(await embedsOf(delivered.id)).toEqual([
+      'Decisions\nEvery decision the team agreed to keep.',
+    ])
+    expect(await attachmentsOf(delivered.id)).toEqual([
+      {
+        filename: 'decisions.pdf',
+        position: 0,
+        size: 8400,
+        url: 'https://cdn.example.test/decisions.pdf',
+      },
+    ])
+  })
+
   it('records the mention set Discord stamped on an edited message', async () => {
     await configuredGuild()
     const handlers = new Map<string, GatewayHandler>()
@@ -1416,6 +1470,109 @@ describe('observeReactions', () => {
   })
 })
 
+describe('makeChannelHistoryFetcher', () => {
+  function fetchedMessage({
+    discordMessageId,
+    reactors,
+  }: {
+    discordMessageId: string
+    reactors: (() => Promise<Collection<string, { id: string }>>) | undefined
+  }) {
+    return {
+      attachments: new Collection(),
+      author: {
+        displayName: `display-name-${randomUUID()}`,
+        id: randomUUID(),
+        username: `username-${randomUUID()}`,
+      },
+      content: `content-${randomUUID()}`,
+      createdAt: new Date('2026-07-30T11:00:00.000Z'),
+      embeds: [],
+      flags: { has: () => false },
+      id: discordMessageId,
+      mentions: { users: new Collection() },
+      reactions: {
+        cache: reactors
+          ? new Collection([
+              [
+                '🎉',
+                {
+                  emoji: { animated: false, id: null, name: '🎉' },
+                  users: { fetch: reactors },
+                },
+              ],
+            ])
+          : new Collection(),
+      },
+    } as unknown as Message
+  }
+
+  function clientHolding(messages: Message[]) {
+    return {
+      channels: {
+        fetch: async () => ({
+          isTextBased: () => true,
+          messages: {
+            fetch: async () =>
+              new Collection(
+                messages.map((message) => [message.id, message] as const)
+              ),
+          },
+        }),
+      },
+    } as unknown as Client
+  }
+
+  it('keeps every message Discord handed over when it refuses to list one of their reactors', async () => {
+    const reactor = randomUUID()
+    const listed = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: async () => new Collection([[reactor, { id: reactor }]]),
+    })
+    const refused = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: async () => {
+        throw new Error('Missing Access')
+      },
+    })
+
+    const page = await makeChannelHistoryFetcher(
+      clientHolding([listed, refused])
+    )({
+      afterDiscordMessageId: '0',
+      discordChannelId: randomUUID(),
+      limit: 100,
+    })
+
+    expect(page.map(({ discordMessageId }) => discordMessageId)).toEqual([
+      listed.id,
+      refused.id,
+    ])
+    expect(page[0].reactions).toEqual([
+      {
+        emoji: { animated: false, id: undefined, name: '🎉' },
+        reactorDiscordUserIds: [reactor],
+      },
+    ])
+    expect(page[1].reactions).toBeUndefined()
+  })
+
+  it('tells a message with no reactions apart from one whose reactors it could not read', async () => {
+    const quiet = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: undefined,
+    })
+
+    const [observed] = await makeChannelHistoryFetcher(clientHolding([quiet]))({
+      afterDiscordMessageId: '0',
+      discordChannelId: randomUUID(),
+      limit: 100,
+    })
+
+    expect(observed.reactions).toEqual([])
+  })
+})
+
 describe('startGatewayHeartbeat', () => {
   it('records the daemon liveness while a backfill occupies the work queue', async () => {
     const started = deferred()
@@ -1452,7 +1609,7 @@ describe('startGatewayHeartbeat', () => {
       .spyOn(globalThis, 'setInterval')
       .mockReturnValue(0 as unknown as NodeJS.Timeout)
 
-    startGatewayHeartbeat()()
+    startGatewayHeartbeat(() => true)()
 
     expect(startTimer).toHaveBeenCalledWith(
       expect.any(Function),
@@ -1463,6 +1620,42 @@ describe('startGatewayHeartbeat', () => {
     )
 
     startTimer.mockRestore()
+  })
+
+  it('stays silent while the link to Discord is down, and records once it is up', async () => {
+    type Beat = () => ReturnType<typeof handleGatewayHeartbeat> | undefined
+    let beat: Beat = () => undefined
+    const startTimer = vi.spyOn(globalThis, 'setInterval').mockImplementation(((
+      tick: Beat
+    ) => {
+      beat = tick
+
+      return 0 as unknown as NodeJS.Timeout
+    }) as unknown as typeof setInterval)
+
+    startGatewayHeartbeat(() => false)
+
+    const skipped = await beat()
+
+    startGatewayHeartbeat(() => true)
+
+    const recorded = await beat()
+
+    startTimer.mockRestore()
+
+    expect(skipped).toBeUndefined()
+
+    if (!recorded?.success) {
+      throw new Error('expected the heartbeat to be recorded')
+    }
+
+    expect(
+      await db()
+        .selectFrom('gatewayHeartbeats')
+        .selectAll()
+        .where('id', '=', recorded.data.gatewayHeartbeatId)
+        .execute()
+    ).toHaveLength(1)
   })
 })
 

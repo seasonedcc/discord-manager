@@ -145,6 +145,12 @@ describe('renderEmoji', () => {
     ).toBe(':1234567890123456789')
   })
 
+  it('names an animated custom emoji deleted from the server by its id too', () => {
+    expect(
+      renderEmoji({ animated: true, id: '1234567890123456789', name: '' })
+    ).toBe(':1234567890123456789')
+  })
+
   it('tells apart two custom emoji sharing a name', () => {
     expect(
       renderEmoji({ animated: false, id: '111111111111111111', name: 'shipit' })

@@ -188,13 +188,23 @@ async function postMessage({
 async function editMessage(
   message: SeededMessage,
   content: string,
-  mentioning: SeededMember[] = []
+  {
+    attachments = [],
+    embeds = [],
+    mentioning = [],
+  }: {
+    attachments?: ObservedAttachment[]
+    embeds?: ObservedEmbed[]
+    mentioning?: SeededMember[]
+  } = {}
 ) {
   await withADistinctInstant(
     fromSuccess(recordMessageEdit)(
       {
+        attachments,
         content,
         discordMessageId: message.discordMessageId,
+        embeds,
         mentionedDiscordUserIds: mentioning.map(
           (member) => member.discordUserId
         ),
@@ -203,7 +213,12 @@ async function editMessage(
     )
   )
 
-  return { ...message, content, previousContent: message.content }
+  return {
+    ...message,
+    attachments,
+    content,
+    previousContent: message.content,
+  }
 }
 
 async function deleteMessage(message: SeededMessage) {
@@ -305,6 +320,7 @@ function draftHistory({
   embeds = [],
   mentioning = [],
   reactedTo = [],
+  reactorsDiscordRefusedToList = false,
 }: {
   attachments?: ObservedAttachment[]
   author: SeededMember
@@ -313,6 +329,7 @@ function draftHistory({
   embeds?: ObservedEmbed[]
   mentioning?: SeededMember[]
   reactedTo?: { emoji: string; reactors: SeededMember[] }[]
+  reactorsDiscordRefusedToList?: boolean
 }): BackfilledMessage {
   return {
     attachments,
@@ -322,10 +339,12 @@ function draftHistory({
     discordMessageId: nextDiscordId(),
     embeds,
     mentionedDiscordUserIds: mentioning.map((member) => member.discordUserId),
-    reactions: reactedTo.map(({ emoji, reactors }) => ({
-      emoji: { animated: false, name: emoji },
-      reactorDiscordUserIds: reactors.map((member) => member.discordUserId),
-    })),
+    reactions: reactorsDiscordRefusedToList
+      ? undefined
+      : reactedTo.map(({ emoji, reactors }) => ({
+          emoji: { animated: false, name: emoji },
+          reactorDiscordUserIds: reactors.map((member) => member.discordUserId),
+        })),
   }
 }
 

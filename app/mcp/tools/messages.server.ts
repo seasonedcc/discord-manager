@@ -15,7 +15,9 @@ import {
   MessageFetchGoneError,
   MessageFetchRejectedError,
   type MessageFetchTransport,
+  type ObservedEmoji,
   fetchMessageSchema,
+  renderEmoji,
 } from '~/business/messages.common'
 import { fetchMessage } from '~/business/messages.server'
 import { env } from '~/env.server'
@@ -52,17 +54,14 @@ function observeEmbed(embed: APIEmbed) {
   }
 }
 
-function reactionEmoji({ animated, id, name }: APIPartialEmoji) {
-  if (!id) return name ?? ''
-  if (!name) return `:${id}`
-
-  return animated ? `a:${name}:${id}` : `${name}:${id}`
+function observeEmoji({ animated, id, name }: APIPartialEmoji): ObservedEmoji {
+  return { animated: animated ?? false, id: id ?? undefined, name: name ?? '' }
 }
 
-function reactorRouteEmoji({ animated, id, name }: APIPartialEmoji) {
-  if (!id) return name ?? ''
+function reactorRouteEmoji({ animated, id, name }: ObservedEmoji) {
+  if (!id) return name
 
-  const routeName = name ?? namelessEmojiRouteName
+  const routeName = name || namelessEmojiRouteName
 
   return animated ? `a:${routeName}:${id}` : `${routeName}:${id}`
 }
@@ -118,17 +117,18 @@ async function readReactions({
     reactions
       .filter(({ emoji }) => emoji.id !== null || emoji.name !== null)
       .map(async ({ count, count_details, emoji }) => {
+        const observed = observeEmoji(emoji)
         const walk = (type: ReactionType) =>
           readReactorDiscordUserIds({
             discordChannelId,
             discordMessageId,
-            emoji: reactorRouteEmoji(emoji),
+            emoji: reactorRouteEmoji(observed),
             type,
           })
 
         return {
           count,
-          emoji: reactionEmoji(emoji),
+          emoji: renderEmoji(observed),
           reactorDiscordUserIds: [
             ...(await walk(ReactionType.Normal)),
             ...(count_details.burst > 0 ? await walk(ReactionType.Burst) : []),

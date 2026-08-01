@@ -43,9 +43,9 @@ const backfillContextSchema = ingestionContextSchema.extend({
 
 const mentionedDiscordUserIdsSchema = z.array(z.string().min(1))
 
-const observedEmbedsSchema = z.array(observedEmbedSchema).default([])
+const observedEmbedsSchema = z.array(observedEmbedSchema)
 
-const observedAttachmentsSchema = z.array(observedAttachmentSchema).default([])
+const observedAttachmentsSchema = z.array(observedAttachmentSchema)
 
 const observedAuthorSchema = z.object({
   discordUserId: z.string().min(1),
@@ -87,13 +87,13 @@ const recordGatewayDisconnectionSchema = z.object({})
 const recordGatewayHeartbeatSchema = z.object({})
 
 const recordIncomingMessageSchema = z.object({
-  attachments: observedAttachmentsSchema,
+  attachments: observedAttachmentsSchema.default([]),
   author: observedAuthorSchema,
   channel: observedChannelSchema,
   content: z.string(),
   discordCreatedAt: z.string().min(1),
   discordMessageId: z.string().min(1),
-  embeds: observedEmbedsSchema,
+  embeds: observedEmbedsSchema.default([]),
   mentionedDiscordUserIds: mentionedDiscordUserIdsSchema,
 })
 
@@ -1138,10 +1138,17 @@ function lastMessageOfPage(page: BackfilledMessage[]) {
   )[page.length - 1]
 }
 
+type ReadReactions = NonNullable<BackfilledMessage['reactions']>
+
+type BackfillPageContext = {
+  backfillRunId: string
+  ownerDiscordUserId: string
+}
+
 async function insertMessageReactions(
   trx: Transaction<DB>,
   messageId: string,
-  reactions: BackfilledMessage['reactions']
+  reactions: ReadReactions
 ) {
   const rows = reactions.flatMap(({ emoji, reactorDiscordUserIds }) =>
     reactorDiscordUserIds.map((reactorDiscordUserId) => ({
@@ -1160,7 +1167,7 @@ async function insertMessageReactions(
 async function insertBookmarkTheOwnerReactedWith(
   trx: Transaction<DB>,
   messageId: string,
-  reactions: BackfilledMessage['reactions'],
+  reactions: ReadReactions,
   ownerDiscordUserId: string
 ) {
   const bookmarked = reactions.some(
@@ -1180,7 +1187,7 @@ async function insertBookmarkTheOwnerReactedWith(
 async function storeBackfilledPage(
   channelId: string,
   page: BackfilledMessage[],
-  ownerDiscordUserId: string
+  { backfillRunId, ownerDiscordUserId }: BackfillPageContext
 ) {
   return await db()
     .transaction()
@@ -1203,6 +1210,19 @@ async function storeBackfilledPage(
         if (stored.outcome !== 'recorded') continue
 
         storedMessageCount += 1
+
+        if (!message.reactions) {
+          await trx
+            .insertInto('backfillRunUnreadReactions')
+            .values({
+              backfillRunId,
+              id: newId(),
+              messageId: stored.messageId,
+            })
+            .execute()
+
+          continue
+        }
 
         await insertMessageReactions(trx, stored.messageId, message.reactions)
         await insertBookmarkTheOwnerReactedWith(
@@ -1264,11 +1284,10 @@ const runChannelBackfill = applySchema(
       }
 
       fetchedMessageCount += messages.length
-      storedMessageCount += await storeBackfilledPage(
-        channel.id,
-        messages,
-        context.owner.discordUserId
-      )
+      storedMessageCount += await storeBackfilledPage(channel.id, messages, {
+        backfillRunId: run.id,
+        ownerDiscordUserId: context.owner.discordUserId,
+      })
 
       await db()
         .insertInto('backfillRunProgress')

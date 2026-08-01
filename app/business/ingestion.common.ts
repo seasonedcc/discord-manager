@@ -16,7 +16,7 @@ type BackfilledMessage = {
   discordMessageId: string
   embeds: ObservedEmbed[]
   mentionedDiscordUserIds: string[]
-  reactions: { emoji: ObservedEmoji; reactorDiscordUserIds: string[] }[]
+  reactions?: { emoji: ObservedEmoji; reactorDiscordUserIds: string[] }[]
 }
 
 type FetchChannelHistory = (request: {

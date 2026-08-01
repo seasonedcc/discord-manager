@@ -1,7 +1,13 @@
 import { z } from 'zod'
 import type { GatewayActivity } from '~/business/ingestion.common'
 
-type BackfillStatus = 'completed' | 'failed' | 'never' | 'running' | 'stalled'
+type BackfillStatus =
+  | 'completed'
+  | 'failed'
+  | 'never'
+  | 'reactionsUnread'
+  | 'running'
+  | 'stalled'
 
 type IngestionGuidance = {
   summary: string
@@ -24,6 +30,12 @@ const backfillStatusCopy = {
     summary: 'No channel history has been backfilled in this server yet.',
     nextAction:
       'Run the ingest daemon with pnpm run ingest — it backfills every channel it can read on startup.',
+  },
+  reactionsUnread: {
+    summary:
+      'Every channel the bot has visited finished pulling its history, and Discord would not list who reacted to some of the messages it stored.',
+    nextAction:
+      'Read one of those messages with messages_fetch when its reactions matter — the backfill walks forward and never goes back for them. Check the bot has Read Message History in the channels listed under reactionsUnreadChannelNames so the next history it pulls arrives with them.',
   },
   running: {
     summary: 'Backfills are still working through the history.',

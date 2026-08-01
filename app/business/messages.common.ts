@@ -89,7 +89,7 @@ const messageFetchFailureCopy = {
     summary:
       'Discord no longer has this message — it was deleted there, and the store has now recorded that.',
     nextAction:
-      'Tell the owner it is gone — it stops coming back in catch-ups, mentions and bookmarks from here on. Read `channelId` back through messages_catch_up to see what stands in that channel now.',
+      'Tell the owner it is gone — it stops coming back in catch-ups and mentions from here on, and a bookmark on it stays listed with `deletedUpstream` set until they resolve it with bookmarks_resolve. Read `channelId` back through messages_catch_up to see what stands in that channel now.',
   },
   rejected: {
     summary: 'Discord refused to hand this message over, so nothing was read.',
@@ -159,6 +159,7 @@ function renderEmbed({
 
 function renderEmoji({ animated, id, name }: ObservedEmoji) {
   if (!id) return name
+  if (!name) return `:${id}`
 
   return animated ? `a:${name}:${id}` : `${name}:${id}`
 }

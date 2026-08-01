@@ -31,9 +31,14 @@ Two processes share one SQLite database file (WAL mode makes this safe):
   startup backfill and the gap sweeps triggered on connect and resume. The liveness
   heartbeat runs on an interval timer of its own rather than on that queue: it is a local
   append needing neither retries nor dedupe, and a backfill busy for minutes is not a dead
-  gateway, so queueing it would let a long sweep read as silence.
+  gateway, so queueing it would let a long sweep read as silence. Each beat is gated on the
+  client actually being ready — a beat is a claim about the link, not about the process.
 - The MCP server — a stdio process the owner's AI client spawns per session (wired via
-  `.mcp.json`). It only reads the store and calls Discord's REST API for sends.
+  `.mcp.json`). It reads the store, and it calls Discord's REST API twice over: to post
+  sends, and to read one message live for `messages_fetch`. It writes only what those calls
+  observe — the telemetry of every call it makes, and the deletion Discord reports when a
+  message the store holds is gone from there. It never writes message content: the daemon
+  stays the only writer of messages, revisions, embeds, attachments and reactions.
 
 Both processes are thin shells over `app/business/` functions.
 
@@ -221,14 +226,18 @@ skip-reason enum; no shared framework, no shared enums:
 
 - `message_send_requests` / `...reply_targets` / `...retries` / `...deliveries` /
   `...failures` (with a `kind` of `rejected` or `unreachable`) / `...skips` — MCP sends.
-- `backfill_runs` / `backfill_run_progress` / `...completions` / `...failures` — REST
-  history backfills. Each channel's newest run gives a state, and the reading rolls those
-  states up worst-first into counts, the names of the channels whose newest run failed,
-  and how many channels no run has ever visited.
+- `backfill_runs` / `backfill_run_progress` / `...completions` / `...failures` /
+  `...unread_reactions` — REST history backfills. Each channel's newest run gives a state,
+  and the reading rolls those states up worst-first into counts, the names of the channels
+  whose newest run failed, the names of those whose newest run stored messages Discord
+  would not list the reactors of, and how many channels no run has ever visited.
 - `gateway_connections` / `gateway_heartbeats` / `gateway_disconnections` — activity
   derivation reads `receiving | quiet | never` from the newest sign of life against a
   named silence-threshold constant, so a daemon that died without disconnecting goes
-  quiet instead of reading live forever.
+  quiet instead of reading live forever. A heartbeat is written only while the client is
+  ready, so it proves the *link* is up and not merely that the process is: a daemon whose
+  shard disconnected for good stops beating and goes quiet on the same threshold, exactly
+  as one that was killed does.
 - `message_fetch_requests` / `message_fetch_retrievals` / `message_fetch_failures` (with a
   `kind` of `gone`, `rejected` or `unreachable`) / `message_fetch_skips` (with a `reason`
   of `message_deleted`) — `messages_fetch` reading one message live. The family carries no
@@ -432,15 +441,38 @@ plain data, and written in the same transaction as the revision they belong to.
   counts for free, but the reactor ids need a paginated `reaction.users.fetch` per emoji —
   once for normal reactors and once for burst (super) ones, since Discord lists them
   separately and a super-reacted emoji would otherwise come back with nobody on it — so only
-  messages that actually have reactions pay, and a failure lands in `backfill_run_failures`
-  like any other backfill failure. It is the one reaction path that talks to Discord, and it
-  runs in the backfill job, never in a gateway handler.
+  messages that actually have reactions pay. It is the one reaction path that talks to
+  Discord, and it runs in the backfill job, never in a gateway handler.
+- **The reactor walk is isolated from the history it belongs to**, exactly as it is in the
+  live fetch: a reaction listing Discord refuses cannot void a message it already handed
+  over. `makeChannelHistoryFetcher` wraps each message's walk on its own, so one refusal
+  leaves that message's `reactions` **absent** and every sibling in the page intact. Without
+  that isolation a single refused listing rejected the whole `fetchChannelHistory` call: up
+  to a hundred already-retrieved messages were dropped, the scheduler burned its retries in
+  seconds, and — with the gateway link healthy, so nothing re-enqueued the sweep — the
+  channel's cursor stayed where it was until the daemon restarted.
+- Absent reactions are *unread*, never *none*. `storeBackfilledPage` stores the message and
+  appends a `backfill_run_unread_reactions` row naming it, so the store can tell "Discord
+  would not say" from "nobody reacted" — the same distinction `messages_fetch` draws by
+  omitting its `reactions` field. Those reactions are readable live at any time through
+  `messages_fetch`; the backfill walks forward and never goes back for them.
+- That row is the run's own outcome vocabulary, not a failure. A run that stored every
+  message it fetched did not fail, so writing `backfill_run_failures` would make
+  `ingestion_status` claim missing history and tell the owner to restart the daemon over
+  work that finished. A newest run carrying a completion **and** an unread-reactions row
+  reads `reactionsUnread` instead, with its own copy and its own
+  `reactionsUnreadChannelNames`, ranked below `running` and above `completed`.
 - Embeds cross into the business layer **structured** and are rendered once, on the way in,
   by `renderEmbed` in `app/business/messages.common.ts` — author, title with its link,
   description, each field as `name: value`, image, thumbnail, footer, timestamp, empty
   parts skipped. One rendering at capture means every reader and every future live fetch
   agrees on the words, and `messages.common.ts` is where a message-fetching domain finds
   it without importing ingestion.
+- An edit must **state** its embeds and attachments: `recordMessageEditSchema` gives them no
+  default, unlike the create schema. A revision is a whole snapshot, so an edit that leaves
+  them out does not leave them alone — it replaces the revision with one carrying none, and
+  a defaulted empty list would strip a preview the message still shows. Creation has nothing
+  to lose that way, which is why only the edit demands the words.
 - The readers (`digestMessagesSince`, `listBookmarks`) aggregate both sets in SQL —
   `json_group_array` over a correlated subquery keyed on the ranked revision's id — so a
   digest stays one query and shows only the current version's embeds, never a pre-edit one.
@@ -471,10 +503,14 @@ store without touching the network.
   `Unknown Message` for a message the store holds, the fetch has observed the same fact the
   gateway's `MESSAGE_DELETE` carries, so the transaction that records the `gone` failure
   also appends a `message_deletions` row unless one already stands. It is an observation,
-  not an inference, and it is what makes the `gone` next action true: readers exclude
-  deleted messages, so the message really does stop coming back. A duplicate raced in by the
-  daemon would be harmless anyway — existence is state — but the not-exists guard keeps the
-  history honest about how many deletions were observed.
+  not an inference, and it is what makes the `gone` next action true — but only as far as
+  the events go: the digest readers (`digestMessagesSince`, `listMentions`) exclude deleted
+  messages, so a catch-up and a mention listing really do stop showing it, while
+  `listBookmarks` deliberately keeps a bookmark on it and flags it `deletedUpstream` until
+  the owner resolves it. The next action says exactly that, because a bookmark the owner
+  never sees again is a bookmark they cannot close. A duplicate raced in by the daemon would
+  be harmless anyway — existence is state — but the not-exists guard keeps the history
+  honest about how many deletions were observed.
 - A message the store already records as deleted is a **skip**, not a call: the store
   knows the answer, so asking Discord would burn a request to learn it, and skipping keeps
   deleted content out of sight the way the rest of the product does. A gone fetch therefore
@@ -490,9 +526,12 @@ store without touching the network.
   reaction with any burst count is walked a second time with `type=1` — otherwise an owner
   who only super-reacted would read as not having reacted at all.
 - Custom emoji are keyed the way Discord's own route wants them — `name:id`, `a:name:id`
-  when animated — and unicode emoji stay the glyph. A custom emoji deleted from the server
-  comes back nameless; the route resolves it by id alone, so the walk sends a stand-in name
-  while the owner-facing emoji stays `:id`, never the string `null:id`.
+  when animated — and unicode emoji stay the glyph. The fetch normalizes Discord's payload
+  into the same `{name, id, animated}` observation the gateway seam produces and renders it
+  through the one `renderEmoji`, so a live reaction and a stored one can never be spelled
+  differently. A custom emoji deleted from the server comes back nameless; the route
+  resolves it by id alone, so the walk sends a stand-in name while the owner-facing emoji
+  stays `:id`, never the string `null:id` and never `a::id`.
 - The reactor walk is isolated from the read. A reaction listing Discord refuses cannot
   void a message it already handed over: the fetch still records a retrieval and answers
   `retrieved`, with `reactions` absent. Absent means *Discord would not say*; an empty array
@@ -505,9 +544,13 @@ readers show what Discord shows. Three decisions carry the feature.
 - **One canonical emoji value.** `renderEmoji` in `app/business/messages.common.ts` turns
   the observed `{name, id, animated}` into the glyph or into `name:id` / `a:name:id`,
   exactly as `renderEmbed` renders an embed: structured in at the seam, rendered once in
-  the business layer, so the gateway and the backfill can never disagree about what an
-  emoji is called. Discord's percent-encoded `identifier` is deliberately not used — it is
-  a URL detail, unreadable in a digest.
+  the business layer, so the gateway, the backfill and the live fetch can never disagree
+  about what an emoji is called — there is one function, and every path normalizes its
+  payload into that observation rather than spelling the value itself. An emoji Discord has
+  forgotten the name of renders `:id` whether or not it is animated: a name-shaped slot
+  nobody can fill would only ever produce `a::id`, which names nothing. Discord's
+  percent-encoded `identifier` is deliberately not used — it is a URL detail, unreadable in
+  a digest.
 - **Standing reactions only.** The reader ranks the (message, emoji, reactor) triple's
   events newest-first and keeps the triples whose latest event is an addition, then groups
   by emoji for `count` and `ownerReacted`. The pills are ordered by when each emoji **first
@@ -532,11 +575,24 @@ away. The backfill follows the same rule from the other direction: history it st
 the first time carrying the owner's 🔖 lands a `bookmark_additions` row beside the reaction
 rows, so no reading can show a standing owner 🔖 with no bookmark behind it.
 
+**A normal and a super reaction of the same emoji are one fact.** Discord's reaction events
+name a message, an emoji and a reactor and nothing else, so the same person's normal 👍 and
+super 👍 arrive as the same triple, and the store keys them that way. A Nitro user holding
+both who takes only one back therefore leaves the pill entirely, and if that person is the
+owner and the emoji is 🔖, the bookmark resolves — while Discord still shows the reaction
+standing. Telling the two apart would mean a burst dimension on the key: a new typed event
+table pair threaded through every reader, for a case needing one person to hold two
+reactions of one emoji and retract exactly one. It is accepted the way the emoji-rename
+split is accepted, and it heals itself the moment they react again. When a summary looks
+wrong, `messages_fetch` reads what Discord has right now.
+
 **Reactions are live-only, and the store says so.** The backfill cursor walks forward to
 messages the store has never seen, so a reaction added or taken back while the daemon was
 down, on a message already stored, is never recovered — the summary keeps showing what the
-daemon last saw. Only newly stored messages arrive with their current reactions. The README
-and the tool descriptions state this rather than promising completeness.
+daemon last saw. Only newly stored messages arrive with their current reactions, and only
+when Discord agreed to list who left them — a refused listing leaves that one message's
+reactions unread, recorded as such. The README and the tool descriptions state both rather
+than promising completeness.
 
 ## Scheduling
 
@@ -550,7 +606,9 @@ that starts the runner.
 Because that queue is serial, only work that can afford to wait behind a REST-heavy
 backfill belongs on it. The liveness heartbeat does not: it is `startGatewayHeartbeat` in
 the daemon wiring, a plain interval over a local insert, so ingestion health keeps reading
-`receiving` while a long sweep runs.
+`receiving` while a long sweep runs. The interval takes the liveness predicate the daemon
+gives it (`client.isReady()`) and skips the insert when the link is down — a skipped beat
+is silence, and silence is exactly what the quiet derivation reads.
 
 ## Testing
 
