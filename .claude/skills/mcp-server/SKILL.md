@@ -5,6 +5,8 @@ description: Build and extend the MCP stdio server in app/mcp/ — the product's
 
 # MCP Server
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 Discord Manager has no web UI. The MCP server is how the owner uses the product: an MCP client spawns `pnpm run mcp` over stdio and calls **tools** that are thin projections of the business layer. The rule that keeps this honest: **the MCP server never serves more, and never less, than the business layer serves the owner** — enforced by the parity test.
 
 ## Architecture map
@@ -63,7 +65,7 @@ The proof lives in the E2E spec: it executes the tool description's recipe *lite
 
 ## Scalars at the JSON boundary
 
-An MCP client sends native JSON types. A schema that accepts only a string form of a scalar — a boolean written as `'true'`, a number written as `'5'` — rejects exactly what a real client sends. Business schemas on a wrapped path accept the native type: `z.boolean()`, `z.number()`, `z.string()`. When a wrapped schema carries a coerced field, add a test proving the native JSON value reaches the business logic — it should fail on a business rule, never on input validation.
+An MCP client sends native JSON types. A schema that accepts only a string form of a scalar — a boolean written as `'true'`, a number written as `'5'` — rejects exactly what a real client sends. Business schemas on a wrapped path accept the native type: `z.boolean()`, `z.number()`, `z.string()`. When a wrapped schema carries a coerced field, add a test proving the native JSON value reaches the business logic — it should fail on a business rule, never on input validation. Audit wrapped input schemas with a `z\.coerce` grep the way dates are audited with `z\.date\(` — a coercion that accepts a string form of a scalar was written for some other caller's wire format, and a JSON client sends the native type.
 
 ## Jobs are not capabilities
 
@@ -106,3 +108,4 @@ The Definition of Done includes exercising the work through a real MCP client se
 
 - Give the model exact "use these arguments verbatim" instructions, or the tool calls are not reproducible.
 - Headless client runs can print wrapper output before the JSON — parse the last result object, not the first line.
+- Add `--output-format stream-json --verbose` to a headless run to capture the exact `tool_use` inputs the model sent. Without them you see only results — which is precisely how a boundary-coercion or schema-shape defect hides behind a plausible-looking answer.

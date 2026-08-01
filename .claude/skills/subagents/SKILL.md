@@ -5,6 +5,8 @@ description: Spawn subagents and dynamic workflows well — size each task to th
 
 # Subagents and Dynamic Workflows
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 The orchestrator delegates execution and keeps its own context lean. The two decisions that make delegation work are **how big to make each subagent's task** and **which model runs it**. Getting the size right matters more than anything else: it is the difference between coherent, trustworthy work and hallucinated, low-quality work.
 
 This skill is **self-improving**. When a better sizing heuristic or a new calibration point emerges, update it.
