@@ -248,7 +248,7 @@ Migrations evolve the schema and are bound by the doctrine's spirit: a backfill 
 
 ## The dev seed builds demo state onto an empty database
 
-`app/db/dev-seed/` is empty-database-only. `seed.ts` asserts the database is empty before any section runs, aborting unless every application table is empty (Kysely's migration bookkeeping is the only exemption). There is no idempotency machinery — no "already seeded" guards, no per-natural-key convergence. Each section assumes a blank database and only inserts. Run it with `pnpm run db:seed:dev`.
+`app/db/dev-seed/` is empty-database-only. `seed.ts` asserts the database is empty before any section runs, aborting unless every application table is empty (Kysely's migration bookkeeping is the only exemption). There is no idempotency machinery — no "already seeded" guards, no per-natural-key convergence. Each section assumes a blank database and only inserts. Run it with `pnpm run db:seed:dev`. CI runs it too, against a freshly migrated scratch database, so a section that no longer works fails the build rather than the next self-hoster.
 
 There is deliberately no reset script. Because the seed only builds onto an empty database, reseeding is a manual delete of the database file, then `pnpm run db:migrate` and `pnpm run db:seed:dev` — every run is a complete build from a known-clean slate, never a patch over existing rows.
 
@@ -258,7 +258,7 @@ Three rules keep a section demo-ready and durable:
 
 - Compute every date relative to `now` in SQL (`strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')`), never a hardcoded calendar date, which rots.
 - Prerequisite lookups key on natural keys (a Discord channel id, a channel name), never on insertion order. Bulk-seeded rows share timestamps, so `orderBy('createdAt')` is undefined; `orderBy('id')` does resolve, but only to the order the seed happened to write in, so the day a later section inserts earlier in the pipeline that lookup silently returns a different row.
-- Sections drive real business functions, not raw inserts, so the seed exercises the same validation the product does.
+- Sections drive real business functions, not raw inserts, so the seed exercises the same validation the product does — and because `applySchema` accepts `unknown`, that validation is runtime only. Tie every payload to its schema (`satisfies z.input<typeof recordIncomingMessageSchema>`, or a type alias derived from it) so a shape change breaks the build instead of the self-hoster's first `db:seed:dev`.
 
 The timestamp tie also decides read order. Sibling rows inserted in one transaction share that transaction's clock to the millisecond, so any derivation ordering them by `createdAt` falls through to its id tiebreak and reshuffles on every reseed — which flips digest output nondeterministically. When a seeded reading's row order matters, stagger the siblings' `createdAt` with small now-relative offsets; never change the product query's ordering to compensate.
 

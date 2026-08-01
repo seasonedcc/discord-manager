@@ -1,23 +1,32 @@
 import { existsSync } from 'node:fs'
 import { type Result, fromSuccess } from 'composable-functions'
 import { sql } from 'kysely'
+import type { z } from 'zod'
 import { ownerContext } from '~/business/auth.server'
+import type {
+  addBookmarkByLinkSchema,
+  listBookmarkReasonsSchema,
+} from '~/business/bookmarks.common'
 import {
   addBookmarkByLink,
   listBookmarkReasons,
 } from '~/business/bookmarks.server'
 import {
   recordChannelArchiving,
+  type recordChannelArchivingSchema,
   recordChannelSnapshot,
+  type recordChannelSnapshotSchema,
   recordGatewayConnection,
+  type recordGatewayConnectionSchema,
   recordIncomingMessage,
+  type recordIncomingMessageSchema,
 } from '~/business/ingestion.server'
-import type {
-  ObservedAttachment,
-  ObservedEmbed,
-} from '~/business/messages.common'
+import type { fetchMessageSchema } from '~/business/messages.common'
 import { fetchMessage } from '~/business/messages.server'
-import { TransportRejectedError } from '~/business/sending.common'
+import {
+  TransportRejectedError,
+  type sendMessageSchema,
+} from '~/business/sending.common'
 import { sendMessage } from '~/business/sending.server'
 import { db } from '~/db/db.server'
 import { refusalForNonNumericIds } from '~/db/dev-seed/configured-ids'
@@ -28,6 +37,15 @@ import {
 } from '~/ingest/gateway.server'
 
 if (existsSync('.env')) process.loadEnvFile()
+
+type ObservedChannel = z.input<typeof recordChannelSnapshotSchema>
+
+type ObservedChannelDetails = Omit<
+  ObservedChannel,
+  'discordChannelId' | 'isThread'
+>
+
+type ObservedMessage = z.input<typeof recordIncomingMessageSchema>
 
 const context = ownerContext()
 
@@ -95,29 +113,24 @@ async function guardAnEmptyDatabase() {
   }
 }
 
-async function observeChannel(channel: {
-  category: string
-  name: string
-  position?: number
-  topic?: string
-}) {
+async function observeChannel(channel: ObservedChannelDetails) {
   const observed = {
     ...channel,
     discordChannelId: nextDiscordId(),
     isThread: false,
-  }
+  } satisfies ObservedChannel
 
   await fromSuccess(recordChannelSnapshot)(observed, context)
 
   return observed
 }
 
-async function observeThread(thread: { category: string; name: string }) {
+async function observeThread(thread: ObservedChannelDetails) {
   const observed = {
     ...thread,
     discordChannelId: nextDiscordId(),
     isThread: true,
-  }
+  } satisfies ObservedChannel
 
   await fromSuccess(recordChannelSnapshot)(observed, context)
 
@@ -132,15 +145,13 @@ async function postMessage({
   discordCreatedAt,
   embeds = [],
   mentionedDiscordUserIds = [],
-}: {
-  attachments?: ObservedAttachment[]
-  author: { discordUserId: string; displayName: string; username: string }
-  channel: Awaited<ReturnType<typeof observeChannel | typeof observeThread>>
-  content: string
-  discordCreatedAt: string
-  embeds?: ObservedEmbed[]
-  mentionedDiscordUserIds?: string[]
-}) {
+}: Pick<
+  ObservedMessage,
+  'author' | 'channel' | 'content' | 'discordCreatedAt'
+> &
+  Partial<
+    Pick<ObservedMessage, 'attachments' | 'embeds' | 'mentionedDiscordUserIds'>
+  >) {
   const discordMessageId = nextDiscordId()
 
   const { messageId } = await fromSuccess(recordIncomingMessage)(
@@ -153,7 +164,7 @@ async function postMessage({
       discordMessageId,
       embeds,
       mentionedDiscordUserIds,
-    },
+    } satisfies ObservedMessage,
     context
   )
 
@@ -223,7 +234,10 @@ const uptimeWatch = {
   username: 'uptime-watch',
 }
 
-await fromSuccess(recordGatewayConnection)({}, context)
+await fromSuccess(recordGatewayConnection)(
+  {} satisfies z.input<typeof recordGatewayConnectionSchema>,
+  context
+)
 
 const announcements = await observeChannel({
   category: 'Company',
@@ -332,7 +346,10 @@ await undoReaction({
   reactorDiscordUserId: maya.discordUserId,
 })
 
-const { reasons } = await fromSuccess(listBookmarkReasons)({}, context)
+const { reasons } = await fromSuccess(listBookmarkReasons)(
+  {} satisfies z.input<typeof listBookmarkReasonsSchema>,
+  context
+)
 const answerLater = reasons.find(({ name }) => name === 'Answer later')
 
 if (!answerLater) {
@@ -345,7 +362,7 @@ await fromSuccess(addBookmarkByLink)(
   {
     messageLink: `https://discord.com/channels/${context.owner.guildId}/${engineering.discordChannelId}/${awaitingAnAnswer.discordMessageId}`,
     reasonId: answerLater.reasonId,
-  },
+  } satisfies z.input<typeof addBookmarkByLinkSchema>,
   context
 )
 
@@ -362,7 +379,9 @@ await postMessage({
 })
 
 await fromSuccess(recordChannelArchiving)(
-  { discordChannelId: retiredThread.discordChannelId },
+  {
+    discordChannelId: retiredThread.discordChannelId,
+  } satisfies z.input<typeof recordChannelArchivingSchema>,
   context
 )
 
@@ -380,7 +399,7 @@ const refusedSend = await fromSuccess(
   {
     channelId: engineeringChannel.id,
     content: 'Reminder: the deploy checklist is in the handbook now.',
-  },
+  } satisfies z.input<typeof sendMessageSchema>,
   context
 )
 
@@ -413,7 +432,10 @@ await fromSuccess(
       },
     ],
   }))
-)({ messageId: alert.messageId }, context)
+)(
+  { messageId: alert.messageId } satisfies z.input<typeof fetchMessageSchema>,
+  context
+)
 
 await db().destroy()
 
