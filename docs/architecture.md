@@ -34,7 +34,11 @@ Two processes share one SQLite database file (WAL mode makes this safe):
   gateway, so queueing it would let a long sweep read as silence. Each beat is gated on the
   client actually being ready — a beat is a claim about the link, not about the process.
 - The MCP server — a stdio process the owner's AI client spawns per session (wired via
-  `.mcp.json`). It only reads the store and calls Discord's REST API for sends.
+  `.mcp.json`). It reads the store, and it calls Discord's REST API twice over: to post
+  sends, and to read one message live for `messages_fetch`. It writes only what those calls
+  observe — the telemetry of every call it makes, and the deletion Discord reports when a
+  message the store holds is gone from there. It never writes message content: the daemon
+  stays the only writer of messages, revisions, embeds, attachments and reactions.
 
 Both processes are thin shells over `app/business/` functions.
 
@@ -570,6 +574,17 @@ read the owner's standing 🔖 before the general side appends the removals that
 away. The backfill follows the same rule from the other direction: history it stores for
 the first time carrying the owner's 🔖 lands a `bookmark_additions` row beside the reaction
 rows, so no reading can show a standing owner 🔖 with no bookmark behind it.
+
+**A normal and a super reaction of the same emoji are one fact.** Discord's reaction events
+name a message, an emoji and a reactor and nothing else, so the same person's normal 👍 and
+super 👍 arrive as the same triple, and the store keys them that way. A Nitro user holding
+both who takes only one back therefore leaves the pill entirely, and if that person is the
+owner and the emoji is 🔖, the bookmark resolves — while Discord still shows the reaction
+standing. Telling the two apart would mean a burst dimension on the key: a new typed event
+table pair threaded through every reader, for a case needing one person to hold two
+reactions of one emoji and retract exactly one. It is accepted the way the emoji-rename
+split is accepted, and it heals itself the moment they react again. When a summary looks
+wrong, `messages_fetch` reads what Discord has right now.
 
 **Reactions are live-only, and the store says so.** The backfill cursor walks forward to
 messages the store has never seen, so a reaction added or taken back while the daemon was
