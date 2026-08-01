@@ -23,8 +23,9 @@
     "lint": "biome check --error-on-warnings",
     "lint-fix": "biome check --write --error-on-warnings",
     "mcp": "tsx ./app/mcp/run.ts",
-    "test": "npm-run-all test:unit test:e2e",
+    "test": "npm-run-all test:unit test:e2e test:seed-coverage",
     "test:e2e": "tsx ./tests/run-e2e.ts",
+    "test:seed-coverage": "tsx ./tests/seed-coverage/run.ts",
     "test:unit": "cross-env TZ=UTC vitest run",
     "tsc": "tsc"
   },
