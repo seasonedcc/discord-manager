@@ -174,6 +174,10 @@ Two registries sit beside it, with the same discipline:
 
 The gate fails on a stale entry too — a pending or excluded entry naming a tool that no longer exists, or a tool listed in both registries. It enforces only on a full run: a filtered run cannot know what the rest of the suite would have reached, so it drops to reporting.
 
+### Sibling readers are enumerated, never assumed
+
+`messages_catch_up` and `mentions_list` read through one shared query builder, and `bookmarks_list` repeats its shape, so a per-message field added for one reader arrives on all three at once and is pinned by none of them. The gate above cannot see that: it proves `mentions_list` was called, never that anything read the new field back. When a reader gains a field, enumerate every reader that now returns it and give each one a unit assertion and an E2E assertion in the same commit, including the spec's local response type. The test to write is the one that would fail if the field were dropped from that reader alone; without it the field is undefined behavior on that surface, however well its siblings are covered.
+
 ### The E2E seed
 
 `tests/seed/` holds the seed and the fake gateway feed, a thin orchestrator over one module per journey. Every run builds a fresh store: the runner deletes the E2E database file, migrates, seeds, and only then starts the suite. There is no long-lived E2E database and no convergence machinery — a fresh file per run is what SQLite makes cheap, and it removes the whole class of stale-state drift a surviving store accumulates.
