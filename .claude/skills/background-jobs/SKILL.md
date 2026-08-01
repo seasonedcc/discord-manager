@@ -5,9 +5,9 @@ description: Write background work against the in-process scheduler — makeJob 
 
 # Background jobs
 
-There is no queue server, no worker process, and no jobs table. `app/framework/scheduler.server.ts` is the entire scheduler: one in-memory FIFO queue, one job running at a time, inside the ingest daemon. Jobs are declared next to the domain logic they drive in `app/business/`, listed in `app/business/jobs.server.ts`, and run by the one runner `app/ingest/run.ts` builds.
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
 
-Everything here documents the product as it is built on `main`. If the code disagrees with this file, the code wins: follow `main` and flag the drift.
+There is no queue server, no worker process, and no jobs table. `app/framework/scheduler.server.ts` is the entire scheduler: one in-memory FIFO queue, one job running at a time, inside the ingest daemon. Jobs are declared next to the domain logic they drive in `app/business/`, listed in `app/business/jobs.server.ts`, and run by the one runner `app/ingest/run.ts` builds.
 
 ## The runtime, stated
 

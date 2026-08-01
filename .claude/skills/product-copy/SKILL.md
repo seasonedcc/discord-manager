@@ -5,9 +5,9 @@ description: Write the words this product ships — tool names, tool and paramet
 
 # Product copy
 
-This product has no interface but its words. An MCP client lists the tool names and descriptions, a model picks a tool from them, an error message is the only thing that tells it what to do instead, and the README is the whole of setup. Those four surfaces are the UX, and they are held to the bar an interface would be.
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
 
-Everything here documents the product as it is built on `main`. If the code disagrees with this file, the code wins: follow `main` and flag the drift.
+This product has no interface but its words. An MCP client lists the tool names and descriptions, a model picks a tool from them, an error message is the only thing that tells it what to do instead, and the README is the whole of setup. Those four surfaces are the UX, and they are held to the bar an interface would be.
 
 Two neighbours own the parts this file does not. `mcp-server` governs where the words live and the shape of a tool name — `snake_case`, `<domain>_<verb_phrase>`; this file governs what they say. `integration-telemetry` governs the outcome copy maps: every reason's summary and next action, typed exhaustively, with no raw vendor text at the boundary.
 
