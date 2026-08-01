@@ -347,17 +347,26 @@ contains zero authorization — tools call business functions with the real cont
 
 ## MCP tools (v1)
 
-`channels_list`, `activity_since` (since), `messages_catch_up` (since + optional
-channel), `mentions_list`, `bookmarks_list` (optional limit, snoozed, reason filter),
-`bookmarks_add` (by message link + reason), `bookmarks_resolve`, `bookmarks_snooze`,
-`bookmarks_set_reason`, `bookmark_reasons_list`, `bookmark_reasons_add`,
-`bookmark_reasons_edit`, `bookmark_reasons_retire`, `messages_fetch` (by stored message
-id), `messages_send` (channel, content, optional reply, optional retry of an earlier
-request), `messages_send_status` (by request id), `ingestion_status`.
+`channels_list`, `activity_since` (since + optional waitSeconds), `messages_catch_up`
+(since + optional channel), `mentions_list`, `bookmarks_list` (optional limit, snoozed,
+reason filter), `bookmarks_add` (by message link + reason), `bookmarks_resolve`,
+`bookmarks_snooze`, `bookmarks_set_reason`, `bookmark_reasons_list`,
+`bookmark_reasons_add`, `bookmark_reasons_edit`, `bookmark_reasons_retire`,
+`messages_fetch` (by stored message id), `messages_send` (channel, content, optional
+reply, optional retry of an earlier request), `messages_send_status` (by request id),
+`ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the
 business functions' own exported schemas, dates cross the boundary as ISO strings. The
 parity test keeps the tool surface equal to the business surface.
+
+`activity_since` is the one tool that can block. Given `waitSeconds` it re-runs its
+counting query about once a second until a stream comes back non-zero or the deadline
+passes, and returns whatever that last check saw — a long poll, so a standing watch wakes
+within seconds of a message instead of costing the assistant a turn per polling interval,
+and needs no access to the database file. The cap of 55 seconds keeps a wait inside the
+one-minute request timeout MCP clients typically apply. Nothing about it is stateful: it
+is a read path, with no table and no event of its own.
 
 ## Ingestion design
 

@@ -1,5 +1,5 @@
-import { isContextError } from 'composable-functions'
-import { callTool } from '~/mcp/server.server'
+import { isContextError, isInputError } from 'composable-functions'
+import { callTool, listTools } from '~/mcp/server.server'
 import {
   createBookmarkedMessage,
   createChannel,
@@ -47,6 +47,34 @@ describe('activity_since', () => {
       bookmarkAdditions: { count: 1, newestAt: '2101-01-02T00:00:00.000Z' },
     })
     expect(text).not.toContain('the release notes need a look')
+  })
+
+  it('offers the wait, capped at fifty-five seconds, to whoever reads the tool list', async () => {
+    const listed = listTools().find(({ name }) => name === 'activity_since')
+
+    expect(listed?.inputSchema.properties?.waitSeconds).toMatchObject({
+      maximum: 55,
+      minimum: 1,
+      type: 'integer',
+    })
+  })
+
+  it('refuses a wait past the fifty-five second cap', async () => {
+    const guild = await createGuild()
+    const context = await ownerContext({ guildId: guild.id })
+
+    const { isError, payload } = await callAsOwner(
+      'activity_since',
+      { since: '2101-01-01T00:00:00.000Z', waitSeconds: 56 },
+      context
+    )
+
+    expect(isError).toBe(true)
+    expect(isInputError(payload.errors[0])).toBe(true)
+    expect(payload.errors[0].message).toBe(
+      'Wait a whole number of seconds, from 1 to 55'
+    )
+    expect(payload.errors[0].path).toEqual(['waitSeconds'])
   })
 
   it('refuses a context that cannot read messages', async () => {
