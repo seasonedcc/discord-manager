@@ -78,7 +78,7 @@ app/
     scripts/            migration.ts, migrate.ts, rollback.ts, generate.ts,
                         export.ts, import.ts
     db.server.ts        the product's Kysely instance (makeDb<DB>())
-    types.d.ts          generated — never hand-edited
+    types.d.ts          generated from migrations/ on a throwaway store — never hand-edited
     dev-seed/           local seed, refused unless the ids are Discord-shaped and the store is empty
   env.server.ts     the product's typed env, plus the startup guard both entrypoints call
   mcp/
@@ -646,6 +646,11 @@ is silence, and silence is exactly what the quiet derivation reads.
   failure copy.
 - **Coverage gate**: the E2E runner fails if any registered MCP tool was never called by
   the suite, with the same pending/exemption discipline as bettr's route gate.
+- **Generated types gate**: `app/db/scripts/generate.ts` builds `app/db/types.d.ts` by
+  applying every migration in `app/db/migrations` to a throwaway store under
+  `tests/.artifacts/` and deleting it afterwards, so the file is a pure function of the
+  repository and no configured `DATABASE_PATH` can reach it. `app/db/scripts/generate.test.ts`
+  regenerates the file under `test:unit` and fails when the committed copy has drifted.
 - **TDD for bugs**: red, green, refactor. Mutation-prove any test whose absence assertion
   could false-pass.
 
