@@ -152,7 +152,7 @@ The `id desc` tie-break is mandatory: SQLite's `strftime` clock has millisecond 
 
 **Status from event existence** — a `case` over `exists` chains: a completion row exists → completed, a failure row exists → failed, neither → pending. Only build the derivation when a tool or a business rule actually needs it.
 
-**Indexes**: every event table gets an index on `(parentId, createdAt desc)` at creation time — it serves every latest-wins and existence query.
+**Indexes**: `(parentId, createdAt desc)` is the shape a latest-wins or existence derivation wants, but wanting the shape is not a reason to create the index. An index ships with the reader it serves and with the plan proving that reader chooses it (see *Performance: derive first, then escalate*). A table created before any query reads it ships with no index at all; the index arrives in the change that adds the query.
 
 ## One writer, no ordering machinery
 
@@ -202,7 +202,7 @@ message_revisions
 
 "Optional" attributes are not nullable columns either: model them as their own event table with zero-or-more rows per parent. A channel's topic, its category, its position, and a bookmark's snooze are all this shape — no rows means the parent never had one.
 
-When such an attribute can be **cleared after being set**, one table cannot say so without a sentinel value, and a sentinel is a lie the schema will keep telling. Model it as a reversible pair instead: `channel_topic_changes` carries the value, `channel_topic_clearings` carries nothing, and the newer of the two latest rows wins — a change row means the attribute is present, a clearing row or no rows at all means it is absent. Both tables get the usual `(parentId, createdAt desc)` index.
+When such an attribute can be **cleared after being set**, one table cannot say so without a sentinel value, and a sentinel is a lie the schema will keep telling. Model it as a reversible pair instead: `channel_topic_changes` carries the value, `channel_topic_clearings` carries nothing, and the newer of the two latest rows wins — a change row means the attribute is present, a clearing row or no rows at all means it is absent. Both tables index on `(parentId, createdAt desc)` once a reader derives the attribute from them and the plan shows the index chosen.
 
 A **set-valued attribute stamped per version of its parent** — the users a message pings, fixed by the vendor at each edit — attaches its zero-or-more rows to the *revision* row, not the parent: `message_revision_user_mentions` references `message_revisions`. The current set is simply the latest revision's rows, so "this version cleared the set" is zero rows under a new revision — no sentinel, no clearing table, and no latest-wins machinery beyond what the revisions already have. Keying such rows to the parent instead makes an emptied set indistinguishable from a set never observed. A unique constraint over `(revisionId, member)` is correct here — it states the set-membership fact and serves the reader's exact lookup.
 
