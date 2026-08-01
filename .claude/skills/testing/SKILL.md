@@ -1,25 +1,26 @@
 ---
 name: testing
-description: Write and run Vitest unit tests against a real throwaway SQLite database and end-to-end specs that drive the real MCP server over stdio. Use when writing or fixing a test, running test:unit or test:e2e, practising TDD, mutation-proving an assertion, adding fixtures, editing the E2E seed or its fake gateway feed, or working on the tool coverage gate.
+description: Write and run Vitest unit tests against a real throwaway SQLite database and end-to-end specs that drive the real MCP server over stdio. Use when writing or fixing a test, running test:unit, test:e2e, or test:seed-coverage, practising TDD, mutation-proving an assertion, adding fixtures, editing the E2E seed or its fake gateway feed, writing a seed demonstration, or working on the tool coverage gate or the dev-seed coverage gate.
 ---
 
 # Testing
 
 Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
 
-Two suites. Unit tests exercise business functions against a real SQLite database with no mocks. End-to-end specs drive the real MCP server over stdio, seeded through the real ingestion functions by a scripted fake gateway feed.
+Two suites and a standing gate. Unit tests exercise business functions against a real SQLite database with no mocks. End-to-end specs drive the real MCP server over stdio, seeded through the real ingestion functions by a scripted fake gateway feed. The dev-seed coverage gate proves every registered tool answers with demo state from a freshly dev-seeded store.
 
 ## Commands
 
 ```bash
-pnpm run test:unit    # every unit test, TZ=UTC
-pnpm run test:e2e     # the E2E specs, then the tool coverage gate
-pnpm run test         # unit, then E2E
+pnpm run test:unit           # every unit test, TZ=UTC
+pnpm run test:e2e            # the E2E specs, then the tool coverage gate
+pnpm run test:seed-coverage  # every tool answers from a freshly dev-seeded store
+pnpm run test                # unit, E2E, then the seed-coverage gate
 pnpm run lint
 pnpm run tsc
 ```
 
-Always run `lint`, `tsc`, and `test:unit` before opening a PR. Run the E2E specs a change directly touches; a change to the seed, the client harness, or the runner touches every spec, so there the whole suite is the directly-touched set.
+Always run `lint`, `tsc`, and `test:unit` before opening a PR. Run the E2E specs a change directly touches; a change to the seed, the client harness, or the runner touches every spec, so there the whole suite is the directly-touched set. Run `test:seed-coverage` whenever a change touches the dev seed, registers or renames a tool, or reshapes what a tool answers.
 
 To run a subset, pass arguments straight to `pnpm run test:e2e` with no `--` separator: positional arguments filter specs by filename substring, and `--repeat=<n>` reruns the filtered set — `pnpm run test:e2e waiting-for-activity --repeat=2`. The runner is `tests/run-e2e.ts`; the tool coverage gate only judges a full, unfiltered run.
 
@@ -58,7 +59,7 @@ Unit tests live beside the code as `*.test.ts` and run under Vitest.
 
 - Test the exposed API — inputs and outputs — not implementation details.
 - **No mocks for the database.** Every query runs for real. A test that mocks the store proves nothing about a schema this doctrine derives everything from.
-- Do not test Zod schemas on their own; test the function that applies one.
+- Do not test Zod schemas on their own; test the function that applies one. The one exception is a surface-wide drift guard: `app/mcp/field-messages.test.ts` walks every registered tool's input schema and fails any field that answers a wrong value in Zod's wording instead of the owner's. One guard over the whole surface earns its place; a test for a single schema never does.
 - Do not export an internal helper purely so a test can reach it.
 
 ### Organization
@@ -83,6 +84,7 @@ describe('resolveBookmark', () => {
 - On a failure case, assert the **specific** error, not just that it failed.
 - When pinning not-found behavior, assert on `RecordNotFoundError`'s `.message` (`'Record not found'`) — the class never overrides `.name`, so it stays `'Error'` and a `.name` assertion fails against the very error it means to pin.
 - Drive a happy path with `fromSuccess` so the assertion reads against real data instead of unwrapping by hand.
+- Never discard a returned `Result`, in setup steps least of all. A handler that wraps composables reports failure by returning, not throwing, so a discarded `Result` turns a refused insert into a downstream mismatch pointing at the wrong line — or a false-passing absence assertion. Route setup calls through a helper that throws a named error unless every `Result` succeeded; the `react`, `removeReaction`, and `clearReactions` helpers in `app/ingest/gateway.server.test.ts` are the model.
 
 ```typescript
 // good
@@ -215,3 +217,11 @@ A retried spec reruns against the same per-run store, so a spec is correct only 
 ### Flakes
 
 Never mask a flake with a wait, a retry, or a weakened assertion. A spec that fails intermittently is a likely product bug until investigated. Wait on a deterministic signal — the tool call's own result, a recorded transport request, an event row the fake feed's handler appended — never on elapsed time.
+
+## The dev-seed coverage gate
+
+`pnpm run test:seed-coverage` runs `tests/seed-coverage/run.ts`: it builds a fresh store by spawning the real migrator and the real dev seed as child processes — exactly what a self-hoster runs — then calls each tool's underlying business function with the real `ownerContext()` against that store. The coverage map lives in `tests/seed-coverage/demonstrations.ts`.
+
+Every registered tool is either **demonstrated** — its entry proves a demo-meaningful answer, never merely a non-crash — or listed in **`declaredUnseedable`** with an honest reason, which only a capability that cannot answer without live Discord earns. Exhaustiveness is two-sided: the `Record<Exclude<ToolName, UnseedableTool>, SeedDemonstration>` type fails `tsc` when a tool joins `ToolName` without a demonstration, and a runtime reconciliation against `registeredTools` fails the run when the registry and `ToolName` disagree in either direction.
+
+So a new or changed capability ships its seed state in the same PR (Definition of Done criterion 9): extend `app/db/dev-seed/seed.ts` through the real business functions until the demonstration passes, or argue the unseedable entry. Write demonstrations that would fail against a store missing their state, and mutation-prove them by removing that seed state and watching the gate name the hole. All demonstrations share one seeded store and run in the map's insertion order, read-only entries before mutating ones — keep that order when adding entries.
