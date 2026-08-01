@@ -6,10 +6,12 @@ async function anAlertArrivesAsAnEmbed({
   channels,
   clock,
   members,
+  owner,
 }: {
   channels: Record<string, SeededChannel>
   clock: Clock
   members: Record<string, SeededMember>
+  owner: SeededMember
 }) {
   const engineering = requireSeeded(channels, 'engineering', 'channel')
   const uptime = requireSeeded(members, 'uptime', 'member')
@@ -41,6 +43,7 @@ async function anAlertArrivesAsAnEmbed({
         url: 'https://status.example.test/incidents/412',
       },
     ],
+    mentioning: [owner],
   })
 
   const text = [

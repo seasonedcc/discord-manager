@@ -97,9 +97,9 @@ The seed only ever runs against a freshly created, empty database, and sending w
 | `channels_list` | The channels the bot can see, with the name each one carries now, plus its topic, category and position when it has them — and for threads, whether Discord has archived them, archived ones last |
 | `activity_since` | Whether the store recorded anything after an instant — counts and newest timestamps for new messages, mentions of you, and bookmark additions, on the store's own clock, with no content |
 | `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time — each message with its text, the text of any embeds it carries, and what is attached to it |
-| `mentions_list` | The messages that pinged you since a moment in time — someone naming you, plus replies to you the sender left the ping on |
+| `mentions_list` | The messages that pinged you since a moment in time — someone naming you, plus replies to you the sender left the ping on — each with its text, the text of any embeds it carries, and what is attached to it |
 | `bookmarks_add` | A bookmark from a Discord message link, filed under the reason you pick |
-| `bookmarks_list` | The bookmarks still waiting on you, each with its reason, snoozed ones and single-reason views on request |
+| `bookmarks_list` | The bookmarks still waiting on you, each with its reason, its text, the text of any embeds it carries, and what is attached to it — snoozed ones and single-reason views on request |
 | `bookmarks_resolve` | A bookmark cleared, leaving any reaction in Discord untouched |
 | `bookmarks_snooze` | A bookmark hidden until the moment you pick |
 | `bookmarks_set_reason` | A bookmark filed under a different reason — how an unsorted 🔖 capture leaves the Inbox |

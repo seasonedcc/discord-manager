@@ -537,6 +537,47 @@ describe('listMentions', () => {
     expect(mentions.messages).toHaveLength(0)
   })
 
+  it('reads what a ping says in its embeds and attachments', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const paged = await createMessage({
+      attachments: [
+        {
+          filename: 'incident-timeline.pdf',
+          size: 90210,
+          url: 'https://cdn.example.test/incident-timeline.pdf',
+        },
+      ],
+      channelId: channel.id,
+      content: '',
+      discordCreatedAt: '2099-11-01T00:00:00.000Z',
+      embeds: [
+        'Pager\nCheckout is down (https://status.example.test/incidents/412)',
+      ],
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-11-01T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      paged.id,
+    ])
+    expect(mentions.messages[0].embeds).toEqual([
+      'Pager\nCheckout is down (https://status.example.test/incidents/412)',
+    ])
+    expect(mentions.messages[0].attachments).toEqual([
+      {
+        filename: 'incident-timeline.pdf',
+        size: 90210,
+        url: 'https://cdn.example.test/incident-timeline.pdf',
+      },
+    ])
+  })
+
   it('refuses a context that cannot read messages', async () => {
     const guild = await createGuild()
     const context = await ownerContext({ guildId: guild.id })

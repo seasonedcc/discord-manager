@@ -42,8 +42,14 @@ async function feedEveryJourney() {
     members,
     owner,
   })
-  const alert = await anAlertArrivesAsAnEmbed({ channels, clock, members })
+  const alert = await anAlertArrivesAsAnEmbed({
+    channels,
+    clock,
+    members,
+    owner,
+  })
   const bookmarks = await theOwnerBookmarksAMessage({
+    alert: alert.message,
     members,
     messages,
     owner,

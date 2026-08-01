@@ -5,8 +5,10 @@ import { test } from './spec'
 
 type Digest = {
   messages: {
+    attachments: { filename: string; size: number; url: string }[]
     channelName: string
     content: string
+    embeds: string[]
     messageId: string
     jumpUrl: string
   }[]
@@ -14,7 +16,7 @@ type Digest = {
 }
 
 test('mentions bring back only the messages that pinged you', async () => {
-  const { channels, clock, messages } = fixtures()
+  const { alert, channels, clock, messages } = fixtures()
   const session = await openMcpSession()
 
   const digest = await session.call<Digest>('mentions_list', {
@@ -29,6 +31,15 @@ test('mentions bring back only the messages that pinged you', async () => {
   assert.equal(mention[0].channelName, channels.engineering.name)
   assert.equal(mention[0].jumpUrl, messages.mention.jumpUrl)
   assert.equal(digest.truncated, false)
+
+  const paged = digest.messages.filter(
+    ({ messageId }) => messageId === alert.message.id
+  )
+
+  assert.equal(paged.length, 1)
+  assert.equal(paged[0].content, '')
+  assert.deepEqual(paged[0].embeds, [alert.text])
+  assert.deepEqual(paged[0].attachments, alert.message.attachments)
 
   assert.equal(
     digest.messages.filter(({ messageId }) => messageId === messages.offsite.id)

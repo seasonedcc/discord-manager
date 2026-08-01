@@ -126,7 +126,10 @@ Identity: `guilds` (discordGuildId unique), `channels` (guildId FK, discordChann
 unique), `members` (discordUserId unique), `messages` (channelId FK, authorMemberId FK,
 discordMessageId unique, discordCreatedAt).
 
-Events (all with `(parentId, createdAt desc)` indexes):
+Events, each indexed by its parent — `(parentId, createdAt desc)` wherever latest-event-wins
+reads them, and a unique key on the parent plus what tells its rows apart where a parent's
+rows are one set read whole (`message_revision_user_mentions`, `message_revision_embeds`,
+`message_revision_attachments`):
 
 - `channel_detail_revisions` — full snapshot of what every channel always has: name and
   isThread.
