@@ -129,6 +129,14 @@ it('appends a removal event carrying the mcp source', async () => {
 })
 ```
 
+### Virtual time
+
+A unit test that asserts on timer-driven elapsed time takes its clock from `vi.useFakeTimers()` and advances it with `vi.advanceTimersByTimeAsync(...)`. Node fires a timer callback a fraction of a millisecond before `Date.now()` agrees it should, and more often when the machine is busy, so a stopwatch measures 19ms for a correct 20ms backoff and fails a scheduler that is right. Virtual time pins the delay exactly — `toBe(20)`, not a lower bound a runaway delay would satisfy too — and an `afterEach` restoring `vi.useRealTimers()` keeps a failed assertion from leaking a frozen clock into the file that runs next. Never sleep to conclude that nothing happened.
+
+A virtual clock also reaches assertions a real one cannot: `vi.getTimerCount()` proves a shutdown actually cleared its timers, which no observable behavior reveals once a stopped queue is already swallowing whatever a leaked timer enqueues.
+
+This is scoped to timer behavior. A test that waits on real work — a database round trip, a spawned process — gains nothing from a frozen clock and can hang under one.
+
 ## End-to-end specs
 
 E2E specs live in `tests/` and drive the product exactly as the owner's assistant does.
