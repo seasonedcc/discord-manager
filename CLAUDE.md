@@ -47,7 +47,7 @@ pnpm run test:e2e               # Behavior specs driving the real MCP server ove
 pnpm run test:seed-coverage     # Every tool answers with demo state from a freshly dev-seeded store
 ```
 
-Never hand-edit `app/db/types.d.ts` — it is generated. Write migration column names in camelCase; the Kysely `CamelCasePlugin` converts them to snake_case at compile time, and snake_case appears only inside raw SQL. Unless a migration is genuinely irreversible, run `pnpm run db:migrate`, then `pnpm run db:rollback`, then `pnpm run db:migrate` again to prove both directions before finishing.
+Never hand-edit `app/db/types.d.ts` — it is generated. Write migration column names in camelCase; the Kysely `CamelCasePlugin` converts them to snake_case at compile time, and snake_case appears only inside raw SQL. Only write an irreversible migration as a last resort, after every reversible shape has been considered. Unless a migration is genuinely irreversible, run `pnpm run db:migrate`, then `pnpm run db:rollback`, then `pnpm run db:migrate` again to prove both directions before finishing.
 
 ## Tooling
 
@@ -56,6 +56,7 @@ Never hand-edit `app/db/types.d.ts` — it is generated. Write migration column 
 - **Linting & formatting:** [Biome](https://biomejs.dev) — 2-space indentation, single quotes, trailing commas where valid (es5), semicolons only when required. Check with `pnpm run lint`, auto-fix with `pnpm run lint-fix`.
 - **Type checking:** `pnpm run tsc`.
 - **Tests:** Vitest for unit tests; the MCP-driven runner in `tests/` for end-to-end specs.
+- **Runtime dependencies:** anything imported at runtime lives in `dependencies`, never `devDependencies` — a self-hoster installing with `pnpm install --prod` gets the pruned tree, and a runtime import from `devDependencies` breaks first installs while every check in this repo stays green.
 - **Shell scripting:** never rely on shell-specific constructs like bash's `${PIPESTATUS[0]}` — the shell varies by environment and such constructs can silently no-op elsewhere. When a piped command's success matters, echo each step's exit code explicitly (`cmd | tail -5; echo "exit=$?"` reports tail's status, not cmd's) or avoid the pipe.
 
 `.github/workflows/ci.yml` shows the exact CI steps.
@@ -92,7 +93,10 @@ For comprehensive type-safety guidelines, load the `type-safety` skill.
 - **No cross-imports** between business files, to prevent circular dependencies. If `app/business/digests.server.ts` imports from `app/business/auth.server.ts`, then `auth.server.ts` cannot import anything from `digests.server.ts`.
 - Reusable, app-agnostic abstractions live in `app/framework/`. Load the `framework-folder` and `business-folder` skills for deciding where a new abstraction belongs.
 - Environment variables are typed at the boundary — load the `env-vars` skill before adding or reading one.
-- Every call to Discord's API records its request and its outcome append-only, and owner-facing status is mapped copy with a concrete next action, never raw vendor text. Load the `integration-telemetry` skill before adding or changing any Discord API operation.
+
+## Integration telemetry
+
+Every call the product makes to Discord — a message send, a REST backfill, a gateway connection or reconnect, a health reading — records its request and its outcome append-only, owner-facing status is derived from those events at query time, and what the owner reads is mapped copy with a concrete next action, never raw vendor text. ALWAYS load the `integration-telemetry` skill before adding or changing any Discord API operation.
 
 ## Fixing bugs
 
@@ -112,15 +116,21 @@ The product honors the expectations people already have from Discord, in both di
 
 The conventions in this file and the skills are the maintainer's preferences, not gospel: when the situation genuinely warrants a better shape, diverge — with judgment, and with the divergence and its reasoning recorded in the PR that makes it. A divergence made silently is a bug; a divergence made and argued is how these conventions improve.
 
+## Worktrees
+
+Independent tasks run in isolated git worktrees, each with its own gitignored `.env` and its own `DATABASE_PATH` pointing inside the worktree. ALWAYS work in an isolated worktree unless told otherwise — the main checkout may be a live installation whose store and processes must never be disturbed. Load the `worktrees` skill for the lifecycle and guardrails.
+
+A worktree never runs `pnpm run ingest` with a live bot token or against a store it does not own: the schema's single-writer WAL divergence assumes one gateway writer per store, Discord allows one gateway session per token, and the live installation may be holding both.
+
 ## Orchestration
 
 These instructions are for the top-level session — the orchestrator. If you are a subagent (you were spawned with a specific task and your final report goes back to a coordinator), they are not addressed to you: execute your task directly — read, build, and test yourself — and never spawn subagents, launch workflows, open PRs, or merge unless your task instructions explicitly say to.
 
-Act as the orchestrator on every task. Delegate execution to subagents and dynamic workflows and keep your own context lean: subagents do the heavy reading, building, and testing, and report conclusions back — don't read what a subagent can read for you.
+Act as the orchestrator on every task, not just during `/goal` loops. Delegate execution to subagents and dynamic workflows and keep your own context lean: subagents do the heavy reading, building, and testing, and report conclusions back — don't read what a subagent can read for you.
 
 Load the `subagents` skill before spawning subagents or dynamic workflows — it covers which model tier and reasoning effort to use for each kind of work and how to split tasks. Load the `orchestration` skill alongside it — it covers charters, verifying subagent claims, recovery after interruptions, and shipping lane PRs. Size every subagent task so its context lands at roughly one-third of the 1M-token window by completion, since these models start degrading past ~25–33% fill.
 
-Break the work down however you think is best, as long as you respect dependencies: work that depends on other work only starts when the dependency has fully landed. Independent work runs in parallel. Use well-designed dynamic workflows whenever the work allows for parallelism.
+Break the work down however you think is best, as long as you respect dependencies: work that depends on other work only starts when the dependency has fully landed. Independent work runs in parallel, each piece in its own worktree. Use well-designed dynamic workflows whenever the work allows for parallelism.
 
 Our baseline is all checks passing: `pnpm run lint`, `pnpm run tsc`, `pnpm run test:unit`, `pnpm run test:e2e`. Whenever that baseline gets lost for any reason, stop everything and restore the baseline with the highest quality level. The baseline also includes the integrity of the checks themselves: a guard that cannot see what it claims to protect, a coverage hole a suite cannot notice, or seeded state scheduled to diverge from the product is a baseline loss even while CI is green. Fix such gaps immediately upon discovery — never bank them as findings or file them as issues.
 
@@ -130,16 +140,28 @@ When you need the user's input, ask in regular conversation, and keep working on
 
 Never edit permission settings to unblock yourself. A blocked action is either done differently, or asked for — authorization is the user's to give in conversation, and a standing allow rule is not a substitute for it.
 
+Merging is pre-authorized: when a task has passed every Definition of Done criterion except the closing self-improvement pass, merge its PR yourself with a merge commit — whether or not a `/goal` goal is running, and without waiting for a further go-ahead. The pre-authorization is exactly as wide as the Definition of Done: never merge work that is broken, unfinished, or short of a criterion, and never merge self-improvement PRs — the user reviews and merges those personally.
+
 When presenting a finding, bug, or proposal to the user, explain the problem first — what actually goes wrong, for whom, and why it matters — and only then the solution. A recommendation whose problem hasn't been established reads as noise and cannot be evaluated.
+
+## Working with /goal goals
+
+A `/goal` goal follows the same orchestration approach as everything else.
+
+Goal copy drafted for the user to set must come in under /goal's 4,000-character limit. After a context compaction mid-goal, re-read the full active goal text before resuming work — a compacted summary of the goal is not the goal, and the goal's own instructions outrank the ledger's shorthand.
+
+During `/goal` loops, ask for the user's input through questionnaire questions instead of regular conversation — the questionnaire is the only tool that makes the goal-checker agent stop. If you ask through regular text and the user is not around at that point in time, the goal-checker agent will prompt you to continue working until you reach the goal and your message will be lost.
+
+When the goal is met, load the `self-improvement` skill and run it once over the whole effort's record before marking the goal complete.
 
 ## Definition of Done
 
 1. A task is not done unless `pnpm run lint`, `pnpm run tsc`, and `pnpm run test:unit` are all passing.
-2. A task is not done if it adds or changes a business capability without extending the MCP server in the same PR, guarded by the parity check. Load the `mcp-server` skill: wrap the new or changed business function as a tool. Parking it as pending or dressing it up as a parity exemption does NOT satisfy this — pending is only for capabilities another lane owns, and exemptions are for genuine machine surfaces, not unfinished work.
+2. A task is not done if it adds or changes a business capability without extending the MCP server in the same PR, guarded by the parity check. Load the `mcp-server` skill: wrap the new or changed business function as a tool. Dressing it up as a parity exemption does NOT satisfy this — the parity check is wrapped xor exempt, with no third state and no backlog list, and exemptions are for genuine machine surfaces, not unfinished work.
 3. A task is not done if it changes user-visible behavior without an end-to-end spec covering that behavior — a new spec, or an existing one updated to assert it — and without every registered MCP tool reaching the E2E coverage gate as exercised. Load the `testing` skill for the conventions.
-4. A task is not done if it adds, changes, or removes a user-facing capability or setup step without updating the README and any affected setup docs in the same PR. Words and steps must match the shipped behavior — a README that promises a tool the server no longer registers, or omits an environment variable the bot now requires, is a broken product for a self-hosting user.
+4. A task is not done if it adds, changes, or removes a user-facing capability or setup step without updating the README, `.env.example`, and any affected setup docs in the same PR. Words and steps must match the shipped behavior — a README that promises a tool the server no longer registers, or omits an environment variable the bot now requires, is a broken product for a self-hosting user.
 5. A task is not done if it has leftover comments. ALWAYS remove leftover comments before finishing. Our work should NOT add comments unless it's an incredibly complex operation.
 6. A task is not done if it has not passed a code-review audit (the built-in `/code-review`) based on your judgement. Do not take the subagent suggestions at face value. Loop until YOU are satisfied with the quality.
 7. A task is not done if you haven't exercised it end to end through a real MCP client session against the real server — calling the tools a user would call and reading what comes back.
-8. After every other criterion passes, load the `self-improvement` skill: derive the task's lessons and open self-improvement PRs for the ones worth codifying. Never merge these PRs — the user reviews and merges them personally. Finding nothing to codify is a valid outcome.
+8. After every other criterion passes, load the `self-improvement` skill: derive the task's lessons and open self-improvement PRs for the ones worth codifying. Never merge these PRs — the user reviews and merges them personally. Finding nothing to codify is a valid outcome. Tasks inside a `/goal` goal skip this step — the goal runs a single self-improvement pass when it is met.
 9. A task is not done if it adds or changes a capability without shipping, in the same PR, the dev-seed state that makes it demonstrable through a real MCP session against a store built by `pnpm run db:seed:dev` — or, when the capability genuinely cannot answer without live Discord, a `declaredUnseedable` entry whose reason says so honestly. `pnpm run test:seed-coverage` enforces this: a newly registered tool fails the build until it either proves a demo-meaningful answer against the freshly seeded store or is declared unseedable. The demo store is what a self-hoster meets before they ever invite a bot, so a tool that answers empty there is a tool that does not exist to them.

@@ -5,6 +5,8 @@ description: Organize domain logic in app/business/ by domain cohesion and trans
 
 # Business Folder
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 `app/business/` holds the most valuable code in the product — the domain logic that defines what Discord Manager does. Transports come and go: the MCP server and the gateway daemon are both thin shells over this folder.
 
 The guiding question: **if the MCP server and the gateway client were both replaced tomorrow, could the business folder come along unchanged?**
@@ -32,7 +34,7 @@ A gateway handler or a tool that contains a domain decision is a bug in the laye
 
 ### Acceptable framework wrappers
 
-`makeJob` and `makeCronJob` from `~/framework/scheduler.server` are acceptable inside business files. Scheduling is a business concern, and these wrap the in-process runner without dragging in a transport. `app/business/jobs.server.ts` holds the registered jobs array; the daemon only runs it.
+`makeJob` and `makeCronJob` from `~/framework/scheduler.server` are acceptable inside business files. Scheduling is a business concern, and these wrap the in-process runner without dragging in a transport. `app/business/jobs.server.ts` holds the registered jobs array; the daemon only runs it. Load `background-jobs` before writing or changing a job.
 
 ### The context file
 
@@ -94,6 +96,10 @@ When two files need the same utility, in order of preference:
 **Merge** when files serve the same business domain, even when they use different external APIs internally. The library used is an implementation detail, not a reason to separate files.
 
 **Split** when a file grows to cover distinct business domains. The right boundary is the domain, not the file size.
+
+## Promoting seed logic to production
+
+Dev-seed logic promoted to a production path must be re-derived under production invariants, never moved wholesale. Seed conveniences — synthetic snowflakes from `nextDiscordId()`, blanket channel enrollment, fabricated gateway connections that make health read green — are deliberate shortcuts that become product behavior nobody chose the moment an ingest or MCP path re-runs them against a real store. Rebuild the specific behavior the production path needs; never reuse the seed's fan-out.
 
 ## Litmus test
 

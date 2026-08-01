@@ -394,28 +394,22 @@ function registerGatewayListeners(
   client: Client,
   { fetchChannelHistory }: { fetchChannelHistory: FetchChannelHistory }
 ) {
-  async function reconnect(connectedClient: Client) {
-    await handleGatewayConnected({
+  async function reconnect() {
+    return await handleGatewayConnected({
       activeThreadDiscordChannelIds:
-        await fetchActiveThreadDiscordChannelIds(connectedClient),
-      channels: observableChannels(connectedClient),
+        await fetchActiveThreadDiscordChannelIds(client),
+      channels: observableChannels(client),
       fetchChannelHistory,
     })
   }
 
-  client.on(Events.ClientReady, reconnect)
+  client.on(Events.ShardDisconnect, handleGatewayDisconnected)
 
-  client.on(Events.ShardDisconnect, async () => {
-    await handleGatewayDisconnected()
-  })
+  client.on(Events.ShardReconnecting, handleGatewayDisconnected)
 
-  client.on(Events.ShardReady, async () => {
-    await reconnect(client)
-  })
+  client.on(Events.ShardReady, reconnect)
 
-  client.on(Events.ShardResume, async () => {
-    await reconnect(client)
-  })
+  client.on(Events.ShardResume, reconnect)
 
   client.on(Events.MessageCreate, async (message) => {
     if (!message.inGuild() || !message.channel.isTextBased()) return

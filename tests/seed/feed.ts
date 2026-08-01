@@ -1,4 +1,5 @@
 import { type Result, fromSuccess } from 'composable-functions'
+import { type Client, Events } from 'discord.js'
 import { ownerContext } from '~/business/auth.server'
 import type {
   BackfilledMessage,
@@ -10,7 +11,6 @@ import {
   recordChannelRemoval,
   recordChannelSnapshot,
   recordGatewayConnection,
-  recordGatewayDisconnection,
   recordIncomingMessage,
   recordMessageDeletion,
   recordMessageEdit,
@@ -24,6 +24,7 @@ import {
   handleReactionAdded,
   handleReactionRemoved,
   handleReactionsCleared,
+  registerGatewayListeners,
 } from '~/ingest/gateway.server'
 import { nextDiscordId } from '../discord-ids'
 import { waitForTheStoreClockToTick } from './clock'
@@ -85,9 +86,30 @@ async function connectGateway() {
 }
 
 async function disconnectGateway() {
-  return await withADistinctInstant(
-    fromSuccess(recordGatewayDisconnection)({}, ownerContext())
-  )
+  const handlers = new Map<string, () => Promise<Result<unknown>>>()
+  const scriptedClient = {
+    on: (event: string, handler: () => Promise<Result<unknown>>) => {
+      handlers.set(event, handler)
+    },
+  } as unknown as Client
+
+  registerGatewayListeners(scriptedClient, {
+    fetchChannelHistory: async () => [],
+  })
+
+  const loseTheLink = handlers.get(Events.ShardReconnecting)
+
+  if (!loseTheLink) {
+    throw new Error(
+      'The gateway listeners ignore a shard that starts reconnecting, so the fake feed cannot drop the link'
+    )
+  }
+
+  const dropped = await withADistinctInstant(loseTheLink())
+
+  if (!dropped.success) {
+    throw new Error('The fake gateway feed could not record the dropped link')
+  }
 }
 
 async function observeChannel({

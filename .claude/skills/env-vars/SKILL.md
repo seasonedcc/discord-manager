@@ -5,6 +5,8 @@ description: Manage environment variables through the two-tier typed env pattern
 
 # Environment Variables
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 Configuration follows a **two-tier pattern**: a framework env holding only the vars framework code reads, and an app env holding every var (framework vars plus product vars).
 
 ## Architecture
@@ -33,14 +35,22 @@ Application code never reads `process.env` directly. Every value arrives through
 
 1. Add the Zod field to `app/env.server.ts` only
 2. Add the key, with an explanatory comment, to `.env.example`
-3. Update the setup documentation if the owner has to obtain the value from somewhere
-4. Import `env` from `~/env.server` in the consuming file
+3. Add the value to the job-level `env:` block in `.github/workflows/ci.yml`
+4. Update the setup documentation if the owner has to obtain the value from somewhere
+5. Import `env` from `~/env.server` in the consuming file
 
 ### Framework var (a new database or scheduler option)
 
 1. Add the Zod field to **both** `app/framework/env.server.ts` and `app/env.server.ts`
 2. Add the key to `.env.example`
-3. Framework files import from `./env.server`; product files import from `~/env.server`
+3. Add the value to the job-level `env:` block in `.github/workflows/ci.yml`
+4. Framework files import from `./env.server`; product files import from `~/env.server`
+
+## CI environment variables
+
+The CI workflow lives at `.github/workflows/ci.yml`. Values go in the workflow-level `env:` block, and the seed smoke step carries its own overrides on top of it. CI has no `.env`, so a required variable added to a schema but not to the workflow passes every local gate and red-builds the PR that adds it. Use placeholder values for services CI never actually calls (`'placeholder'` for the bot token).
+
+The E2E harness holds a third copy: `serverEnvironment` in `tests/mcp-client.ts` hardcodes the environment the spawned server receives, so a variable the server requires lands there in the same change.
 
 ## Import conventions
 

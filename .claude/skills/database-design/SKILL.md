@@ -5,6 +5,8 @@ description: Design SQLite tables and migrations under the project's zero-except
 
 # Database Design
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 ALWAYS load the "kysely" skill before anything else. These principles govern every table and every migration in `app/db/migrations/`.
 
 ## The doctrine: 100% append-only, event-sourced, zero exceptions
@@ -245,6 +247,8 @@ When persisting a reference to something outside the store, keep every component
 Never import application code (`~/business/`, `~/framework/`, anything) in a migration. Migrations are frozen snapshots — they must produce the same result regardless of how the application evolves after they were written. Logic a migration needs is duplicated inside the migration file. The only allowed imports are `kysely` (with its `sql` helper) and Node built-ins.
 
 Migrations evolve the schema and are bound by the doctrine's spirit: a backfill populates a new structure with `INSERT`s derived from existing rows; a migration never rewrites or erases recorded events. When an existing event table needs a new `not null` column, introduce a new event table for the extended concern instead of reshaping history.
+
+A catalog the product advertises — the default bookmark reasons are one — is delivered by migration, and every addition to it ships as a new append-only backfill migration in the same PR. Editing the original migration, or adding the entry only to the dev seed, looks perfect in every gate — unit, E2E, and the seed smoke all migrate from an empty database — and reaches zero existing stores. In a self-hosted product every user's store is production.
 
 ## The dev seed builds demo state onto an empty database
 
