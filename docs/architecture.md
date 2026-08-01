@@ -28,8 +28,10 @@ Two processes share one SQLite database file (WAL mode makes this safe):
 
 - `pnpm run ingest` — the long-running daemon: a discord.js gateway client that writes
   message, reaction, and metadata events, plus the in-process work queue that runs the
-  startup backfill, the gap sweeps triggered on connect and resume, and the liveness
-  heartbeat cron.
+  startup backfill and the gap sweeps triggered on connect and resume. The liveness
+  heartbeat runs on an interval timer of its own rather than on that queue: it is a local
+  append needing neither retries nor dedupe, and a backfill busy for minutes is not a dead
+  gateway, so queueing it would let a long sweep read as silence.
 - The MCP server — a stdio process the owner's AI client spawns per session (wired via
   `.mcp.json`). It only reads the store and calls Discord's REST API for sends.
 
@@ -358,9 +360,11 @@ partials for reactions on uncached messages). Handlers translate events to busin
 - messageDelete → record deletion
 - messageReactionAdd/Remove → a reaction event for every reactor and every emoji, plus a
   bookmark event when — and only when — the emoji is 🔖 and the reactor is the configured
-  owner
+  owner. Both are read straight off the gateway payload, which carries the emoji, the
+  reactor, the message and the guild, so no handler waits on Discord before writing
 - messageReactionRemoveAll / messageReactionRemoveEmoji → one removal event per reaction
-  still standing on the message, narrowed to the one emoji for RemoveEmoji
+  still standing on the message, narrowed to the one emoji for RemoveEmoji, plus the
+  bookmark removal when the clear covers the owner's standing 🔖
 - channel/thread create/update/delete → channel revisions/removals, plus the archiving or
   unarchiving event when a thread's archived state changed
 
@@ -425,9 +429,12 @@ plain data, and written in the same transaction as the revision they belong to.
   `observeEmoji`, `observeReactions` in `app/ingest/gateway.server.ts`), shared by the live
   gateway handlers and the REST backfill, so history and live traffic record the same facts.
   `observeReactions` is the one that costs requests: a fetched message carries its emoji and
-  counts for free, but the reactor ids need a paginated `reaction.users.fetch` per emoji, so
-  only messages that actually have reactions pay, and a failure lands in
-  `backfill_run_failures` like any other backfill failure.
+  counts for free, but the reactor ids need a paginated `reaction.users.fetch` per emoji —
+  once for normal reactors and once for burst (super) ones, since Discord lists them
+  separately and a super-reacted emoji would otherwise come back with nobody on it — so only
+  messages that actually have reactions pay, and a failure lands in `backfill_run_failures`
+  like any other backfill failure. It is the one reaction path that talks to Discord, and it
+  runs in the backfill job, never in a gateway handler.
 - Embeds cross into the business layer **structured** and are rendered once, on the way in,
   by `renderEmbed` in `app/business/messages.common.ts` — author, title with its link,
   description, each field as `name: value`, image, thumbnail, footer, timestamp, empty
@@ -503,18 +510,33 @@ readers show what Discord shows. Three decisions carry the feature.
   a URL detail, unreadable in a digest.
 - **Standing reactions only.** The reader ranks the (message, emoji, reactor) triple's
   events newest-first and keeps the triples whose latest event is an addition, then groups
-  by emoji for `count`, `ownerReacted` and the first-addition ordering Discord shows pills
-  in. Removals stay in the store as history and never reach a reader, because Discord's own
-  UI does not show who un-reacted.
+  by emoji for `count` and `ownerReacted`. The pills are ordered by when each emoji **first
+  appeared** on the message — the earliest addition row for that emoji, standing or not —
+  so an emoji holds its place when its earliest reactor un-reacts, exactly as Discord's own
+  pills do. An emoji nobody is still reacting with disappears rather than moves.
 - **Bulk clearings are derived, then appended.** `messageReactionRemoveAll` and
   `messageReactionRemoveEmoji` carry no reactor list, so `recordMessageReactionClearing`
-  reads what is standing and appends one removal per pair. Checking before appending is
-  safe here under the single-writer rule: the daemon is the only writer of these tables, so
-  nothing can slip in between the read and the append.
+  reads what is standing and appends one removal per pair. What makes that read-then-append
+  safe is an invariant every future edit must keep: **no reaction handler may await anything
+  remote before its write.** All four handlers read the gateway payload and write; with
+  better-sqlite3 executing synchronously, the event loop drains one event's writes before
+  the next gateway frame's handler starts, so no addition can be in flight across a
+  clearing's read. Reintroducing a `fetch` on any reaction path breaks it, which is why the
+  unit tests feed partial reactions whose `fetch` throws.
 
 The 🔖 capture keeps its own gate and its own tables. Both recorders run on every reaction
 event: the general one records what happened, the bookmark one decides whether it also
-means a bookmark.
+means a bookmark. A clearing runs both too, bookmark side first, because that side has to
+read the owner's standing 🔖 before the general side appends the removals that take it
+away. The backfill follows the same rule from the other direction: history it stores for
+the first time carrying the owner's 🔖 lands a `bookmark_additions` row beside the reaction
+rows, so no reading can show a standing owner 🔖 with no bookmark behind it.
+
+**Reactions are live-only, and the store says so.** The backfill cursor walks forward to
+messages the store has never seen, so a reaction added or taken back while the daemon was
+down, on a message already stored, is never recovered — the summary keeps showing what the
+daemon last saw. Only newly stored messages arrive with their current reactions. The README
+and the tool descriptions state this rather than promising completeness.
 
 ## Scheduling
 
@@ -524,6 +546,11 @@ attempt cap, and `setInterval` timers for cron jobs. Nothing is persisted — a 
 restart starts from an empty queue, which is why every job is safe to re-run from scratch.
 `app/business/jobs.server.ts` lists the registered jobs and the daemon is the only process
 that starts the runner.
+
+Because that queue is serial, only work that can afford to wait behind a REST-heavy
+backfill belongs on it. The liveness heartbeat does not: it is `startGatewayHeartbeat` in
+the daemon wiring, a plain interval over a local insert, so ingestion health keeps reading
+`receiving` while a long sweep runs.
 
 ## Testing
 
