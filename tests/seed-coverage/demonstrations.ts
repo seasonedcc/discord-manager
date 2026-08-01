@@ -151,7 +151,8 @@ const seedDemonstrations: Record<
   SeedDemonstration
 > = {
   ingestion_status: {
-    demonstrates: 'a bot that is receiving from Discord right now',
+    demonstrates:
+      'a bot receiving from Discord right now, with every channel already backfilled',
     prove: async (context) => {
       const { ingestion } = await fromSuccess(readIngestionStatus)({}, context)
 
@@ -161,7 +162,22 @@ const seedDemonstrations: Record<
         )
       }
 
-      return `gateway ${ingestion.gateway.activity}, backfill ${ingestion.backfill.status}`
+      if (ingestion.backfill.neverRanChannelCount > 0) {
+        const count = ingestion.backfill.neverRanChannelCount
+        const channels = count === 1 ? '1 channel' : `${count} channels`
+
+        throw new Error(
+          `the seeded store leaves ${channels} the backfill has never visited, so the demo opens on history the bot never went for`
+        )
+      }
+
+      if (ingestion.backfill.status !== 'completed') {
+        throw new Error(
+          `the seeded store makes the backfill read as "${ingestion.backfill.status}", so the demo promises work no daemon will ever finish against a demo store`
+        )
+      }
+
+      return `gateway ${ingestion.gateway.activity}, backfill ${ingestion.backfill.status} across ${ingestion.backfill.channels.completed} channels`
     },
   },
   channels_list: {
