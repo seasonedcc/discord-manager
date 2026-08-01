@@ -48,6 +48,17 @@ describe('renderEmbed', () => {
     )
   })
 
+  it('keeps the link of a preview that never got a title', () => {
+    expect(
+      renderEmbed({
+        description: 'The handbook everyone keeps asking for.',
+        url: 'https://handbook.example.test/onboarding',
+      })
+    ).toBe(
+      'https://handbook.example.test/onboarding\nThe handbook everyone keeps asking for.'
+    )
+  })
+
   it('reads an embed carrying nothing renderable as empty text', () => {
     expect(renderEmbed({ description: '   ', fields: [] })).toBe('')
   })

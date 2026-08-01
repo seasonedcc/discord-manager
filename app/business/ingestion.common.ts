@@ -1,7 +1,7 @@
 import type { ObservedAttachment, ObservedEmbed } from './messages.common'
 
 type BackfilledMessage = {
-  attachments?: ObservedAttachment[]
+  attachments: ObservedAttachment[]
   author: {
     discordUserId: string
     displayName: string
@@ -10,7 +10,7 @@ type BackfilledMessage = {
   content: string
   discordCreatedAt: string
   discordMessageId: string
-  embeds?: ObservedEmbed[]
+  embeds: ObservedEmbed[]
   mentionedDiscordUserIds: string[]
 }
 

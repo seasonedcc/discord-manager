@@ -429,17 +429,18 @@ async function insertMessageRevision(
       .execute()
   }
 
-  if (values.embeds.length > 0) {
+  const readableEmbeds = values.embeds.flatMap((embed, position) => {
+    const content = renderEmbed(embed)
+
+    return content
+      ? [{ content, id: newId(), messageRevisionId: revision.id, position }]
+      : []
+  })
+
+  if (readableEmbeds.length > 0) {
     await trx
       .insertInto('messageRevisionEmbeds')
-      .values(
-        values.embeds.map((embed, position) => ({
-          content: renderEmbed(embed),
-          id: newId(),
-          messageRevisionId: revision.id,
-          position,
-        }))
-      )
+      .values(readableEmbeds)
       .execute()
   }
 
@@ -970,13 +971,13 @@ async function storeBackfilledPage(
       for (const message of page) {
         const member = await findOrCreateMember(trx, message.author)
         const stored = await insertMessageWithFirstRevision(trx, {
-          attachments: message.attachments ?? [],
+          attachments: message.attachments,
           authorMemberId: member.id,
           channelId,
           content: message.content,
           discordCreatedAt: message.discordCreatedAt,
           discordMessageId: message.discordMessageId,
-          embeds: message.embeds ?? [],
+          embeds: message.embeds,
           mentionedDiscordUserIds: message.mentionedDiscordUserIds,
         })
 

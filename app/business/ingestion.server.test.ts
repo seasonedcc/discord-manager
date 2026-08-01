@@ -65,10 +65,12 @@ function backfilledMessage(
   overrides: Partial<BackfilledMessage> = {}
 ): BackfilledMessage {
   return {
+    attachments: [],
     author: observedAuthor(),
     content: `content-${randomUUID()}`,
     discordCreatedAt: new Date().toISOString(),
     discordMessageId: snowflake(),
+    embeds: [],
     mentionedDiscordUserIds: [],
     ...overrides,
   }
@@ -264,6 +266,30 @@ describe('recordIncomingMessage', () => {
         size: 4096,
         url: 'https://cdn.example.test/stack-trace.txt',
       },
+    ])
+  })
+
+  it('keeps only the embeds that render to words, at the place Discord put them', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+
+    const result = await fromSuccess(recordIncomingMessage)(
+      {
+        author: observedAuthor(),
+        channel: observedChannel(),
+        content: 'the handbook everyone keeps asking for',
+        discordCreatedAt: '2026-07-30T10:00:00.000Z',
+        discordMessageId: randomUUID(),
+        embeds: [{}, { url: 'https://handbook.example.test/onboarding' }],
+        mentionedDiscordUserIds: [],
+      },
+      context
+    )
+
+    const revisions = await messageRevisionsOf(result.messageId)
+
+    expect(await embedsOf(revisions[0].id)).toEqual([
+      { content: 'https://handbook.example.test/onboarding', position: 1 },
     ])
   })
 

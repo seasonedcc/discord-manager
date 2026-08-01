@@ -39,7 +39,7 @@ function renderEmbed({
 }: ObservedEmbed) {
   const parts = [
     authorName,
-    title && url ? `${title} (${url})` : title,
+    title && url ? `${title} (${url})` : title || url,
     description,
     ...(fields ?? []).map(({ name, value }) => `${name}: ${value}`),
     imageUrl,
