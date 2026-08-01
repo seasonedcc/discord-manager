@@ -4,6 +4,21 @@ import { z } from 'zod'
 // working on a request that has gone this long without recording an outcome.
 const messageSendStallThresholdMinutes = 15
 
+const messageContentLimit = 2000
+
+const channelIdMessage =
+  'Pass a `channelId` from channels_list, not the Discord channel snowflake'
+
+const contentMessage = `Write the message text to post, up to ${messageContentLimit} characters`
+
+const replyToMessageIdMessage =
+  'Pass the `messageId` of the message to reply to, from messages_catch_up, mentions_list or bookmarks_list, or leave it out to post on its own'
+
+const requestIdMessage = 'Pass the `requestId` messages_send answered with'
+
+const retryOfRequestIdMessage =
+  'Pass the `requestId` of the earlier send this one is another attempt at, or leave it out to post a fresh message'
+
 type MessageSendFailureKind = 'rejected' | 'unreachable'
 
 type MessageSendSkipReason =
@@ -190,35 +205,35 @@ function messageSendGuidance({
 
 const readMessageSendStatusSchema = z.object({
   requestId: z
-    .string()
-    .min(1)
+    .string({ error: requestIdMessage })
+    .min(1, requestIdMessage)
     .describe('The `requestId` messages_send answered with.'),
 })
 
 const sendMessageSchema = z.object({
   channelId: z
-    .string()
-    .min(1)
+    .string({ error: channelIdMessage })
+    .min(1, channelIdMessage)
     .describe(
       'The `channelId` from channels_list — not the Discord channel snowflake.'
     ),
   content: z
-    .string()
-    .min(1)
-    .max(2000)
+    .string({ error: contentMessage })
+    .min(1, contentMessage)
+    .max(messageContentLimit, contentMessage)
     .describe(
-      'The message text to post, as the owner would type it. Up to 2000 characters.'
+      `The message text to post, as the owner would type it. Up to ${messageContentLimit} characters.`
     ),
   replyToMessageId: z
-    .string()
-    .min(1)
+    .string({ error: replyToMessageIdMessage })
+    .min(1, replyToMessageIdMessage)
     .optional()
     .describe(
       'The `messageId` of the message to reply to, from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake.'
     ),
   retryOfRequestId: z
-    .string()
-    .min(1)
+    .string({ error: retryOfRequestIdMessage })
+    .min(1, retryOfRequestIdMessage)
     .optional()
     .describe(
       'The `requestId` of an earlier send this one is another attempt at. The send is refused unless that earlier attempt provably never reached the channel, so retrying can never post the same message twice. Read `canRetry` from messages_send_status first.'
