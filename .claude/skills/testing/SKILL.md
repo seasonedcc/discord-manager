@@ -5,6 +5,8 @@ description: Write and run Vitest unit tests against a real throwaway SQLite dat
 
 # Testing
 
+Everything here documents the repository as it is on `main`. If `main` disagrees with this file, `main` wins: follow it and flag the drift.
+
 Two suites. Unit tests exercise business functions against a real SQLite database with no mocks. End-to-end specs drive the real MCP server over stdio, seeded through the real ingestion functions by a scripted fake gateway feed.
 
 ## Commands
@@ -18,6 +20,8 @@ pnpm run tsc
 ```
 
 Always run `lint`, `tsc`, and `test:unit` before opening a PR. Run the E2E specs a change directly touches; a change to the seed, the client harness, or the runner touches every spec, so there the whole suite is the directly-touched set.
+
+To run a subset, pass arguments straight to `pnpm run test:e2e` with no `--` separator: positional arguments filter specs by filename substring, and `--repeat=<n>` reruns the filtered set — `pnpm run test:e2e waiting-for-activity --repeat=2`. The runner is `tests/run-e2e.ts`; the tool coverage gate only judges a full, unfiltered run.
 
 ## Test-driven development
 
@@ -77,6 +81,7 @@ describe('resolveBookmark', () => {
 
 - Prefer expressive matchers — `toContain`, `toContainEqual` — over manual `.some` scans.
 - On a failure case, assert the **specific** error, not just that it failed.
+- When pinning not-found behavior, assert on `RecordNotFoundError`'s `.message` (`'Record not found'`) — the class never overrides `.name`, so it stays `'Error'` and a `.name` assertion fails against the very error it means to pin.
 - Drive a happy path with `fromSuccess` so the assertion reads against real data instead of unwrapping by hand.
 
 ```typescript
@@ -137,6 +142,10 @@ A virtual clock also reaches assertions a real one cannot: `vi.getTimerCount()` 
 
 This is scoped to timer behavior. A test that waits on real work — a database round trip, a spawned process — gains nothing from a frozen clock and can hang under one.
 
+### Boundary derivations
+
+Every derivation with a window boundary — a silence window, a catch-up cutoff, a digest window — gets a test asserting behavior on both exact sides of the boundary: one instant just inside, one just outside. A bucketed assertion (within ±N minutes) cannot catch an off-by-one on the boundary itself, which is where these derivations break.
+
 ## End-to-end specs
 
 E2E specs live in `tests/` and drive the product exactly as the owner's assistant does.
@@ -188,9 +197,13 @@ Seed rules:
 - A prerequisite lookup throws naming the missing key rather than falling back to a default.
 - Specs share the one seeded store within a run, so a spec never asserts an exact count on a surface other specs also write into — scope assertions to rows the spec created or the seed exported through fixtures.
 
+### Env parity
+
+Anything a run depends on goes in three places, in the same change: `.env.example` (the documented contract), the workflow-level `env:` block in `.github/workflows/ci.yml` (CI has no `.env`, so a variable added only locally passes here and fails on the PR), and `serverEnvironment` in `tests/mcp-client.ts` — the E2E harness hardcodes the environment it spawns the server with, so a variable the server now requires must land there too or every spec dies at server startup.
+
 ### Repeat safety
 
-A retried spec reruns against the same per-run store, so a spec is correct only when it passes against the state its previous attempt — including one that died partway — left behind. Cleanup at the end of a spec is never the answer: the attempt that dies never reaches it. Give attempt-unique identity to anything a spec creates, and prove retry safety rather than assume it: run the spec twice in a row against the same store and watch the second pass.
+A retried spec reruns against the same per-run store, so a spec is correct only when it passes against the state its previous attempt — including one that died partway — left behind. Cleanup at the end of a spec is never the answer: the attempt that dies never reaches it. Give attempt-unique identity to anything a spec creates, and prove retry safety rather than assume it — and know what each proof proves. Running the spec twice in a row (`--repeat=2`) only proves the happy path repeats; it never exercises a half-finished attempt. The full ritual: run a throwaway copy of the spec that dies partway through its writes, then run the real spec against that residue and watch it pass. Pair it with a negative control — strip the attempt-unique identity and watch the same construction fail — because without a control, a passing run proves nothing about what the spec would actually survive.
 
 ### Clock doctrine
 
