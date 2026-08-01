@@ -15,6 +15,7 @@ type BookmarkList = {
     embeds: string[]
     jumpUrl: string
     messageId: string
+    reactions: { emoji: string; count: number; ownerReacted: boolean }[]
     snoozedUntil: string | null
     source: string
   }[]
@@ -47,6 +48,9 @@ test("the owner's bookmark reaction shows up in the bookmark list", async () => 
   assert.equal(reacted[0].snoozedUntil, null)
   assert.deepEqual(reacted[0].embeds, [])
   assert.deepEqual(reacted[0].attachments, [])
+  assert.deepEqual(reacted[0].reactions, [
+    { emoji: '🔖', count: 1, ownerReacted: true },
+  ])
 
   const captured = listed.filter(
     ({ messageId }) => messageId === bookmarks.bookmarkedAlert.id

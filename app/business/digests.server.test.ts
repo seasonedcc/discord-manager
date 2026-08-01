@@ -8,6 +8,8 @@ import {
   createGuild,
   createMember,
   createMessage,
+  createMessageReaction,
+  createMessageReactionRemoval,
   ownerContext,
   snowflake,
 } from '~/test/fixtures'
@@ -82,6 +84,7 @@ describe('catchUpSince', () => {
         attachments: [],
         embeds: [],
         jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
+        reactions: [],
       },
     ])
   })
@@ -125,6 +128,191 @@ describe('catchUpSince', () => {
         size: 18422,
         url: 'https://cdn.example.test/error-budget.png',
       },
+    ])
+  })
+
+  it('counts the reactions still standing on a message and flags the owner among them', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-06-05T00:00:00.000Z',
+    })
+
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-06-05T00:00:01.000Z',
+      reactorDiscordUserId: context.owner.discordUserId,
+    })
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-06-05T00:00:02.000Z',
+    })
+    await createMessageReaction({
+      emoji: '🎉',
+      messageId: message.id,
+      reactedAt: '2099-06-05T00:00:03.000Z',
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-06-05T00:00:00.000Z' },
+      context
+    )
+    const reacted = digest.messages.find(
+      ({ messageId }) => messageId === message.id
+    )
+
+    expect(reacted?.reactions).toEqual([
+      { emoji: '👍', count: 2, ownerReacted: true },
+      { emoji: '🎉', count: 1, ownerReacted: false },
+    ])
+  })
+
+  it('leaves out a reaction the reactor took back, and counts it again when they react anew', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const undone = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-06-06T00:00:00.000Z',
+    })
+    const redone = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-06-06T00:00:00.000Z',
+    })
+    const fickle = snowflake()
+
+    await createMessageReaction({
+      emoji: '👀',
+      messageId: undone.id,
+      reactedAt: '2099-06-06T00:00:01.000Z',
+      reactorDiscordUserId: fickle,
+    })
+    await createMessageReactionRemoval({
+      emoji: '👀',
+      messageId: undone.id,
+      reactedAt: '2099-06-06T00:00:02.000Z',
+      reactorDiscordUserId: fickle,
+    })
+
+    await createMessageReaction({
+      emoji: '👀',
+      messageId: redone.id,
+      reactedAt: '2099-06-06T00:00:01.000Z',
+      reactorDiscordUserId: fickle,
+    })
+    await createMessageReactionRemoval({
+      emoji: '👀',
+      messageId: redone.id,
+      reactedAt: '2099-06-06T00:00:02.000Z',
+      reactorDiscordUserId: fickle,
+    })
+    await createMessageReaction({
+      emoji: '👀',
+      messageId: redone.id,
+      reactedAt: '2099-06-06T00:00:03.000Z',
+      reactorDiscordUserId: fickle,
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-06-06T00:00:00.000Z' },
+      context
+    )
+
+    expect(
+      digest.messages.find(({ messageId }) => messageId === undone.id)
+        ?.reactions
+    ).toEqual([])
+    expect(
+      digest.messages.find(({ messageId }) => messageId === redone.id)
+        ?.reactions
+    ).toEqual([{ emoji: '👀', count: 1, ownerReacted: false }])
+  })
+
+  it('lets the newer of two same-instant reaction events decide whether one stands', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-06-07T00:00:00.000Z',
+    })
+    const reactor = snowflake()
+    const sameInstant = '2099-06-07T00:00:01.000Z'
+
+    await createMessageReactionRemoval({
+      emoji: '🚀',
+      messageId: message.id,
+      reactedAt: sameInstant,
+      reactorDiscordUserId: reactor,
+    })
+    await createMessageReaction({
+      emoji: '🚀',
+      messageId: message.id,
+      reactedAt: sameInstant,
+      reactorDiscordUserId: reactor,
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-06-07T00:00:00.000Z' },
+      context
+    )
+
+    expect(
+      digest.messages.find(({ messageId }) => messageId === message.id)
+        ?.reactions
+    ).toEqual([{ emoji: '🚀', count: 1, ownerReacted: false }])
+  })
+
+  it('keeps an emoji where it first appeared once its earliest reactor takes it back', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-06-08T00:00:00.000Z',
+    })
+    const earliest = snowflake()
+    const staying = snowflake()
+
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-06-08T00:00:01.000Z',
+      reactorDiscordUserId: earliest,
+    })
+    await createMessageReaction({
+      emoji: '🎉',
+      messageId: message.id,
+      reactedAt: '2099-06-08T00:00:02.000Z',
+    })
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-06-08T00:00:03.000Z',
+      reactorDiscordUserId: staying,
+    })
+    await createMessageReactionRemoval({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-06-08T00:00:04.000Z',
+      reactorDiscordUserId: earliest,
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-06-08T00:00:00.000Z' },
+      context
+    )
+
+    expect(
+      digest.messages.find(({ messageId }) => messageId === message.id)
+        ?.reactions
+    ).toEqual([
+      { emoji: '👍', count: 1, ownerReacted: false },
+      { emoji: '🎉', count: 1, ownerReacted: false },
     ])
   })
 
@@ -367,6 +555,43 @@ describe('listMentions', () => {
       nicknameMention.id,
     ])
     expect(mentions.truncated).toBe(false)
+  })
+
+  it('carries the reactions standing on a message that pinged the owner', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const pinged = await createMessage({
+      channelId: channel.id,
+      content: `<@${context.owner.discordUserId}> can you take this?`,
+      discordCreatedAt: '2099-11-01T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: pinged.id,
+      reactedAt: '2099-11-01T00:00:01.000Z',
+      reactorDiscordUserId: context.owner.discordUserId,
+    })
+    await createMessageReaction({
+      emoji: '👀',
+      messageId: pinged.id,
+      reactedAt: '2099-11-01T00:00:02.000Z',
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-11-01T00:00:00.000Z' },
+      context
+    )
+
+    expect(
+      mentions.messages.find(({ messageId }) => messageId === pinged.id)
+        ?.reactions
+    ).toEqual([
+      { emoji: '👍', count: 1, ownerReacted: true },
+      { emoji: '👀', count: 1, ownerReacted: false },
+    ])
   })
 
   it('keeps a reply Discord says pinged the owner even when its text names nobody', async () => {

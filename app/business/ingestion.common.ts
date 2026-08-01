@@ -1,4 +1,8 @@
-import type { ObservedAttachment, ObservedEmbed } from './messages.common'
+import type {
+  ObservedAttachment,
+  ObservedEmbed,
+  ObservedEmoji,
+} from './messages.common'
 
 type BackfilledMessage = {
   attachments: ObservedAttachment[]
@@ -12,6 +16,7 @@ type BackfilledMessage = {
   discordMessageId: string
   embeds: ObservedEmbed[]
   mentionedDiscordUserIds: string[]
+  reactions: { emoji: ObservedEmoji; reactorDiscordUserIds: string[] }[]
 }
 
 type FetchChannelHistory = (request: {
@@ -28,6 +33,7 @@ type IngestionSkipReason =
   | 'channel_not_ingested'
   | 'emoji_is_not_the_bookmark_reaction'
   | 'message_not_ingested'
+  | 'owner_is_not_reacting_with_the_bookmark_emoji'
   | 'reactor_is_not_the_owner'
 
 const bookmarkReactionEmoji = '🔖'

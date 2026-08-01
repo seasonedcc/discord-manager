@@ -15,6 +15,9 @@ Discord app, so nothing is shared between deployments.
 - **Bookmarks without Nitro**: when the owner reacts to any message with 🔖, the bot records
   a bookmark event. Removing the reaction removes the bookmark. Bookmarks can also be added,
   resolved, and snoozed through MCP tools.
+- **Reads reply-by-reaction**: every reaction on every message is recorded, and each reader
+  carries a per-message summary — emoji, how many people, whether the owner is one of them —
+  so a 👍 the owner left on a question is legible as the answer it was.
 - **Serves the owner's AI** over MCP: catch-up digests since a timestamp, mention triage,
   bookmark management, channel listing, ingestion health, and draft-and-send (posting as the
   owner's bot).
@@ -25,8 +28,10 @@ Two processes share one SQLite database file (WAL mode makes this safe):
 
 - `pnpm run ingest` — the long-running daemon: a discord.js gateway client that writes
   message, reaction, and metadata events, plus the in-process work queue that runs the
-  startup backfill, the gap sweeps triggered on connect and resume, and the liveness
-  heartbeat cron.
+  startup backfill and the gap sweeps triggered on connect and resume. The liveness
+  heartbeat runs on an interval timer of its own rather than on that queue: it is a local
+  append needing neither retries nor dedupe, and a backfill busy for minutes is not a dead
+  gateway, so queueing it would let a long sweep read as silence.
 - The MCP server — a stdio process the owner's AI client spawns per session (wired via
   `.mcp.json`). It only reads the store and calls Discord's REST API for sends.
 
@@ -57,7 +62,7 @@ app/
     ingestion.server.ts        message/reaction/member event recording; backfill; heartbeat
     ingestion-status.server.ts gateway activity + backfill health derivations
     digests.server.ts          catch-up + mention triage derivations
-    messages.common.ts         observed embed/attachment shapes + canonical embed rendering
+    messages.common.ts         observed embed/attachment/emoji shapes + canonical rendering
     messages.server.ts         one message read live from Discord, with its telemetry
     bookmarks.server.ts        add/remove/resolve/snooze + list derivation
     sending.server.ts          draft-and-send with its telemetry family
@@ -162,6 +167,17 @@ rows are one set read whole (`message_revision_user_mentions`, `message_revision
   only: no bytes are ever downloaded, and the URL is signed and short-lived, so it names
   a file rather than links to one forever. `contentType` is deliberately not stored — it
   is optional upstream and adds nothing a text-triage reader uses.
+- `message_reaction_additions` / `message_reaction_removals` — reversible pair keyed by
+  the (message, emoji, reactor) triple; the newer of that triple's two latest rows says
+  whether the reaction is still standing, and no rows at all means it never was. `emoji`
+  is one canonical value — the glyph for a standard emoji, `name:id` (`a:name:id` when
+  animated) for a custom one — rendered once at capture, never Discord's percent-encoded
+  `identifier`. The accepted cost: renaming a custom emoji splits its history in two, and
+  the readers show the two names as two entries. `reactor_discord_user_id` is the raw
+  Discord id rather than a `members` foreign key, following
+  `message_revision_user_mentions`: a reaction event only reliably carries the reactor's
+  id — the user arrives partial and its username is null — and every reader wants a count
+  plus an is-it-you flag, never a name.
 - `message_deletions` — existence is state.
 - `bookmark_additions` / `bookmark_removals` — reversible pair; newest of the two latest
   wins. Both carry `source` (`reaction` or `mcp`) so a public un-react and a private MCP
@@ -179,7 +195,7 @@ Every bookmark is filed under a reason, and the reason is **derived, never store
 bookmark**: the newest `bookmark_reason_assignments` row for the message wins, and a
 bookmark with no assignment rows at all reads as the shipped **Inbox** reason. That
 fallback is the whole design. A 🔖 reaction physically cannot carry intent, so the
-reaction recorder appends nothing but its `bookmark_additions` row and the capture reads
+bookmark recorder appends nothing but its `bookmark_additions` row and the capture reads
 as Inbox honestly — no intent is invented for it, and bookmarks that predate the feature
 stay valid. The derivation is a `coalesce` against the Inbox id inside the bookmark
 readers, so listing bookmarks stays one query.
@@ -342,7 +358,13 @@ partials for reactions on uncached messages). Handlers translate events to busin
 - messageCreate → record message (+ first revision, member revision as needed)
 - messageUpdate → record revision (full snapshot)
 - messageDelete → record deletion
-- messageReactionAdd/Remove with 🔖 **by the configured owner only** → bookmark event
+- messageReactionAdd/Remove → a reaction event for every reactor and every emoji, plus a
+  bookmark event when — and only when — the emoji is 🔖 and the reactor is the configured
+  owner. Both are read straight off the gateway payload, which carries the emoji, the
+  reactor, the message and the guild, so no handler waits on Discord before writing
+- messageReactionRemoveAll / messageReactionRemoveEmoji → one removal event per reaction
+  still standing on the message, narrowed to the one emoji for RemoveEmoji, plus the
+  bookmark removal when the clear covers the owner's standing 🔖
 - channel/thread create/update/delete → channel revisions/removals, plus the archiving or
   unarchiving event when a thread's archived state changed
 
@@ -403,9 +425,16 @@ reports an empty line where the incident is. Embeds and attachments are captured
 way mentions are: read off the Discord payload at the seam, passed to the business layer as
 plain data, and written in the same transaction as the revision they belong to.
 
-- The seam translates discord.js into observations (`observeEmbeds`, `observeAttachments`
-  in `app/ingest/gateway.server.ts`), shared by the live gateway handlers and the REST
-  backfill, so history and live traffic record the same facts.
+- The seam translates discord.js into observations (`observeEmbeds`, `observeAttachments`,
+  `observeEmoji`, `observeReactions` in `app/ingest/gateway.server.ts`), shared by the live
+  gateway handlers and the REST backfill, so history and live traffic record the same facts.
+  `observeReactions` is the one that costs requests: a fetched message carries its emoji and
+  counts for free, but the reactor ids need a paginated `reaction.users.fetch` per emoji —
+  once for normal reactors and once for burst (super) ones, since Discord lists them
+  separately and a super-reacted emoji would otherwise come back with nobody on it — so only
+  messages that actually have reactions pay, and a failure lands in `backfill_run_failures`
+  like any other backfill failure. It is the one reaction path that talks to Discord, and it
+  runs in the backfill job, never in a gateway handler.
 - Embeds cross into the business layer **structured** and are rendered once, on the way in,
   by `renderEmbed` in `app/business/messages.common.ts` — author, title with its link,
   description, each field as `name: value`, image, thumbnail, footer, timestamp, empty
@@ -468,6 +497,46 @@ store without touching the network.
   void a message it already handed over: the fetch still records a retrieval and answers
   `retrieved`, with `reactions` absent. Absent means *Discord would not say*; an empty array
   means *no reaction stands* — two different answers that must not collapse into one.
+### Reply-by-reaction
+
+A reaction is an answer people actually give, so the store keeps all of them and the
+readers show what Discord shows. Three decisions carry the feature.
+
+- **One canonical emoji value.** `renderEmoji` in `app/business/messages.common.ts` turns
+  the observed `{name, id, animated}` into the glyph or into `name:id` / `a:name:id`,
+  exactly as `renderEmbed` renders an embed: structured in at the seam, rendered once in
+  the business layer, so the gateway and the backfill can never disagree about what an
+  emoji is called. Discord's percent-encoded `identifier` is deliberately not used — it is
+  a URL detail, unreadable in a digest.
+- **Standing reactions only.** The reader ranks the (message, emoji, reactor) triple's
+  events newest-first and keeps the triples whose latest event is an addition, then groups
+  by emoji for `count` and `ownerReacted`. The pills are ordered by when each emoji **first
+  appeared** on the message — the earliest addition row for that emoji, standing or not —
+  so an emoji holds its place when its earliest reactor un-reacts, exactly as Discord's own
+  pills do. An emoji nobody is still reacting with disappears rather than moves.
+- **Bulk clearings are derived, then appended.** `messageReactionRemoveAll` and
+  `messageReactionRemoveEmoji` carry no reactor list, so `recordMessageReactionClearing`
+  reads what is standing and appends one removal per pair. What makes that read-then-append
+  safe is an invariant every future edit must keep: **no reaction handler may await anything
+  remote before its write.** All four handlers read the gateway payload and write; with
+  better-sqlite3 executing synchronously, the event loop drains one event's writes before
+  the next gateway frame's handler starts, so no addition can be in flight across a
+  clearing's read. Reintroducing a `fetch` on any reaction path breaks it, which is why the
+  unit tests feed partial reactions whose `fetch` throws.
+
+The 🔖 capture keeps its own gate and its own tables. Both recorders run on every reaction
+event: the general one records what happened, the bookmark one decides whether it also
+means a bookmark. A clearing runs both too, bookmark side first, because that side has to
+read the owner's standing 🔖 before the general side appends the removals that take it
+away. The backfill follows the same rule from the other direction: history it stores for
+the first time carrying the owner's 🔖 lands a `bookmark_additions` row beside the reaction
+rows, so no reading can show a standing owner 🔖 with no bookmark behind it.
+
+**Reactions are live-only, and the store says so.** The backfill cursor walks forward to
+messages the store has never seen, so a reaction added or taken back while the daemon was
+down, on a message already stored, is never recovered — the summary keeps showing what the
+daemon last saw. Only newly stored messages arrive with their current reactions. The README
+and the tool descriptions state this rather than promising completeness.
 
 ## Scheduling
 
@@ -477,6 +546,11 @@ attempt cap, and `setInterval` timers for cron jobs. Nothing is persisted — a 
 restart starts from an empty queue, which is why every job is safe to re-run from scratch.
 `app/business/jobs.server.ts` lists the registered jobs and the daemon is the only process
 that starts the runner.
+
+Because that queue is serial, only work that can afford to wait behind a REST-heavy
+backfill belongs on it. The liveness heartbeat does not: it is `startGatewayHeartbeat` in
+the daemon wiring, a plain interval over a local insert, so ingestion health keeps reading
+`receiving` while a long sweep runs.
 
 ## Testing
 

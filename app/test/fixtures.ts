@@ -37,6 +37,13 @@ type BookmarkedMessageAttributes = MessageAttributes & {
   bookmarkedAt?: string
 }
 
+type MessageReactionAttributes = {
+  messageId: string
+  emoji?: string
+  reactorDiscordUserId?: string
+  reactedAt?: string
+}
+
 type OwnerContextAttributes = {
   guildId?: string
   discordUserId?: string
@@ -261,6 +268,44 @@ async function createBookmarkedMessage({
   return message
 }
 
+async function createMessageReaction({
+  messageId,
+  emoji = '👍',
+  reactorDiscordUserId = snowflake(),
+  reactedAt,
+}: MessageReactionAttributes) {
+  return await db()
+    .insertInto('messageReactionAdditions')
+    .values({
+      id: newId(),
+      messageId,
+      emoji,
+      reactorDiscordUserId,
+      ...(reactedAt === undefined ? {} : { createdAt: reactedAt }),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
+async function createMessageReactionRemoval({
+  messageId,
+  emoji = '👍',
+  reactorDiscordUserId = snowflake(),
+  reactedAt,
+}: MessageReactionAttributes) {
+  return await db()
+    .insertInto('messageReactionRemovals')
+    .values({
+      id: newId(),
+      messageId,
+      emoji,
+      reactorDiscordUserId,
+      ...(reactedAt === undefined ? {} : { createdAt: reactedAt }),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
 async function ownerContext({
   guildId,
   discordUserId = snowflake(),
@@ -286,6 +331,8 @@ export {
   createGuild,
   createMember,
   createMessage,
+  createMessageReaction,
+  createMessageReactionRemoval,
   ownerContext,
   snowflake,
 }

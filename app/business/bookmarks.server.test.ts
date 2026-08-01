@@ -25,6 +25,8 @@ import {
   createGuild,
   createMember,
   createMessage,
+  createMessageReaction,
+  createMessageReactionRemoval,
   ownerContext,
   snowflake,
 } from '~/test/fixtures'
@@ -642,6 +644,7 @@ describe('listBookmarks', () => {
         embeds: [],
         deletedUpstream: false,
         jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
+        reactions: [],
       },
     ])
   })
@@ -679,6 +682,92 @@ describe('listBookmarks', () => {
         size: 3120,
         url: 'https://cdn.example.test/runbook.md',
       },
+    ])
+  })
+
+  it('reads who is still reacting to a bookmarked message, the owner included', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const message = await createBookmarkedMessage({ channelId: channel.id })
+    const departed = snowflake()
+
+    await createMessageReaction({
+      emoji: '🙏',
+      messageId: message.id,
+      reactedAt: '2099-07-01T00:00:00.000Z',
+      reactorDiscordUserId: snowflake(),
+    })
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-07-01T00:00:01.000Z',
+      reactorDiscordUserId: context.owner.discordUserId,
+    })
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-07-01T00:00:02.000Z',
+      reactorDiscordUserId: departed,
+    })
+    await createMessageReactionRemoval({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-07-01T00:00:03.000Z',
+      reactorDiscordUserId: departed,
+    })
+
+    const { bookmarks } = await fromSuccess(listBookmarks)({}, context)
+    const bookmarked = bookmarks.find(
+      ({ messageId }) => messageId === message.id
+    )
+
+    expect(bookmarked?.reactions).toEqual([
+      { emoji: '🙏', count: 1, ownerReacted: false },
+      { emoji: '👍', count: 1, ownerReacted: true },
+    ])
+  })
+
+  it('keeps an emoji where it first appeared once its earliest reactor takes it back', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const message = await createBookmarkedMessage({ channelId: channel.id })
+    const earliest = snowflake()
+    const staying = snowflake()
+
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-07-02T00:00:00.000Z',
+      reactorDiscordUserId: earliest,
+    })
+    await createMessageReaction({
+      emoji: '🎉',
+      messageId: message.id,
+      reactedAt: '2099-07-02T00:00:01.000Z',
+      reactorDiscordUserId: snowflake(),
+    })
+    await createMessageReaction({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-07-02T00:00:02.000Z',
+      reactorDiscordUserId: staying,
+    })
+    await createMessageReactionRemoval({
+      emoji: '👍',
+      messageId: message.id,
+      reactedAt: '2099-07-02T00:00:03.000Z',
+      reactorDiscordUserId: earliest,
+    })
+
+    const { bookmarks } = await fromSuccess(listBookmarks)({}, context)
+
+    expect(
+      bookmarks.find(({ messageId }) => messageId === message.id)?.reactions
+    ).toEqual([
+      { emoji: '👍', count: 1, ownerReacted: false },
+      { emoji: '🎉', count: 1, ownerReacted: false },
     ])
   })
 

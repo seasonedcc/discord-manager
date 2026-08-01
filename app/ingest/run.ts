@@ -7,7 +7,9 @@ import { makeSchedulerRunner } from '~/framework/scheduler.server'
 import {
   observeAttachments,
   observeEmbeds,
+  observeReactions,
   registerGatewayListeners,
+  startGatewayHeartbeat,
 } from './gateway.server'
 
 if (existsSync('.env')) process.loadEnvFile()
@@ -33,19 +35,22 @@ function makeChannelHistoryFetcher(client: Client) {
       limit,
     })
 
-    return messages.map((message) => ({
-      attachments: observeAttachments(message),
-      author: {
-        discordUserId: message.author.id,
-        displayName: message.author.displayName,
-        username: message.author.username,
-      },
-      content: message.content,
-      discordCreatedAt: message.createdAt.toISOString(),
-      discordMessageId: message.id,
-      embeds: observeEmbeds(message),
-      mentionedDiscordUserIds: [...message.mentions.users.keys()],
-    }))
+    return await Promise.all(
+      messages.map(async (message) => ({
+        attachments: observeAttachments(message),
+        author: {
+          discordUserId: message.author.id,
+          displayName: message.author.displayName,
+          username: message.author.username,
+        },
+        content: message.content,
+        discordCreatedAt: message.createdAt.toISOString(),
+        discordMessageId: message.id,
+        embeds: observeEmbeds(message),
+        mentionedDiscordUserIds: [...message.mentions.users.keys()],
+        reactions: await observeReactions(message),
+      }))
+    )
   }
 }
 
@@ -67,7 +72,10 @@ registerGatewayListeners(client, {
 
 scheduler.start()
 
+const stopGatewayHeartbeat = startGatewayHeartbeat()
+
 async function shutDown() {
+  stopGatewayHeartbeat()
   await scheduler.stop()
   await client.destroy()
   process.exit(0)

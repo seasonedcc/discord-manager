@@ -18,9 +18,27 @@ const observedAttachmentSchema = z.object({
   url: z.string().min(1),
 })
 
+const observedEmojiSchema = z
+  .object({
+    animated: z.boolean().default(false),
+    id: z.string().min(1).optional(),
+    name: z.string(),
+  })
+  .refine(({ id, name }) => id !== undefined || name.length > 0, {
+    error: 'An emoji is identified by its name, its id, or both',
+  })
+
 const messageEmbedsSchema = z.array(z.string())
 
 const messageAttachmentsSchema = z.array(observedAttachmentSchema)
+
+const messageReactionsSchema = z.array(
+  z.object({
+    count: z.number().int().positive(),
+    emoji: z.string().min(1),
+    ownerReacted: z.coerce.boolean(),
+  })
+)
 
 type ObservedEmbed = z.infer<typeof observedEmbedSchema>
 
@@ -112,6 +130,7 @@ const fetchMessageSchema = z.object({
       'The `messageId` from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake.'
     ),
 })
+type ObservedEmoji = z.infer<typeof observedEmojiSchema>
 
 function renderEmbed({
   authorName,
@@ -138,6 +157,12 @@ function renderEmbed({
   return parts.flatMap((part) => (part?.trim() ? [part] : [])).join('\n')
 }
 
+function renderEmoji({ animated, id, name }: ObservedEmoji) {
+  if (!id) return name
+
+  return animated ? `a:${name}:${id}` : `${name}:${id}`
+}
+
 export {
   MessageFetchGoneError,
   MessageFetchRejectedError,
@@ -148,9 +173,12 @@ export {
   messageFetchGuidance,
   messageFetchRetrievalCopy,
   messageFetchSkipCopy,
+  messageReactionsSchema,
   observedAttachmentSchema,
   observedEmbedSchema,
+  observedEmojiSchema,
   renderEmbed,
+  renderEmoji,
 }
 export type {
   MessageFetchFailureKind,
@@ -159,5 +187,6 @@ export type {
   MessageFetchTransport,
   ObservedAttachment,
   ObservedEmbed,
+  ObservedEmoji,
   ObservedReaction,
 }

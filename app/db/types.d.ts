@@ -225,6 +225,22 @@ export interface MessageFetchSkips {
   reason: string;
 }
 
+export interface MessageReactionAdditions {
+  createdAt: Generated<string>;
+  emoji: string;
+  id: string;
+  messageId: string;
+  reactorDiscordUserId: string;
+}
+
+export interface MessageReactionRemovals {
+  createdAt: Generated<string>;
+  emoji: string;
+  id: string;
+  messageId: string;
+  reactorDiscordUserId: string;
+}
+
 export interface MessageRevisionAttachments {
   createdAt: Generated<string>;
   filename: string;
@@ -343,6 +359,8 @@ export interface DB {
   messageFetchRequests: MessageFetchRequests;
   messageFetchRetrievals: MessageFetchRetrievals;
   messageFetchSkips: MessageFetchSkips;
+  messageReactionAdditions: MessageReactionAdditions;
+  messageReactionRemovals: MessageReactionRemovals;
   messageRevisionAttachments: MessageRevisionAttachments;
   messageRevisionEmbeds: MessageRevisionEmbeds;
   messageRevisions: MessageRevisions;

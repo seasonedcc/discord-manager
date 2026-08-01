@@ -1,5 +1,5 @@
 import { InputError, applySchema } from 'composable-functions'
-import { sql } from 'kysely'
+import { type SqlBool, sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -10,6 +10,7 @@ import {
 import {
   messageAttachmentsSchema,
   messageEmbedsSchema,
+  messageReactionsSchema,
 } from '~/business/messages.common'
 import { db } from '~/db/db.server'
 
@@ -29,12 +30,106 @@ const attachmentsAsJsonArray = sql<string>`json_group_array(
   ) order by message_revision_attachments.position
 )`.as('attachments')
 
+const reactionsAsJsonArray = sql<string>`json_group_array(
+  json_object(
+    'emoji', standing_reactions.emoji,
+    'count', standing_reactions.reactor_count,
+    'ownerReacted', standing_reactions.owner_reacted
+  ) order by first_appearances.first_appeared_at, first_appearances.first_appearance_id
+)`.as('reactions')
+
+function standingReactionsOfTheMessage(ownerDiscordUserId: string) {
+  const reactionEvents = db()
+    .selectFrom('messageReactionAdditions')
+    .select([
+      'id',
+      'emoji',
+      'reactorDiscordUserId',
+      'createdAt',
+      sql<number>`1`.as('reacted'),
+    ])
+    .where(sql<SqlBool>`message_reaction_additions.message_id = messages.id`)
+    .unionAll(
+      db()
+        .selectFrom('messageReactionRemovals')
+        .select([
+          'id',
+          'emoji',
+          'reactorDiscordUserId',
+          'createdAt',
+          sql<number>`0`.as('reacted'),
+        ])
+        .where(sql<SqlBool>`message_reaction_removals.message_id = messages.id`)
+    )
+
+  const rankedReactionEvents = db()
+    .selectFrom(reactionEvents.as('reactionEvents'))
+    .select((eb) => [
+      'emoji',
+      'reactorDiscordUserId',
+      'reacted',
+      eb.fn
+        .agg<number>('row_number')
+        .over((over) =>
+          over
+            .partitionBy(['emoji', 'reactorDiscordUserId'])
+            .orderBy('createdAt', 'desc')
+            .orderBy('id', 'desc')
+        )
+        .as('rowNumber'),
+    ])
+    .as('rankedReactionEvents')
+
+  const standingReactions = db()
+    .selectFrom(rankedReactionEvents)
+    .select((eb) => [
+      'emoji',
+      eb.fn.countAll<number>().as('reactorCount'),
+      eb.fn
+        .max(
+          eb
+            .case()
+            .when('reactorDiscordUserId', '=', ownerDiscordUserId)
+            .then(1)
+            .else(0)
+            .end()
+        )
+        .as('ownerReacted'),
+    ])
+    .where('rowNumber', '=', 1)
+    .where('reacted', '=', 1)
+    .groupBy('emoji')
+    .as('standingReactions')
+
+  const firstAppearances = db()
+    .selectFrom('messageReactionAdditions')
+    .select((eb) => [
+      'emoji',
+      eb.fn.min('createdAt').as('firstAppearedAt'),
+      eb.fn.min('id').as('firstAppearanceId'),
+    ])
+    .where(sql<SqlBool>`message_reaction_additions.message_id = messages.id`)
+    .groupBy('emoji')
+    .as('firstAppearances')
+
+  return db()
+    .selectFrom(standingReactions)
+    .innerJoin(
+      firstAppearances,
+      'firstAppearances.emoji',
+      'standingReactions.emoji'
+    )
+    .select(reactionsAsJsonArray)
+}
+
 function digestMessagesSince({
   since,
   guildId,
+  ownerDiscordUserId,
 }: {
   since: string
   guildId: string
+  ownerDiscordUserId: string
 }) {
   const rankedRevisions = db()
     .selectFrom('messageRevisions')
@@ -145,6 +240,7 @@ function digestMessagesSince({
           'latestRevisions.revisionId'
         )
         .as('attachments'),
+      standingReactionsOfTheMessage(ownerDiscordUserId).as('reactions'),
     ])
     .orderBy('messages.discordCreatedAt', 'asc')
     .orderBy(sql`cast(messages.discord_message_id as integer)`, 'asc')
@@ -157,14 +253,19 @@ async function readDigest(query: ReturnType<typeof digestMessagesSince>) {
   return {
     messages: rows
       .slice(0, digestMessageLimit)
-      .map(({ attachments, discordGuildId, embeds, ...message }) => ({
-        ...message,
-        attachments: messageAttachmentsSchema.parse(
-          JSON.parse(attachments ?? '[]')
-        ),
-        embeds: messageEmbedsSchema.parse(JSON.parse(embeds ?? '[]')),
-        jumpUrl: `https://discord.com/channels/${discordGuildId}/${message.discordChannelId}/${message.discordMessageId}`,
-      })),
+      .map(
+        ({ attachments, discordGuildId, embeds, reactions, ...message }) => ({
+          ...message,
+          attachments: messageAttachmentsSchema.parse(
+            JSON.parse(attachments ?? '[]')
+          ),
+          embeds: messageEmbedsSchema.parse(JSON.parse(embeds ?? '[]')),
+          jumpUrl: `https://discord.com/channels/${discordGuildId}/${message.discordChannelId}/${message.discordMessageId}`,
+          reactions: messageReactionsSchema.parse(
+            JSON.parse(reactions ?? '[]')
+          ),
+        })
+      ),
     truncated: rows.length > digestMessageLimit,
   }
 }
@@ -176,6 +277,7 @@ const catchUpSince = applySchema(
   const query = digestMessagesSince({
     since: new Date(since).toISOString(),
     guildId: context.owner.guildId,
+    ownerDiscordUserId: context.owner.discordUserId,
   })
 
   if (!channelId) return await readDigest(query)
@@ -205,6 +307,7 @@ const listMentions = applySchema(
   const query = digestMessagesSince({
     since: new Date(since).toISOString(),
     guildId: context.owner.guildId,
+    ownerDiscordUserId: context.owner.discordUserId,
   })
 
   return await readDigest(
