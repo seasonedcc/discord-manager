@@ -111,6 +111,35 @@ async function ingest(message: ReturnType<typeof observedMessage>) {
   return result.data
 }
 
+async function react(reaction: Parameters<typeof handleReactionAdded>[0]) {
+  const result = await handleReactionAdded(reaction)
+
+  if (!result?.bookmark.success || !result.reaction.success)
+    throw new Error('the fake gateway feed failed to record the reaction')
+}
+
+async function removeReaction(
+  reaction: Parameters<typeof handleReactionRemoved>[0]
+) {
+  const result = await handleReactionRemoved(reaction)
+
+  if (!result?.bookmark.success || !result.reaction.success)
+    throw new Error(
+      'the fake gateway feed failed to record the reaction removal'
+    )
+}
+
+async function clearReactions(
+  clearing: Parameters<typeof handleReactionsCleared>[0]
+) {
+  const result = await handleReactionsCleared(clearing)
+
+  if (!result?.bookmark.success || !result.reactions.success)
+    throw new Error(
+      'the fake gateway feed failed to record the reaction clearing'
+    )
+}
+
 describe('handleIncomingMessage', () => {
   it('records a message posted in the configured server', async () => {
     await configuredGuild()
@@ -261,7 +290,7 @@ describe('handleReactionAdded', () => {
     const message = observedMessage(observedChannel())
     const ingested = await ingest(message)
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
@@ -284,7 +313,7 @@ describe('handleReactionAdded', () => {
     const ingested = await ingest(message)
     const teammate = randomUUID()
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
@@ -309,7 +338,7 @@ describe('handleReactionAdded', () => {
     const ingested = await ingest(message)
     const teammate = randomUUID()
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '👍' },
@@ -335,13 +364,13 @@ describe('handleReactionRemoved', () => {
     const message = observedMessage(observedChannel())
     const ingested = await ingest(message)
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
       reactorDiscordUserId: configuredOwnerId,
     })
-    await handleReactionRemoved({
+    await removeReaction({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
@@ -363,13 +392,13 @@ describe('handleReactionRemoved', () => {
     const ingested = await ingest(message)
     const teammate = randomUUID()
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🎉' },
       reactorDiscordUserId: teammate,
     })
-    await handleReactionRemoved({
+    await removeReaction({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🎉' },
@@ -390,20 +419,20 @@ describe('handleReactionsCleared', () => {
     const cheering = randomUUID()
     const agreeing = randomUUID()
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🎉' },
       reactorDiscordUserId: cheering,
     })
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '👍' },
       reactorDiscordUserId: agreeing,
     })
 
-    await handleReactionsCleared({
+    await clearReactions({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
     })
@@ -421,20 +450,20 @@ describe('handleReactionsCleared', () => {
     const cheering = randomUUID()
     const agreeing = randomUUID()
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🎉' },
       reactorDiscordUserId: cheering,
     })
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '👍' },
       reactorDiscordUserId: agreeing,
     })
 
-    await handleReactionsCleared({
+    await clearReactions({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🎉' },
@@ -450,14 +479,14 @@ describe('handleReactionsCleared', () => {
     const message = observedMessage(observedChannel())
     const ingested = await ingest(message)
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
       reactorDiscordUserId: configuredOwnerId,
     })
 
-    await handleReactionsCleared({
+    await clearReactions({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
     })
@@ -476,14 +505,14 @@ describe('handleReactionsCleared', () => {
     const message = observedMessage(observedChannel())
     const ingested = await ingest(message)
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
       reactorDiscordUserId: configuredOwnerId,
     })
 
-    await handleReactionsCleared({
+    await clearReactions({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
@@ -497,20 +526,20 @@ describe('handleReactionsCleared', () => {
     const message = observedMessage(observedChannel())
     const ingested = await ingest(message)
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
       reactorDiscordUserId: configuredOwnerId,
     })
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🎉' },
       reactorDiscordUserId: randomUUID(),
     })
 
-    await handleReactionsCleared({
+    await clearReactions({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🎉' },
@@ -524,20 +553,20 @@ describe('handleReactionsCleared', () => {
     const message = observedMessage(observedChannel())
     const ingested = await ingest(message)
 
-    await handleReactionAdded({
+    await react({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
       reactorDiscordUserId: configuredOwnerId,
     })
-    await handleReactionRemoved({
+    await removeReaction({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
       emoji: { name: '🔖' },
       reactorDiscordUserId: configuredOwnerId,
     })
 
-    await handleReactionsCleared({
+    await clearReactions({
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
     })
