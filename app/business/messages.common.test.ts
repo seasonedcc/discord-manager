@@ -162,6 +162,12 @@ describe('observedEmojiSchema', () => {
     })
   })
 
+  it('takes a custom emoji Discord has forgotten the name of', () => {
+    expect(
+      observedEmojiSchema.parse({ id: '41771983429993937', name: '' })
+    ).toEqual({ animated: false, id: '41771983429993937', name: '' })
+  })
+
   it('refuses an emoji carrying neither a name nor an id', () => {
     expect(observedEmojiSchema.safeParse({ name: '' }).success).toBe(false)
   })

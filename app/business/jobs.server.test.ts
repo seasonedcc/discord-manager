@@ -1,9 +1,5 @@
 import { describe, expect, it } from '~/test/prelude'
-import {
-  backfillStallThresholdMinutes,
-  gatewayHeartbeatIntervalMinutes,
-  gatewaySilenceThresholdMinutes,
-} from './ingestion.common'
+import { backfillStallThresholdMinutes } from './ingestion.common'
 import { jobs } from './jobs.server'
 
 const maximumAttemptsPerJob = 5
@@ -26,17 +22,11 @@ describe('jobs', () => {
     expect(jobs.map((job) => job.jobName)).toEqual([
       'backfillChannel',
       'backfillIngestedChannels',
-      'beatGatewayHeartbeat',
     ])
   })
 
-  it('ticks the liveness heartbeat well inside the gateway silence window', () => {
-    const heartbeat = jobs.find((job) => job.jobName === 'beatGatewayHeartbeat')
-
-    expect(heartbeat?.intervalMs).toBe(gatewayHeartbeatIntervalMinutes * 60_000)
-    expect(heartbeat?.intervalMs).toBeLessThan(
-      gatewaySilenceThresholdMinutes * 60_000
-    )
+  it('leaves the liveness heartbeat off the queue a backfill can occupy', () => {
+    expect(jobs.map((job) => job.intervalMs)).toEqual([undefined, undefined])
   })
 
   it('caps every job that calls Discord at five attempts', () => {

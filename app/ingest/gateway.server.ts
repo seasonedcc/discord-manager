@@ -4,11 +4,15 @@ import type {
   GuildBasedChannel,
   Message,
   MessageReaction,
+  PartialMessage,
 } from 'discord.js'
-import { Events, MessageFlags } from 'discord.js'
+import { Events, MessageFlags, ReactionType } from 'discord.js'
 import type { z } from 'zod'
 import { ownerContext } from '~/business/auth.server'
-import type { FetchChannelHistory } from '~/business/ingestion.common'
+import {
+  type FetchChannelHistory,
+  gatewayHeartbeatIntervalMinutes,
+} from '~/business/ingestion.common'
 import {
   backfillIngestedChannels,
   reconcileThreadArchivings,
@@ -19,6 +23,7 @@ import {
   recordChannelUnarchiving,
   recordGatewayConnection,
   recordGatewayDisconnection,
+  recordGatewayHeartbeat,
   recordIncomingMessage,
   type recordIncomingMessageSchema,
   recordMessageDeletion,
@@ -30,6 +35,7 @@ import {
   recordMessageReactionRemoval,
   type recordMessageReactionSchema,
   recordOwnerBookmarkReaction,
+  recordOwnerBookmarkReactionClearing,
   recordOwnerBookmarkReactionRemoval,
 } from '~/business/ingestion.server'
 
@@ -66,12 +72,19 @@ function observeEmoji(emoji: Emoji) {
 
 const reactorPageSize = 100
 
-async function fetchReactorDiscordUserIds(reaction: MessageReaction) {
+async function fetchReactorDiscordUserIdsOfType(
+  reaction: MessageReaction,
+  type: ReactionType
+) {
   const reactorDiscordUserIds: string[] = []
   let after: string | undefined
 
   for (;;) {
-    const page = await reaction.users.fetch({ after, limit: reactorPageSize })
+    const page = await reaction.users.fetch({
+      after,
+      limit: reactorPageSize,
+      type,
+    })
     const newestReactorId = [...page.keys()].at(-1)
 
     if (!newestReactorId || newestReactorId === after) {
@@ -83,6 +96,19 @@ async function fetchReactorDiscordUserIds(reaction: MessageReaction) {
 
     if (page.size < reactorPageSize) return reactorDiscordUserIds
   }
+}
+
+async function fetchReactorDiscordUserIds(reaction: MessageReaction) {
+  const reacting = await fetchReactorDiscordUserIdsOfType(
+    reaction,
+    ReactionType.Normal
+  )
+  const bursting = await fetchReactorDiscordUserIdsOfType(
+    reaction,
+    ReactionType.Burst
+  )
+
+  return [...new Set([...reacting, ...bursting])]
 }
 
 function observeReactions(message: Message) {
@@ -116,6 +142,16 @@ function observeAttachments(message: Message) {
     size,
     url,
   }))
+}
+
+async function wholeMessage(message: Message | PartialMessage) {
+  if (!message.partial) return message
+
+  try {
+    return await message.fetch()
+  } catch {
+    return undefined
+  }
 }
 
 function belongsToTheOwnersGuild(discordGuildId: string) {
@@ -216,10 +252,20 @@ async function handleReactionRemoved(reaction: ObservedReaction) {
 async function handleReactionsCleared(clearing: ObservedReactionClearing) {
   if (!belongsToTheOwnersGuild(clearing.discordGuildId)) return
 
-  return await recordMessageReactionClearing(
-    { discordMessageId: clearing.discordMessageId, emoji: clearing.emoji },
+  const observed = {
+    discordMessageId: clearing.discordMessageId,
+    emoji: clearing.emoji,
+  }
+  const bookmark = await recordOwnerBookmarkReactionClearing(
+    observed,
     ownerContext()
   )
+  const reactions = await recordMessageReactionClearing(
+    observed,
+    ownerContext()
+  )
+
+  return { bookmark, reactions }
 }
 
 async function handleGatewayConnected({
@@ -251,6 +297,19 @@ async function handleGatewayConnected({
 
 async function handleGatewayDisconnected() {
   return await recordGatewayDisconnection({}, ownerContext())
+}
+
+async function handleGatewayHeartbeat() {
+  return await recordGatewayHeartbeat({}, ownerContext())
+}
+
+function startGatewayHeartbeat() {
+  const timer = setInterval(
+    handleGatewayHeartbeat,
+    gatewayHeartbeatIntervalMinutes * 60_000
+  )
+
+  return () => clearInterval(timer)
 }
 
 function observeChannel(channel: GuildBasedChannel): ObservedChannel {
@@ -340,9 +399,9 @@ function registerGatewayListeners(
   })
 
   client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
-    const message = newMessage.partial ? await newMessage.fetch() : newMessage
+    const message = await wholeMessage(newMessage)
 
-    if (!message.inGuild()) return
+    if (!message?.inGuild()) return
 
     await handleMessageEdit({
       attachments: observeAttachments(message),
@@ -364,27 +423,23 @@ function registerGatewayListeners(
   })
 
   client.on(Events.MessageReactionAdd, async (reaction, user) => {
-    const resolved = reaction.partial ? await reaction.fetch() : reaction
-
-    if (!resolved.message.guildId) return
+    if (!reaction.message.guildId) return
 
     await handleReactionAdded({
-      discordGuildId: resolved.message.guildId,
-      discordMessageId: resolved.message.id,
-      emoji: observeEmoji(resolved.emoji),
+      discordGuildId: reaction.message.guildId,
+      discordMessageId: reaction.message.id,
+      emoji: observeEmoji(reaction.emoji),
       reactorDiscordUserId: user.id,
     })
   })
 
   client.on(Events.MessageReactionRemove, async (reaction, user) => {
-    const resolved = reaction.partial ? await reaction.fetch() : reaction
-
-    if (!resolved.message.guildId) return
+    if (!reaction.message.guildId) return
 
     await handleReactionRemoved({
-      discordGuildId: resolved.message.guildId,
-      discordMessageId: resolved.message.id,
-      emoji: observeEmoji(resolved.emoji),
+      discordGuildId: reaction.message.guildId,
+      discordMessageId: reaction.message.id,
+      emoji: observeEmoji(reaction.emoji),
       reactorDiscordUserId: user.id,
     })
   })
@@ -442,6 +497,7 @@ export {
   handleChannelSnapshot,
   handleGatewayConnected,
   handleGatewayDisconnected,
+  handleGatewayHeartbeat,
   handleIncomingMessage,
   handleMessageDeletion,
   handleMessageEdit,
@@ -452,6 +508,7 @@ export {
   observeEmbeds,
   observeReactions,
   registerGatewayListeners,
+  startGatewayHeartbeat,
 }
 export type {
   ObservedChannel,

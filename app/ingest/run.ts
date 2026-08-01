@@ -9,6 +9,7 @@ import {
   observeEmbeds,
   observeReactions,
   registerGatewayListeners,
+  startGatewayHeartbeat,
 } from './gateway.server'
 
 if (existsSync('.env')) process.loadEnvFile()
@@ -71,7 +72,10 @@ registerGatewayListeners(client, {
 
 scheduler.start()
 
+const stopGatewayHeartbeat = startGatewayHeartbeat()
+
 async function shutDown() {
+  stopGatewayHeartbeat()
   await scheduler.stop()
   await client.destroy()
   process.exit(0)

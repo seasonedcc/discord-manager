@@ -286,15 +286,15 @@ async function clearReactions({
   emoji?: string
   message: SeededMessage
 }) {
-  const cleared = await withADistinctInstant(
-    handleReactionsCleared({
-      discordGuildId: ownerContext().owner.guildId,
-      discordMessageId: message.discordMessageId,
-      emoji: emoji === undefined ? undefined : { name: emoji },
-    })
+  return recordedByTheGateway(
+    await withADistinctInstant(
+      handleReactionsCleared({
+        discordGuildId: ownerContext().owner.guildId,
+        discordMessageId: message.discordMessageId,
+        emoji: emoji === undefined ? undefined : { name: emoji },
+      })
+    )
   )
-
-  return recordedByTheGateway(cleared && { clearing: cleared })
 }
 
 function draftHistory({

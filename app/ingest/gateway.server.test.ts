@@ -1,8 +1,20 @@
 import { randomUUID } from 'node:crypto'
-import { type Client, Collection, Events, MessageFlags } from 'discord.js'
+import {
+  type Client,
+  Collection,
+  Events,
+  type Message,
+  MessageFlags,
+  ReactionType,
+} from 'discord.js'
 import { ownerContext } from '~/business/auth.server'
+import {
+  gatewayHeartbeatIntervalMinutes,
+  gatewaySilenceThresholdMinutes,
+} from '~/business/ingestion.common'
 import { backfillIngestedChannels } from '~/business/ingestion.server'
 import { newId } from '~/framework/db.server'
+import { makeJob, makeSchedulerRunner } from '~/framework/scheduler.server'
 import { db, describe, expect, it, vi } from '~/test/prelude'
 import {
   type ObservedChannel,
@@ -10,14 +22,26 @@ import {
   handleChannelSnapshot,
   handleGatewayConnected,
   handleGatewayDisconnected,
+  handleGatewayHeartbeat,
   handleIncomingMessage,
   handleMessageDeletion,
   handleMessageEdit,
   handleReactionAdded,
   handleReactionRemoved,
   handleReactionsCleared,
+  observeReactions,
   registerGatewayListeners,
+  startGatewayHeartbeat,
 } from './gateway.server'
+
+function deferred() {
+  let resolve: () => void = () => {}
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+
+  return { promise, resolve }
+}
 
 const configuredGuildId = ownerContext().owner.guildId
 const configuredOwnerId = ownerContext().owner.discordUserId
@@ -417,6 +441,106 @@ describe('handleReactionsCleared', () => {
       { emoji: '🎉', reactorDiscordUserId: cheering },
     ])
   })
+
+  it('takes the bookmark off before the clearing wipes the reaction that made it', async () => {
+    await configuredGuild()
+    const message = observedMessage(observedChannel())
+    const ingested = await ingest(message)
+
+    await handleReactionAdded({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+      emoji: { name: '🔖' },
+      reactorDiscordUserId: configuredOwnerId,
+    })
+
+    await handleReactionsCleared({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+    })
+
+    const removals = await bookmarkRemovalsOf(ingested.messageId)
+
+    expect(removals).toHaveLength(1)
+    expect(removals[0].source).toBe('reaction')
+    expect(await reactionRemovalsOf(ingested.messageId)).toEqual([
+      { emoji: '🔖', reactorDiscordUserId: configuredOwnerId },
+    ])
+  })
+
+  it('takes the bookmark off when Discord clears the bookmark emoji alone', async () => {
+    await configuredGuild()
+    const message = observedMessage(observedChannel())
+    const ingested = await ingest(message)
+
+    await handleReactionAdded({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+      emoji: { name: '🔖' },
+      reactorDiscordUserId: configuredOwnerId,
+    })
+
+    await handleReactionsCleared({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+      emoji: { name: '🔖' },
+    })
+
+    expect(await bookmarkRemovalsOf(ingested.messageId)).toHaveLength(1)
+  })
+
+  it('leaves the bookmark standing when Discord clears another emoji', async () => {
+    await configuredGuild()
+    const message = observedMessage(observedChannel())
+    const ingested = await ingest(message)
+
+    await handleReactionAdded({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+      emoji: { name: '🔖' },
+      reactorDiscordUserId: configuredOwnerId,
+    })
+    await handleReactionAdded({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+      emoji: { name: '🎉' },
+      reactorDiscordUserId: randomUUID(),
+    })
+
+    await handleReactionsCleared({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+      emoji: { name: '🎉' },
+    })
+
+    expect(await bookmarkRemovalsOf(ingested.messageId)).toHaveLength(0)
+  })
+
+  it('leaves the bookmark alone when the owner had already taken the reaction back', async () => {
+    await configuredGuild()
+    const message = observedMessage(observedChannel())
+    const ingested = await ingest(message)
+
+    await handleReactionAdded({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+      emoji: { name: '🔖' },
+      reactorDiscordUserId: configuredOwnerId,
+    })
+    await handleReactionRemoved({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+      emoji: { name: '🔖' },
+      reactorDiscordUserId: configuredOwnerId,
+    })
+
+    await handleReactionsCleared({
+      discordGuildId: configuredGuildId,
+      discordMessageId: message.discordMessageId,
+    })
+
+    expect(await bookmarkRemovalsOf(ingested.messageId)).toHaveLength(1)
+  })
 })
 
 describe('handleGatewayConnected', () => {
@@ -649,7 +773,7 @@ function deliveredReaction({
   message,
   partial = false,
 }: {
-  emoji: { animated?: boolean; id?: string; name: string }
+  emoji: { animated?: boolean; id?: string; name?: string | null }
   message: ReturnType<typeof deliveredMessage>
   partial?: boolean
 }) {
@@ -657,7 +781,10 @@ function deliveredReaction({
     emoji: {
       animated: emoji.animated ?? null,
       id: emoji.id ?? null,
-      name: emoji.name,
+      name: emoji.name ?? null,
+    },
+    fetch: () => {
+      throw new Error('a reaction handler asked Discord for the reaction')
     },
     message,
     partial,
@@ -690,6 +817,23 @@ function reactionRemovalsOf(messageId: string) {
     .where('messageId', '=', messageId)
     .orderBy('emoji', 'asc')
     .orderBy('reactorDiscordUserId', 'asc')
+    .execute()
+}
+
+function revisionsOf(discordMessageId: string) {
+  return db()
+    .selectFrom('messages')
+    .innerJoin('messageRevisions', 'messageRevisions.messageId', 'messages.id')
+    .select('messageRevisions.id')
+    .where('messages.discordMessageId', '=', discordMessageId)
+    .execute()
+}
+
+function bookmarkRemovalsOf(messageId: string) {
+  return db()
+    .selectFrom('bookmarkRemovals')
+    .select(['id', 'source'])
+    .where('messageId', '=', messageId)
     .execute()
 }
 
@@ -1092,6 +1236,233 @@ describe('registerGatewayListeners', () => {
     expect(await reactionRemovalsOf(await messageIdOf(delivered.id))).toEqual([
       { emoji: '🎉', reactorDiscordUserId: cheering },
     ])
+  })
+
+  it('records a reaction on a message it never cached, without asking Discord for it', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage()
+    const agreeing = randomUUID()
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+    await fire(
+      handlers,
+      Events.MessageReactionAdd,
+      deliveredReaction({
+        emoji: { name: '👍' },
+        message: delivered,
+        partial: true,
+      }),
+      { id: agreeing }
+    )
+
+    expect(await reactionsOf(await messageIdOf(delivered.id))).toEqual([
+      { emoji: '👍', reactorDiscordUserId: agreeing },
+    ])
+  })
+
+  it('records a reaction taken back off a message it never cached, without asking Discord for it', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage()
+    const agreeing = randomUUID()
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+    await fire(
+      handlers,
+      Events.MessageReactionAdd,
+      deliveredReaction({ emoji: { name: '👍' }, message: delivered }),
+      { id: agreeing }
+    )
+    await fire(
+      handlers,
+      Events.MessageReactionRemove,
+      deliveredReaction({
+        emoji: { name: '👍' },
+        message: delivered,
+        partial: true,
+      }),
+      { id: agreeing }
+    )
+
+    expect(await reactionRemovalsOf(await messageIdOf(delivered.id))).toEqual([
+      { emoji: '👍', reactorDiscordUserId: agreeing },
+    ])
+  })
+
+  it('names a custom emoji Discord has forgotten by its id alone', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage()
+    const reacting = randomUUID()
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+    await fire(
+      handlers,
+      Events.MessageReactionAdd,
+      deliveredReaction({
+        emoji: { id: '41771983429993937', name: null },
+        message: delivered,
+      }),
+      { id: reacting }
+    )
+
+    expect(await reactionsOf(await messageIdOf(delivered.id))).toEqual([
+      { emoji: ':41771983429993937', reactorDiscordUserId: reacting },
+    ])
+  })
+
+  it('records nothing when Discord will not hand over the message that was edited', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage()
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+    await fire(handlers, Events.MessageUpdate, delivered, {
+      ...deliveredMessage({
+        content: 'an edit nobody can read any more',
+        discordMessageId: delivered.id,
+      }),
+      fetch: async () => {
+        throw new Error('Unknown Message')
+      },
+      partial: true,
+    })
+
+    expect(await revisionsOf(delivered.id)).toHaveLength(1)
+  })
+})
+
+describe('observeReactions', () => {
+  it('counts the reactors who burst an emoji alongside those who simply left it', async () => {
+    const reacting = randomUUID()
+    const bursting = randomUUID()
+    const message = {
+      reactions: {
+        cache: new Collection([
+          [
+            '🎉',
+            {
+              emoji: { animated: false, id: null, name: '🎉' },
+              users: {
+                fetch: async ({ type }: { type: ReactionType }) =>
+                  type === ReactionType.Burst
+                    ? new Collection([[bursting, { id: bursting }]])
+                    : new Collection([[reacting, { id: reacting }]]),
+              },
+            },
+          ],
+        ]),
+      },
+    } as unknown as Message
+
+    expect(await observeReactions(message)).toEqual([
+      {
+        emoji: { animated: false, id: undefined, name: '🎉' },
+        reactorDiscordUserIds: [reacting, bursting],
+      },
+    ])
+  })
+
+  it('keeps a reactor who both left and burst the same emoji once', async () => {
+    const enthusiastic = randomUUID()
+    const message = {
+      reactions: {
+        cache: new Collection([
+          [
+            '🔥',
+            {
+              emoji: { animated: false, id: null, name: '🔥' },
+              users: {
+                fetch: async () =>
+                  new Collection([[enthusiastic, { id: enthusiastic }]]),
+              },
+            },
+          ],
+        ]),
+      },
+    } as unknown as Message
+
+    expect(await observeReactions(message)).toEqual([
+      {
+        emoji: { animated: false, id: undefined, name: '🔥' },
+        reactorDiscordUserIds: [enthusiastic],
+      },
+    ])
+  })
+})
+
+describe('startGatewayHeartbeat', () => {
+  it('records the daemon liveness while a backfill occupies the work queue', async () => {
+    const started = deferred()
+    const released = deferred()
+    const occupyTheQueue = makeJob('occupyTheQueue', async () => {
+      started.resolve()
+      await released.promise
+    })
+    const runner = makeSchedulerRunner([occupyTheQueue])
+
+    runner.start()
+    occupyTheQueue.enqueue(undefined)
+    await started.promise
+
+    const beaten = await handleGatewayHeartbeat()
+
+    released.resolve()
+    await runner.stop()
+
+    if (!beaten.success)
+      throw new Error('expected the heartbeat to be recorded')
+
+    expect(
+      await db()
+        .selectFrom('gatewayHeartbeats')
+        .selectAll()
+        .where('id', '=', beaten.data.gatewayHeartbeatId)
+        .execute()
+    ).toHaveLength(1)
+  })
+
+  it('beats on a timer of its own, well inside the silence the status reads as quiet', () => {
+    const startTimer = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockReturnValue(0 as unknown as NodeJS.Timeout)
+
+    startGatewayHeartbeat()()
+
+    expect(startTimer).toHaveBeenCalledWith(
+      expect.any(Function),
+      gatewayHeartbeatIntervalMinutes * 60_000
+    )
+    expect(gatewayHeartbeatIntervalMinutes).toBeLessThan(
+      gatewaySilenceThresholdMinutes
+    )
+
+    startTimer.mockRestore()
   })
 })
 

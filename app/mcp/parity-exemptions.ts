@@ -25,11 +25,6 @@ const parityExemptions: ParityExemption[] = [
       'A scheduler job the ingest daemon runs on startup and after every reconnect. The owner reads what it produced through ingestion_status.',
   },
   {
-    functionName: 'ingestion.beatGatewayHeartbeat',
-    reason:
-      'A scheduler job the ingest daemon ticks every minute so its liveness is on the record. The owner reads it through ingestion_status.',
-  },
-  {
     functionName: 'ingestion.listBackfillableChannels',
     reason:
       'Tells the daemon which channels its backfill sweep should visit. The owner-facing channel listing is channels_list.',
@@ -108,6 +103,11 @@ const parityExemptions: ParityExemption[] = [
     functionName: 'ingestion.recordOwnerBookmarkReaction',
     reason:
       'Turns a 🔖 reaction in Discord into a bookmark, called by the daemon on a reaction event. Bookmarking from an assistant is bookmarks_add.',
+  },
+  {
+    functionName: 'ingestion.recordOwnerBookmarkReactionClearing',
+    reason:
+      'Turns Discord clearing the 🔖 off a message into a bookmark removal, called by the daemon on a messageReactionRemoveAll or messageReactionRemoveEmoji event. Clearing a bookmark from an assistant is bookmarks_resolve.',
   },
   {
     functionName: 'ingestion.recordOwnerBookmarkReactionRemoval',

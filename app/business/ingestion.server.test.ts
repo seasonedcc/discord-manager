@@ -29,6 +29,7 @@ import {
   recordMessageReactionClearing,
   recordMessageReactionRemoval,
   recordOwnerBookmarkReaction,
+  recordOwnerBookmarkReactionClearing,
   recordOwnerBookmarkReactionRemoval,
   runChannelBackfill,
 } from './ingestion.server'
@@ -146,6 +147,22 @@ function reactionAdditionsOf(messageId: string) {
     .where('messageId', '=', messageId)
     .orderBy('emoji', 'asc')
     .orderBy('reactorDiscordUserId', 'asc')
+    .execute()
+}
+
+function bookmarkAdditionsOf(messageId: string) {
+  return db()
+    .selectFrom('bookmarkAdditions')
+    .select(['id', 'source'])
+    .where('messageId', '=', messageId)
+    .execute()
+}
+
+function bookmarkRemovalsOf(messageId: string) {
+  return db()
+    .selectFrom('bookmarkRemovals')
+    .select(['id', 'source'])
+    .where('messageId', '=', messageId)
     .execute()
 }
 
@@ -1372,6 +1389,147 @@ describe('recordOwnerBookmarkReactionRemoval', () => {
   })
 })
 
+describe('recordOwnerBookmarkReactionClearing', () => {
+  it('removes the bookmark when Discord clears the standing bookmark reaction', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    await fromSuccess(recordOwnerBookmarkReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '🔖' },
+        reactorDiscordUserId: context.owner.discordUserId,
+      },
+      context
+    )
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '🔖' },
+        reactorDiscordUserId: context.owner.discordUserId,
+      },
+      context
+    )
+
+    await fromSuccess(recordOwnerBookmarkReactionClearing)(
+      { discordMessageId: message.discordMessageId },
+      context
+    )
+
+    const removals = await bookmarkRemovalsOf(message.id)
+
+    expect(removals).toHaveLength(1)
+    expect(removals[0].source).toBe('reaction')
+  })
+
+  it('removes the bookmark when the clearing names the bookmark emoji itself', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '🔖' },
+        reactorDiscordUserId: context.owner.discordUserId,
+      },
+      context
+    )
+
+    await fromSuccess(recordOwnerBookmarkReactionClearing)(
+      { discordMessageId: message.discordMessageId, emoji: { name: '🔖' } },
+      context
+    )
+
+    expect(await bookmarkRemovalsOf(message.id)).toHaveLength(1)
+  })
+
+  it('records nothing when the clearing names another emoji', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '🔖' },
+        reactorDiscordUserId: context.owner.discordUserId,
+      },
+      context
+    )
+
+    const result = await fromSuccess(recordOwnerBookmarkReactionClearing)(
+      { discordMessageId: message.discordMessageId, emoji: { name: '🎉' } },
+      context
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'emoji_is_not_the_bookmark_reaction',
+    })
+    expect(await bookmarkRemovalsOf(message.id)).toHaveLength(0)
+  })
+
+  it('records nothing when the bookmark reaction standing is a teammate’s', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    await fromSuccess(recordMessageReaction)(
+      {
+        discordMessageId: message.discordMessageId,
+        emoji: { name: '🔖' },
+        reactorDiscordUserId: snowflake(),
+      },
+      context
+    )
+
+    const result = await fromSuccess(recordOwnerBookmarkReactionClearing)(
+      { discordMessageId: message.discordMessageId },
+      context
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'owner_is_not_reacting_with_the_bookmark_emoji',
+    })
+    expect(await bookmarkRemovalsOf(message.id)).toHaveLength(0)
+  })
+
+  it('skips a clearing on a message this deployment never ingested', async () => {
+    const guild = await createGuild()
+
+    const result = await fromSuccess(recordOwnerBookmarkReactionClearing)(
+      { discordMessageId: snowflake() },
+      ownerContextFor(guild)
+    )
+
+    expect(result).toEqual({
+      outcome: 'skipped',
+      reason: 'message_not_ingested',
+    })
+  })
+
+  it('refuses a context that cannot manage bookmarks', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    const result = await recordOwnerBookmarkReactionClearing(
+      { discordMessageId: message.discordMessageId },
+      { ...ownerContextFor(guild), canManageBookmarks: false }
+    )
+
+    expect(result.success).toEqual(false)
+    expect(isContextError(result.errors[0])).toBe(true)
+  })
+})
+
 describe('recordMessageReaction', () => {
   it('records the reaction whoever left it and whichever emoji it is', async () => {
     const guild = await createGuild()
@@ -1904,6 +2062,91 @@ describe('runChannelBackfill', () => {
       { emoji: '👍', reactorDiscordUserId: agreeing },
       { emoji: '👍', reactorDiscordUserId: alsoAgreeing },
     ])
+  })
+
+  it('bookmarks the history the owner had already marked with the bookmark emoji', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const captured = backfilledMessage({
+      reactions: [
+        {
+          emoji: { animated: false, name: '🔖' },
+          reactorDiscordUserIds: [snowflake(), context.owner.discordUserId],
+        },
+      ],
+    })
+    const history = fakeChannelHistory([[captured, backfilledMessage()]])
+
+    await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      context
+    )
+
+    const stored = await db()
+      .selectFrom('messages')
+      .select('id')
+      .where('discordMessageId', '=', captured.discordMessageId)
+      .executeTakeFirstOrThrow()
+    const additions = await bookmarkAdditionsOf(stored.id)
+
+    expect(additions).toHaveLength(1)
+    expect(additions[0].source).toBe('reaction')
+  })
+
+  it('bookmarks nothing when only a teammate carried the bookmark emoji', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const teammates = backfilledMessage({
+      reactions: [
+        {
+          emoji: { animated: false, name: '🔖' },
+          reactorDiscordUserIds: [snowflake()],
+        },
+        {
+          emoji: { animated: false, name: '👍' },
+          reactorDiscordUserIds: [context.owner.discordUserId],
+        },
+      ],
+    })
+    const history = fakeChannelHistory([[teammates]])
+
+    await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      context
+    )
+
+    const stored = await db()
+      .selectFrom('messages')
+      .select('id')
+      .where('discordMessageId', '=', teammates.discordMessageId)
+      .executeTakeFirstOrThrow()
+
+    expect(await bookmarkAdditionsOf(stored.id)).toHaveLength(0)
+  })
+
+  it('refuses a context that cannot manage bookmarks', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const history = fakeChannelHistory([[]])
+
+    const result = await runChannelBackfill(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      { ...ownerContextFor(guild), canManageBookmarks: false }
+    )
+
+    expect(result.success).toEqual(false)
+    expect(isContextError(result.errors[0])).toBe(true)
   })
 
   it('leaves the reactions of a message it had already ingested alone', async () => {

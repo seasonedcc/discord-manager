@@ -6,7 +6,7 @@ import { ownerContext, ownerContextSchema } from '~/business/auth.server'
 import { db } from '~/db/db.server'
 import type { DB } from '~/db/types'
 import { newId } from '~/framework/db.server'
-import { makeCronJob, makeJob } from '~/framework/scheduler.server'
+import { makeJob } from '~/framework/scheduler.server'
 import {
   type BackfilledMessage,
   type FetchChannelHistory,
@@ -14,7 +14,6 @@ import {
   backfillPageSize,
   bookmarkReactionEmoji,
   discordHistoryBeginningSnowflake,
-  gatewayHeartbeatIntervalMinutes,
   skipped,
 } from './ingestion.common'
 import {
@@ -35,6 +34,10 @@ const ingestionContextSchema = ownerContextSchema.extend({
 })
 
 const bookmarkReactionContextSchema = ownerContextSchema.extend({
+  canManageBookmarks: z.literal(true),
+})
+
+const backfillContextSchema = ingestionContextSchema.extend({
   canManageBookmarks: z.literal(true),
 })
 
@@ -940,6 +943,38 @@ const recordOwnerBookmarkReactionRemoval = applySchema(
   return { messageId: message.id, outcome: 'recorded' as const }
 })
 
+const recordOwnerBookmarkReactionClearing = applySchema(
+  recordMessageReactionClearingSchema,
+  bookmarkReactionContextSchema
+)(async ({ discordMessageId, emoji }, context) => {
+  if (emoji && renderEmoji(emoji) !== bookmarkReactionEmoji) {
+    return skipped('emoji_is_not_the_bookmark_reaction')
+  }
+
+  const message = await findIngestedMessage(
+    discordMessageId,
+    context.owner.guildId
+  )
+
+  if (!message) return skipped('message_not_ingested')
+
+  const standing = await standingReactionsOf(message.id)
+    .where('emoji', '=', bookmarkReactionEmoji)
+    .where('reactorDiscordUserId', '=', context.owner.discordUserId)
+    .executeTakeFirst()
+
+  if (!standing) {
+    return skipped('owner_is_not_reacting_with_the_bookmark_emoji')
+  }
+
+  await db()
+    .insertInto('bookmarkRemovals')
+    .values({ id: newId(), messageId: message.id, source: 'reaction' })
+    .execute()
+
+  return { messageId: message.id, outcome: 'recorded' as const }
+})
+
 function standingReactionsOf(messageId: string) {
   const reactionEvents = db()
     .selectFrom('messageReactionAdditions')
@@ -1122,9 +1157,30 @@ async function insertMessageReactions(
   await trx.insertInto('messageReactionAdditions').values(rows).execute()
 }
 
+async function insertBookmarkTheOwnerReactedWith(
+  trx: Transaction<DB>,
+  messageId: string,
+  reactions: BackfilledMessage['reactions'],
+  ownerDiscordUserId: string
+) {
+  const bookmarked = reactions.some(
+    ({ emoji, reactorDiscordUserIds }) =>
+      renderEmoji(emoji) === bookmarkReactionEmoji &&
+      reactorDiscordUserIds.includes(ownerDiscordUserId)
+  )
+
+  if (!bookmarked) return
+
+  await trx
+    .insertInto('bookmarkAdditions')
+    .values({ id: newId(), messageId, source: 'reaction' })
+    .execute()
+}
+
 async function storeBackfilledPage(
   channelId: string,
-  page: BackfilledMessage[]
+  page: BackfilledMessage[],
+  ownerDiscordUserId: string
 ) {
   return await db()
     .transaction()
@@ -1149,6 +1205,12 @@ async function storeBackfilledPage(
         storedMessageCount += 1
 
         await insertMessageReactions(trx, stored.messageId, message.reactions)
+        await insertBookmarkTheOwnerReactedWith(
+          trx,
+          stored.messageId,
+          message.reactions,
+          ownerDiscordUserId
+        )
       }
 
       return storedMessageCount
@@ -1157,7 +1219,7 @@ async function storeBackfilledPage(
 
 const runChannelBackfill = applySchema(
   runChannelBackfillSchema,
-  ingestionContextSchema
+  backfillContextSchema
 )(async ({ channelId, fetchChannelHistory }, context) => {
   const channel = await db()
     .selectFrom('channels')
@@ -1202,7 +1264,11 @@ const runChannelBackfill = applySchema(
       }
 
       fetchedMessageCount += messages.length
-      storedMessageCount += await storeBackfilledPage(channel.id, messages)
+      storedMessageCount += await storeBackfilledPage(
+        channel.id,
+        messages,
+        context.owner.discordUserId
+      )
 
       await db()
         .insertInto('backfillRunProgress')
@@ -1343,14 +1409,6 @@ const backfillChannel = makeJob(
   }
 )
 
-const beatGatewayHeartbeat = makeCronJob(
-  'beatGatewayHeartbeat',
-  gatewayHeartbeatIntervalMinutes * 60_000,
-  async () => {
-    await fromSuccess(recordGatewayHeartbeat)({}, ownerContext())
-  }
-)
-
 const backfillIngestedChannels = makeJob(
   'backfillIngestedChannels',
   async ({
@@ -1373,7 +1431,6 @@ const backfillIngestedChannels = makeJob(
 export {
   backfillChannel,
   backfillIngestedChannels,
-  beatGatewayHeartbeat,
   listBackfillableChannels,
   listBackfillableChannelsSchema,
   reconcileThreadArchivings,
@@ -1404,6 +1461,7 @@ export {
   recordMessageReactionRemoval,
   recordMessageReactionSchema,
   recordOwnerBookmarkReaction,
+  recordOwnerBookmarkReactionClearing,
   recordOwnerBookmarkReactionRemoval,
   runChannelBackfill,
   runChannelBackfillSchema,
