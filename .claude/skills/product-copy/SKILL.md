@@ -67,7 +67,7 @@ const isoInstantMessage =
 
 Never schema-speak — `Invalid ISO date`, `Expected number, received string`, `Invalid uuid` — which names the type system's disappointment rather than the caller's next keystroke. One message per field, covering all of that field's constraints where a single sentence can, so a caller is never told about one problem at a time.
 
-This is the standard for every new and changed field. Older schemas still fall through to Zod's default text; a sweep bringing them up is landing separately, and neither that sweep nor its absence changes the bar for a field touched today.
+This is the standard for every field, and every field a registered tool exposes meets it today. `app/mcp/field-messages.test.ts` keeps it that way: it feeds each field a value the field cannot take and fails when Zod's own wording comes back instead of yours. Declare the message on the type and repeat it on every check the field carries — `.min()`, `.max()`, `.int()`, `.datetime()` — since Zod resolves each check's wording on its own.
 
 Refusals raised in business code follow the same shape — what stopped, then the call that fixes it:
 

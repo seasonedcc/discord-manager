@@ -122,10 +122,13 @@ function messageFetchGuidance(outcome: MessageFetchOutcome) {
   }
 }
 
+const messageIdMessage =
+  'Pass a `messageId` from messages_catch_up, mentions_list or bookmarks_list, not the Discord message snowflake'
+
 const fetchMessageSchema = z.object({
   messageId: z
-    .string()
-    .min(1)
+    .string({ error: messageIdMessage })
+    .min(1, messageIdMessage)
     .describe(
       'The `messageId` from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake.'
     ),
