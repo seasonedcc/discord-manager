@@ -639,14 +639,20 @@ describe('handleGatewayConnected', () => {
   })
 })
 
-type GatewayHandler = (...args: never[]) => Promise<void>
+type GatewayHandler<Fired = unknown> = (...args: never[]) => Promise<Fired>
 
-function fire(
-  handlers: Map<string, GatewayHandler>,
+async function fire<Fired>(
+  handlers: Map<string, GatewayHandler<Fired>[]>,
   event: string,
   ...args: unknown[]
 ) {
-  return handlers.get(event)?.(...(args as never[]))
+  const fired: Fired[] = []
+
+  for (const handler of handlers.get(event) ?? []) {
+    fired.push(await handler(...(args as never[])))
+  }
+
+  return fired
 }
 
 function deliveredEmbed({
@@ -857,12 +863,12 @@ function mentionedUserIdsOf(discordMessageId: string) {
     .then((rows) => rows.map((row) => row.mentionedDiscordUserId))
 }
 
-function fakeGatewayClient({
+function fakeGatewayClient<Fired>({
   fetchActiveThreads,
   handlers,
 }: {
   fetchActiveThreads: () => Promise<{ threads: Collection<string, unknown> }>
-  handlers: Map<string, GatewayHandler>
+  handlers: Map<string, GatewayHandler<Fired>[]>
 }) {
   return {
     channels: { cache: new Collection() },
@@ -871,16 +877,106 @@ function fakeGatewayClient({
         [configuredGuildId, { channels: { fetchActiveThreads } }],
       ]),
     },
-    on: (event: string, handler: GatewayHandler) => {
-      handlers.set(event, handler)
+    on: (event: string, handler: GatewayHandler<Fired>) => {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler])
     },
   } as unknown as Client
 }
 
+type RecordedConnection = Awaited<ReturnType<typeof handleGatewayConnected>>
+type RecordedDrop = Awaited<ReturnType<typeof handleGatewayDisconnected>>
+
 describe('registerGatewayListeners', () => {
+  it('records one connection when a fresh start announces the shard and then the client', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler<RecordedConnection>[]>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const enqueue = vi
+      .spyOn(backfillIngestedChannels, 'enqueue')
+      .mockImplementation(() => {})
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    const startup = [
+      ...(await fire(handlers, Events.ShardReady, 0)),
+      ...(await fire(handlers, Events.ClientReady, client)),
+    ]
+
+    expect(startup).toHaveLength(1)
+
+    const [connection] = startup
+
+    if (!connection?.success) {
+      throw new Error('expected the connection to be recorded')
+    }
+
+    expect(
+      await db()
+        .selectFrom('gatewayConnections')
+        .selectAll()
+        .where('id', '=', connection.data.gatewayConnectionId)
+        .execute()
+    ).toHaveLength(1)
+    expect(enqueue).toHaveBeenCalledTimes(1)
+
+    enqueue.mockRestore()
+  })
+
+  it('records the drop when a shard starts reconnecting after a transient close', async () => {
+    const handlers = new Map<string, GatewayHandler<RecordedDrop>[]>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    const [drop] = await fire(handlers, Events.ShardReconnecting, 0)
+
+    if (!drop?.success) throw new Error('expected the drop to be recorded')
+
+    expect(
+      await db()
+        .selectFrom('gatewayDisconnections')
+        .selectAll()
+        .where('id', '=', drop.data.gatewayDisconnectionId)
+        .execute()
+    ).toHaveLength(1)
+  })
+
+  it('records the drop when a shard closes for good', async () => {
+    const handlers = new Map<string, GatewayHandler<RecordedDrop>[]>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    const [drop] = await fire(
+      handlers,
+      Events.ShardDisconnect,
+      { code: 4004, reason: '', wasClean: true },
+      0
+    )
+
+    if (!drop?.success) throw new Error('expected the drop to be recorded')
+
+    expect(
+      await db()
+        .selectFrom('gatewayDisconnections')
+        .selectAll()
+        .where('id', '=', drop.data.gatewayDisconnectionId)
+        .execute()
+    ).toHaveLength(1)
+  })
+
   it('treats a fresh identify like a resume, so the gaps still close', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -908,7 +1004,7 @@ describe('registerGatewayListeners', () => {
     await handleChannelSnapshot(stillActive)
     await handleChannelSnapshot(goneQuiet)
 
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({
         threads: new Collection([[stillActive.discordChannelId, {}]]),
@@ -939,7 +1035,7 @@ describe('registerGatewayListeners', () => {
 
     await handleChannelSnapshot(thread)
 
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => {
         throw new Error('Missing Access')
@@ -963,7 +1059,7 @@ describe('registerGatewayListeners', () => {
 
   it('records the users Discord itself says a live message mentions', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -980,7 +1076,7 @@ describe('registerGatewayListeners', () => {
 
   it('reads a live mention set from Discord, never from the message text', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1000,7 +1096,7 @@ describe('registerGatewayListeners', () => {
 
   it('records what a live message carries in its embeds and attachments', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1041,7 +1137,7 @@ describe('registerGatewayListeners', () => {
 
   it('records both files of a message that attached the same filename twice', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1084,7 +1180,7 @@ describe('registerGatewayListeners', () => {
 
   it('records nothing for the embeds Discord was told to suppress', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1104,7 +1200,7 @@ describe('registerGatewayListeners', () => {
 
   it('records the preview and the files an edit brought with it', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1155,7 +1251,7 @@ describe('registerGatewayListeners', () => {
 
   it('records the mention set Discord stamped on an edited message', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1182,7 +1278,7 @@ describe('registerGatewayListeners', () => {
 
   it('keeps every part of a custom emoji Discord delivers, animated or not', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1227,7 +1323,7 @@ describe('registerGatewayListeners', () => {
 
   it('takes every reaction off a message Discord cleared', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1253,7 +1349,7 @@ describe('registerGatewayListeners', () => {
 
   it('takes only the cleared emoji off when Discord clears one of them', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1294,7 +1390,7 @@ describe('registerGatewayListeners', () => {
 
   it('records a reaction on a message it never cached, without asking Discord for it', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1323,7 +1419,7 @@ describe('registerGatewayListeners', () => {
 
   it('records a reaction taken back off a message it never cached, without asking Discord for it', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1358,7 +1454,7 @@ describe('registerGatewayListeners', () => {
 
   it('names a custom emoji Discord has forgotten by its id alone', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
@@ -1386,7 +1482,7 @@ describe('registerGatewayListeners', () => {
 
   it('records nothing when Discord will not hand over the message that was edited', async () => {
     await configuredGuild()
-    const handlers = new Map<string, GatewayHandler>()
+    const handlers = new Map<string, GatewayHandler[]>()
     const client = fakeGatewayClient({
       fetchActiveThreads: async () => ({ threads: new Collection() }),
       handlers,
