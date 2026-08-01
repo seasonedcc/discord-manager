@@ -129,6 +129,14 @@ it('appends a removal event carrying the mcp source', async () => {
 })
 ```
 
+### Virtual time
+
+A unit test that asserts on timer-driven elapsed time takes its clock from `vi.useFakeTimers()` and advances it with `vi.advanceTimersByTimeAsync(...)`. Node fires a timer callback a fraction of a millisecond before `Date.now()` agrees it should, and more often when the machine is busy, so a stopwatch measures 19ms for a correct 20ms backoff and fails a scheduler that is right. Virtual time pins the delay exactly — `toBe(20)`, not a lower bound a runaway delay would satisfy too — and an `afterEach` restoring `vi.useRealTimers()` keeps a failed assertion from leaking a frozen clock into the file that runs next. Never sleep to conclude that nothing happened.
+
+A virtual clock also reaches assertions a real one cannot: `vi.getTimerCount()` proves a shutdown actually cleared its timers, which no observable behavior reveals once a stopped queue is already swallowing whatever a leaked timer enqueues.
+
+This is scoped to timer behavior. A test that waits on real work — a database round trip, a spawned process — gains nothing from a frozen clock and can hang under one.
+
 ## End-to-end specs
 
 E2E specs live in `tests/` and drive the product exactly as the owner's assistant does.
@@ -165,6 +173,10 @@ Two registries sit beside it, with the same discipline:
 - **Exclusions** — a tool is excluded only with a written rationale citing the unit test that owns the behavior end to end, or proof the tool is unreachable from the product. "No spec yet" is not a rationale; that is pending.
 
 The gate fails on a stale entry too — a pending or excluded entry naming a tool that no longer exists, or a tool listed in both registries. It enforces only on a full run: a filtered run cannot know what the rest of the suite would have reached, so it drops to reporting.
+
+### Sibling readers are enumerated, never assumed
+
+`messages_catch_up` and `mentions_list` read through one shared query builder, and `bookmarks_list` repeats its shape, so a per-message field added for one reader arrives on all three at once and is pinned by none of them. The gate above cannot see that: it proves `mentions_list` was called, never that anything read the new field back. When a reader gains a field, enumerate every reader that now returns it and give each one a unit assertion and an E2E assertion in the same commit, including the spec's local response type. The test to write is the one that would fail if the field were dropped from that reader alone; without it the field is undefined behavior on that surface, however well its siblings are covered.
 
 ### The E2E seed
 

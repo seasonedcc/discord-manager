@@ -127,6 +127,8 @@ Long tasks get compacted several times, so keep a scratchpad ledger file with al
 
 When you need the user's input, ask in regular conversation, and keep working on whatever doesn't depend on the answer. Ask exactly one question per message and wait for the answer — never bundle multiple questions, even related ones. The same rule governs guided manual work: when walking the user through steps they perform themselves, send exactly one step per message and wait for their confirmation before sending the next.
 
+Never edit permission settings to unblock yourself. A blocked action is either done differently, or asked for — authorization is the user's to give in conversation, and a standing allow rule is not a substitute for it.
+
 When presenting a finding, bug, or proposal to the user, explain the problem first — what actually goes wrong, for whom, and why it matters — and only then the solution. A recommendation whose problem hasn't been established reads as noise and cannot be evaluated.
 
 ## Definition of Done

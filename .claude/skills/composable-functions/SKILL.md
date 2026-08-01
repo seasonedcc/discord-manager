@@ -128,6 +128,8 @@ Each domain declares the extended context schema it needs, next to the functions
 
 A business function's input schema is declared as `<name>Schema` and exported from the same file. It is the one definition of that function's input, reused by every caller — the MCP tool layer reuses it rather than restating it (load `mcp-server` for that rule). Never write a second schema describing the same input.
 
+`applySchema` erases the input type: the composable it returns accepts `unknown`, so `tsc` sees nothing wrong with a caller that drops a required field or passes the old shape of one that changed. Every call site outside the MCP layer therefore ties its payload back to the schema — `z.input<typeof recordIncomingMessageSchema>` as the type of the object it builds, or `satisfies` on the literal it passes — and never hands a business function a bare object literal. `app/ingest/gateway.server.ts` types every observation it feeds this way, and `app/db/dev-seed/seed.ts` every payload it seeds. A payload tied to its schema turns a shape change into a compile error; an untied one turns it into a runtime failure at the caller, which for the seed means a self-hoster's first `pnpm run db:seed:dev`.
+
 ## Composition combinators
 
 ### pipe

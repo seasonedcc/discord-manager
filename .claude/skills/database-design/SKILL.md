@@ -152,7 +152,7 @@ The `id desc` tie-break is mandatory: SQLite's `strftime` clock has millisecond 
 
 **Status from event existence** — a `case` over `exists` chains: a completion row exists → completed, a failure row exists → failed, neither → pending. Only build the derivation when a tool or a business rule actually needs it.
 
-**Indexes**: every event table gets an index on `(parentId, createdAt desc)` at creation time — it serves every latest-wins and existence query.
+**Indexes**: `(parentId, createdAt desc)` is the shape a latest-wins or existence derivation wants, but wanting the shape is not a reason to create the index. An index ships with the reader it serves and with the plan proving that reader chooses it (see *Performance: derive first, then escalate*). A table created before any query reads it ships with no index at all; the index arrives in the change that adds the query.
 
 ## One writer, no ordering machinery
 
@@ -202,7 +202,7 @@ message_revisions
 
 "Optional" attributes are not nullable columns either: model them as their own event table with zero-or-more rows per parent. A channel's topic, its category, its position, and a bookmark's snooze are all this shape — no rows means the parent never had one.
 
-When such an attribute can be **cleared after being set**, one table cannot say so without a sentinel value, and a sentinel is a lie the schema will keep telling. Model it as a reversible pair instead: `channel_topic_changes` carries the value, `channel_topic_clearings` carries nothing, and the newer of the two latest rows wins — a change row means the attribute is present, a clearing row or no rows at all means it is absent. Both tables get the usual `(parentId, createdAt desc)` index.
+When such an attribute can be **cleared after being set**, one table cannot say so without a sentinel value, and a sentinel is a lie the schema will keep telling. Model it as a reversible pair instead: `channel_topic_changes` carries the value, `channel_topic_clearings` carries nothing, and the newer of the two latest rows wins — a change row means the attribute is present, a clearing row or no rows at all means it is absent. Both tables index on `(parentId, createdAt desc)` once a reader derives the attribute from them and the plan shows the index chosen.
 
 A **set-valued attribute stamped per version of its parent** — the users a message pings, fixed by the vendor at each edit — attaches its zero-or-more rows to the *revision* row, not the parent: `message_revision_user_mentions` references `message_revisions`. The current set is simply the latest revision's rows, so "this version cleared the set" is zero rows under a new revision — no sentinel, no clearing table, and no latest-wins machinery beyond what the revisions already have. Keying such rows to the parent instead makes an emptied set indistinguishable from a set never observed. A unique constraint over `(revisionId, member)` is correct here — it states the set-membership fact and serves the reader's exact lookup.
 
@@ -248,7 +248,7 @@ Migrations evolve the schema and are bound by the doctrine's spirit: a backfill 
 
 ## The dev seed builds demo state onto an empty database
 
-`app/db/dev-seed/` is empty-database-only. `seed.ts` asserts the database is empty before any section runs, aborting unless every application table is empty (Kysely's migration bookkeeping is the only exemption). There is no idempotency machinery — no "already seeded" guards, no per-natural-key convergence. Each section assumes a blank database and only inserts. Run it with `pnpm run db:seed:dev`.
+`app/db/dev-seed/` is empty-database-only. `seed.ts` asserts the database is empty before any section runs, aborting unless every application table is empty (Kysely's migration bookkeeping is the only exemption). There is no idempotency machinery — no "already seeded" guards, no per-natural-key convergence. Each section assumes a blank database and only inserts. Run it with `pnpm run db:seed:dev`. CI runs it too, against a freshly migrated scratch database, so a section that no longer works fails the build rather than the next self-hoster.
 
 There is deliberately no reset script. Because the seed only builds onto an empty database, reseeding is a manual delete of the database file, then `pnpm run db:migrate` and `pnpm run db:seed:dev` — every run is a complete build from a known-clean slate, never a patch over existing rows.
 
@@ -258,7 +258,7 @@ Three rules keep a section demo-ready and durable:
 
 - Compute every date relative to `now` in SQL (`strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')`), never a hardcoded calendar date, which rots.
 - Prerequisite lookups key on natural keys (a Discord channel id, a channel name), never on insertion order. Bulk-seeded rows share timestamps, so `orderBy('createdAt')` is undefined; `orderBy('id')` does resolve, but only to the order the seed happened to write in, so the day a later section inserts earlier in the pipeline that lookup silently returns a different row.
-- Sections drive real business functions, not raw inserts, so the seed exercises the same validation the product does.
+- Sections drive real business functions, not raw inserts, so the seed exercises the same validation the product does — and because `applySchema` accepts `unknown`, that validation is runtime only. Tie every payload to its schema (`satisfies z.input<typeof recordIncomingMessageSchema>`, or a type alias derived from it) so a shape change breaks the build instead of the self-hoster's first `db:seed:dev`.
 
 The timestamp tie also decides read order. Sibling rows inserted in one transaction share that transaction's clock to the millisecond, so any derivation ordering them by `createdAt` falls through to its id tiebreak and reshuffles on every reseed — which flips digest output nondeterministically. When a seeded reading's row order matters, stagger the siblings' `createdAt` with small now-relative offsets; never change the product query's ordering to compensate.
 

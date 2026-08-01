@@ -37,6 +37,12 @@ jobs:
         run: pnpm run tsc
       - name: Run unit tests
         run: pnpm run test:unit
+      - name: Seed a scratch database
+        run: pnpm run db:migrate && pnpm run db:seed:dev
+        env:
+          DATABASE_PATH: './data/seed-smoke.db'
+          DISCORD_GUILD_ID: '123456789012345678'
+          DISCORD_OWNER_USER_ID: '987654321098765432'
 
   e2e:
     name: E2E tests
