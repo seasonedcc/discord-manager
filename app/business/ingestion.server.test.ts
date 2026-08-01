@@ -473,8 +473,10 @@ describe('recordMessageEdit', () => {
 
     const result = await fromSuccess(recordMessageEdit)(
       {
+        attachments: [],
         content: 'after the edit',
         discordMessageId: message.discordMessageId,
+        embeds: [],
         mentionedDiscordUserIds: [],
       },
       context
@@ -502,8 +504,10 @@ describe('recordMessageEdit', () => {
 
     await fromSuccess(recordMessageEdit)(
       {
+        attachments: [],
         content: `now it names <@${pinged}>`,
         discordMessageId: message.discordMessageId,
+        embeds: [],
         mentionedDiscordUserIds: [pinged],
       },
       context
@@ -532,8 +536,10 @@ describe('recordMessageEdit', () => {
 
     await fromSuccess(recordMessageEdit)(
       {
+        attachments: [],
         content: 'never mind, sorted it myself',
         discordMessageId: message.discordMessageId,
+        embeds: [],
         mentionedDiscordUserIds: [],
       },
       context
@@ -612,8 +618,10 @@ describe('recordMessageEdit', () => {
 
     await fromSuccess(recordMessageEdit)(
       {
+        attachments: [],
         content: 'never mind, the dashboard moved',
         discordMessageId: message.discordMessageId,
+        embeds: [],
         mentionedDiscordUserIds: [],
       },
       context
@@ -632,8 +640,10 @@ describe('recordMessageEdit', () => {
 
     const result = await fromSuccess(recordMessageEdit)(
       {
+        attachments: [],
         content: 'nowhere to land',
         discordMessageId: randomUUID(),
+        embeds: [],
         mentionedDiscordUserIds: [],
       },
       ownerContextFor(guild)
@@ -652,8 +662,10 @@ describe('recordMessageEdit', () => {
 
     const result = await fromSuccess(recordMessageEdit)(
       {
+        attachments: [],
         content: 'from the wrong server',
         discordMessageId: message.discordMessageId,
+        embeds: [],
         mentionedDiscordUserIds: [],
       },
       ownerContextFor(anotherGuild)

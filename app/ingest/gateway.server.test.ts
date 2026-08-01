@@ -142,9 +142,11 @@ describe('handleMessageEdit', () => {
     const ingested = await ingest(message)
 
     await handleMessageEdit({
+      attachments: [],
       content: 'the corrected wording',
       discordGuildId: configuredGuildId,
       discordMessageId: message.discordMessageId,
+      embeds: [],
       mentionedDiscordUserIds: [],
     })
 
@@ -1098,6 +1100,57 @@ describe('registerGatewayListeners', () => {
     await fire(handlers, Events.MessageCreate, delivered)
 
     expect(await embedsOf(delivered.id)).toHaveLength(0)
+  })
+
+  it('records the preview and the files an edit brought with it', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage({ content: 'the decision log moved' })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await embedsOf(delivered.id)).toHaveLength(0)
+
+    await fire(
+      handlers,
+      Events.MessageUpdate,
+      delivered,
+      deliveredMessage({
+        attachments: [
+          {
+            name: 'decisions.pdf',
+            size: 8400,
+            url: 'https://cdn.example.test/decisions.pdf',
+          },
+        ],
+        content: 'the decision log moved to https://handbook.example.test',
+        discordMessageId: delivered.id,
+        embeds: [
+          deliveredEmbed({
+            description: 'Every decision the team agreed to keep.',
+            title: 'Decisions',
+          }),
+        ],
+      })
+    )
+
+    expect(await embedsOf(delivered.id)).toEqual([
+      'Decisions\nEvery decision the team agreed to keep.',
+    ])
+    expect(await attachmentsOf(delivered.id)).toEqual([
+      {
+        filename: 'decisions.pdf',
+        position: 0,
+        size: 8400,
+        url: 'https://cdn.example.test/decisions.pdf',
+      },
+    ])
   })
 
   it('records the mention set Discord stamped on an edited message', async () => {

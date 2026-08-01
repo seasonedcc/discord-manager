@@ -43,9 +43,9 @@ const backfillContextSchema = ingestionContextSchema.extend({
 
 const mentionedDiscordUserIdsSchema = z.array(z.string().min(1))
 
-const observedEmbedsSchema = z.array(observedEmbedSchema).default([])
+const observedEmbedsSchema = z.array(observedEmbedSchema)
 
-const observedAttachmentsSchema = z.array(observedAttachmentSchema).default([])
+const observedAttachmentsSchema = z.array(observedAttachmentSchema)
 
 const observedAuthorSchema = z.object({
   discordUserId: z.string().min(1),
@@ -87,13 +87,13 @@ const recordGatewayDisconnectionSchema = z.object({})
 const recordGatewayHeartbeatSchema = z.object({})
 
 const recordIncomingMessageSchema = z.object({
-  attachments: observedAttachmentsSchema,
+  attachments: observedAttachmentsSchema.default([]),
   author: observedAuthorSchema,
   channel: observedChannelSchema,
   content: z.string(),
   discordCreatedAt: z.string().min(1),
   discordMessageId: z.string().min(1),
-  embeds: observedEmbedsSchema,
+  embeds: observedEmbedsSchema.default([]),
   mentionedDiscordUserIds: mentionedDiscordUserIdsSchema,
 })
 

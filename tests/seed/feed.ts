@@ -188,13 +188,23 @@ async function postMessage({
 async function editMessage(
   message: SeededMessage,
   content: string,
-  mentioning: SeededMember[] = []
+  {
+    attachments = [],
+    embeds = [],
+    mentioning = [],
+  }: {
+    attachments?: ObservedAttachment[]
+    embeds?: ObservedEmbed[]
+    mentioning?: SeededMember[]
+  } = {}
 ) {
   await withADistinctInstant(
     fromSuccess(recordMessageEdit)(
       {
+        attachments,
         content,
         discordMessageId: message.discordMessageId,
+        embeds,
         mentionedDiscordUserIds: mentioning.map(
           (member) => member.discordUserId
         ),
@@ -203,7 +213,12 @@ async function editMessage(
     )
   )
 
-  return { ...message, content, previousContent: message.content }
+  return {
+    ...message,
+    attachments,
+    content,
+    previousContent: message.content,
+  }
 }
 
 async function deleteMessage(message: SeededMessage) {

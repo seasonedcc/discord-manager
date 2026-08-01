@@ -464,6 +464,11 @@ plain data, and written in the same transaction as the revision they belong to.
   parts skipped. One rendering at capture means every reader and every future live fetch
   agrees on the words, and `messages.common.ts` is where a message-fetching domain finds
   it without importing ingestion.
+- An edit must **state** its embeds and attachments: `recordMessageEditSchema` gives them no
+  default, unlike the create schema. A revision is a whole snapshot, so an edit that leaves
+  them out does not leave them alone — it replaces the revision with one carrying none, and
+  a defaulted empty list would strip a preview the message still shows. Creation has nothing
+  to lose that way, which is why only the edit demands the words.
 - The readers (`digestMessagesSince`, `listBookmarks`) aggregate both sets in SQL —
   `json_group_array` over a correlated subquery keyed on the ranked revision's id — so a
   digest stays one query and shows only the current version's embeds, never a pre-edit one.
