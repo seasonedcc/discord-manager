@@ -7,6 +7,7 @@ import { anAlertArrivesAsAnEmbed } from './an-alert-arrives-as-an-embed'
 import { readClock } from './clock'
 import { feed } from './feed'
 import { historyArrivesThroughABackfill } from './history-arrives-through-a-backfill'
+import { theBotPostsAndSomebodyAnswers } from './the-bot-posts-and-somebody-answers'
 import { theOwnerBookmarksAMessage } from './the-owner-bookmarks-a-message'
 import { theTeamServerComesOnline } from './the-team-server-comes-online'
 
@@ -18,6 +19,10 @@ async function feedEveryJourney() {
     username: 'robin',
   }
   const guild = { discordGuildId: ownerContext().owner.guildId }
+  const bot = feed.member({
+    displayName: 'Robin Manager',
+    username: 'robin-manager',
+  })
   const members = {
     maya: feed.member({ displayName: 'Maya Fischer', username: 'maya' }),
     omar: feed.member({ displayName: 'Omar Duarte', username: 'omar' }),
@@ -29,7 +34,7 @@ async function feedEveryJourney() {
   }
 
   const { announcements, engineering, lobby, releaseThread } =
-    await theTeamServerComesOnline()
+    await theTeamServerComesOnline({ bot })
   const { retiredStandup } = await aChannelLeavesTheBotsView()
   const channels = { announcements, engineering }
   const backfill = await historyArrivesThroughABackfill({
@@ -49,6 +54,12 @@ async function feedEveryJourney() {
     clock,
     members,
     owner,
+  })
+  const botAnswers = await theBotPostsAndSomebodyAnswers({
+    bot,
+    channels,
+    clock,
+    members,
   })
   const reactions = await aQuestionGetsAnsweredWithAReaction({
     channels,
@@ -73,6 +84,8 @@ async function feedEveryJourney() {
     archiving,
     backfill,
     bookmarks,
+    bot,
+    botAnswers,
     channels: {
       ...channels,
       hotfixThread: archiving.hotfixThread,

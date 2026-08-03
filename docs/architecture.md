@@ -237,7 +237,10 @@ skip-reason enum; no shared framework, no shared enums:
   quiet instead of reading live forever. A heartbeat is written only while the client is
   ready, so it proves the *link* is up and not merely that the process is: a daemon whose
   shard disconnected for good stops beating and goes quiet on the same threshold, exactly
-  as one that was killed does.
+  as one that was killed does. The same ready path also appends `gateway_identifications`,
+  which bot user the shard authenticated as — not a telemetry family at all, since there is
+  no request and no outcome, just a fact about the deployment that `mentions_list` and
+  `activity_since` read.
 - `message_fetch_requests` / `message_fetch_retrievals` / `message_fetch_failures` (with a
   `kind` of `gone`, `rejected` or `unreachable`) / `message_fetch_skips` (with a `reason`
   of `message_deleted`) — `messages_fetch` reading one message live. The family carries no
@@ -438,12 +441,34 @@ when the sender switched it off, a distinction `<@id>` text matching cannot see 
   fetched messages and threads it through `fetchChannelHistory`'s page shape.
 - The recorder writes the mention rows in the same transaction as the revision they belong
   to, so a message and its mention set are never briefly out of step.
-- `listMentions` returns the union of two conditions: a mention row on the message's latest
-  revision naming the owner, or the latest revision's text carrying `<@id>`/`<@!id>`. The
-  second half is what keeps messages ingested before mention rows existed findable; a
-  single OR over one query means a message matching both ways still comes back once.
+- A message pings an identity when a mention row on its latest revision names that
+  identity, or the latest revision's text carries that identity's `<@id>`/`<@!id>`. The
+  text half is what keeps messages ingested before mention rows existed findable; a single
+  OR over one query means a message matching both ways still comes back once.
+- `listMentions` applies that test to two identities: the configured owner, and the bot
+  this deployment posts through. The bot speaks only when the owner sends through it, so an
+  answer to the bot is an answer to the owner, and folding the two into one list is what
+  keeps a reply to a `messages_send` post from vanishing from triage.
+- The bot's identity is learned, never configured. Every ready shard hands discord.js a
+  `client.user`, and `registerGatewayListeners` appends that id to `gateway_identifications`
+  against the guild the deployment serves; the readers take the latest recording per guild.
+  A store no daemon has connected yet has no recording, the bot arm's identity is `null`,
+  every comparison against it answers `null`, and the union collapses to the owner alone —
+  today's behavior, reached by the query's own semantics rather than a branch. A rotated
+  token supersedes its predecessor with a new row and leaves the old one in history.
+- Neither identity is pinged by its own author. The exclusion is per arm — a message
+  authored by the bot never counts as pinging the bot, a message authored by the owner
+  never counts as pinging the owner — so a `messages_send` reply-ping the deployment aimed
+  at itself is not triage, while a message the bot posted naming the *owner* still is,
+  because Discord pings the owner for it.
 - Role mentions and `@everyone`/`@here` are deliberately excluded. No role tracking exists,
   and a broadcast ping is not personal triage. `mentions_list`'s description says so.
+- `activity_since` counts the same thing, and says so: `countActivity` derives
+  `pingsTheOwnerOrTheBot` with the identical two-arm test, over its own correlated
+  latest-revision subquery rather than the digest's joined one. The two shapes cannot be
+  one function without a cross-import between business modules, so the derivation is
+  duplicated on purpose and pinned by its own unit cases on both sides — a count that
+  disagreed with the list it tells the owner to read would be worse than the repetition.
 
 ### What a message says outside its text
 

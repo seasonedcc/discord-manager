@@ -21,6 +21,7 @@ import type {
   ObservedEmbed,
 } from '~/business/messages.common'
 import {
+  handleGatewayIdentified,
   handleReactionAdded,
   handleReactionRemoved,
   handleReactionsCleared,
@@ -83,6 +84,20 @@ async function connectGateway() {
   return await withADistinctInstant(
     fromSuccess(recordGatewayConnection)({}, ownerContext())
   )
+}
+
+async function identifyAsBot(bot: SeededMember) {
+  const identified = await withADistinctInstant(
+    handleGatewayIdentified(bot.discordUserId)
+  )
+
+  if (!identified?.success) {
+    throw new Error(
+      'The fake gateway feed could not record which bot user it authenticated as'
+    )
+  }
+
+  return bot
 }
 
 async function disconnectGateway() {
@@ -448,6 +463,7 @@ const feed = {
   disconnectGateway,
   draftHistory,
   editMessage,
+  identifyAsBot,
   loseChannel,
   member,
   observeChannel,
