@@ -1253,6 +1253,25 @@ describe('recordGatewayIdentification', () => {
     expect(identifications[0].guildId).toBe(guild.id)
   })
 
+  it('creates the configured server on the way in, so a first ready has somewhere to record', async () => {
+    const discordGuildId = snowflake()
+    const botDiscordUserId = snowflake()
+
+    const result = await fromSuccess(recordGatewayIdentification)(
+      { botDiscordUserId },
+      ownerContextFor({ discordGuildId })
+    )
+
+    const identification = await db()
+      .selectFrom('gatewayIdentifications')
+      .innerJoin('guilds', 'guilds.id', 'gatewayIdentifications.guildId')
+      .select('guilds.discordGuildId')
+      .where('gatewayIdentifications.id', '=', result.gatewayIdentificationId)
+      .executeTakeFirstOrThrow()
+
+    expect(identification.discordGuildId).toBe(discordGuildId)
+  })
+
   it('records every identification, so a rotated bot leaves the older one in history', async () => {
     const guild = await createGuild()
     const context = ownerContextFor(guild)
