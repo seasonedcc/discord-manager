@@ -15,6 +15,7 @@ type Digest = {
 type Activity = {
   activity: {
     mentions: { count: number; newestAt: string | null }
+    messages: { count: number; newestAt: string | null }
   }
 }
 
@@ -41,6 +42,8 @@ test('an answer to your bot waits in your mentions', async () => {
 
   assert.equal(answering(botAnswers.posted.id).length, 0)
   assert.equal(answering(botAnswers.suppressedAnswer.id).length, 0)
+  assert.equal(answering(botAnswers.followUp.id).length, 0)
+  assert.equal(answering(botAnswers.noteToSelf.id).length, 0)
 
   const openedOn = await session.call<Activity>('activity_since', {
     since: botAnswers.recordedBefore,
@@ -49,6 +52,10 @@ test('an answer to your bot waits in your mentions', async () => {
     since: botAnswers.recordedAfter,
   })
 
+  assert.equal(
+    openedOn.activity.messages.count - closedOn.activity.messages.count,
+    6
+  )
   assert.equal(
     openedOn.activity.mentions.count - closedOn.activity.mentions.count,
     2

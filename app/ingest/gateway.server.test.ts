@@ -669,6 +669,27 @@ describe('handleGatewayConnected', () => {
   })
 })
 
+function gatewayIdentificationsOfTheConfiguredGuild() {
+  return db()
+    .selectFrom('gatewayIdentifications')
+    .innerJoin('guilds', 'guilds.id', 'gatewayIdentifications.guildId')
+    .select('gatewayIdentifications.id')
+    .where('guilds.discordGuildId', '=', configuredGuildId)
+    .execute()
+}
+
+describe('handleGatewayIdentified', () => {
+  it('records no bot identity while the client has not said who it is', async () => {
+    await configuredGuild()
+    const before = await gatewayIdentificationsOfTheConfiguredGuild()
+
+    expect(await handleGatewayIdentified(undefined)).toBeUndefined()
+    expect(await gatewayIdentificationsOfTheConfiguredGuild()).toHaveLength(
+      before.length
+    )
+  })
+})
+
 type GatewayHandler<Fired = unknown> = (...args: never[]) => Promise<Fired>
 
 async function fire<Fired>(
@@ -985,10 +1006,6 @@ describe('registerGatewayListeners', () => {
     expect(identifications[0].guildId).toBe(guild.id)
 
     enqueue.mockRestore()
-  })
-
-  it('records no bot identity while the client has not said who it is', async () => {
-    expect(await handleGatewayIdentified(undefined)).toBeUndefined()
   })
 
   it('records the drop when a shard starts reconnecting after a transient close', async () => {

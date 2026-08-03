@@ -463,12 +463,20 @@ when the sender switched it off, a distinction `<@id>` text matching cannot see 
   because Discord pings the owner for it.
 - Role mentions and `@everyone`/`@here` are deliberately excluded. No role tracking exists,
   and a broadcast ping is not personal triage. `mentions_list`'s description says so.
-- `activity_since` counts the same thing, and says so: `countActivity` derives
-  `pingsTheOwnerOrTheBot` with the identical two-arm test, over its own correlated
+- `activity_since` applies the same ping test, and says so: `countActivity` derives
+  `pingsTheOwnerOrTheBot` with the identical two arms, over its own correlated
   latest-revision subquery rather than the digest's joined one. The two shapes cannot be
   one function without a cross-import between business modules, so the derivation is
-  duplicated on purpose and pinned by its own unit cases on both sides — a count that
-  disagreed with the list it tells the owner to read would be worse than the repetition.
+  duplicated on purpose and pinned by its own unit cases on both sides — a count whose ping
+  rule disagreed with the list it tells the owner to read would be worse than the
+  repetition.
+- The rule is shared; the window is not, and the count is never a promise about what the
+  list holds. `countActivity` brackets on `messages.created_at`, the instant the store
+  recorded a message, which is what lets it notice history arriving late through a
+  backfill; `listMentions` brackets on `messages.discord_created_at`, the instant Discord
+  stamped it. A week-old ping a backfill has just walked therefore raises the count at a
+  cursor `mentions_list` answers nothing for. What the count says is that something new
+  landed, not that reading with the same cursor returns exactly it.
 
 ### What a message says outside its text
 

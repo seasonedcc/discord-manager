@@ -11,11 +11,13 @@ async function theBotPostsAndSomebodyAnswers({
   channels,
   clock,
   members,
+  owner,
 }: {
   bot: SeededMember
   channels: Record<string, SeededChannel>
   clock: Clock
   members: Record<string, SeededMember>
+  owner: SeededMember
 }) {
   const engineering = requireSeeded(channels, 'engineering', 'channel')
   const maya = requireSeeded(members, 'maya', 'member')
@@ -54,10 +56,29 @@ async function theBotPostsAndSomebodyAnswers({
     discordCreatedAt: clock.at(16.6),
   })
 
+  const followUp = await feed.postMessage({
+    author: bot,
+    channel: engineering,
+    content: 'Adding the rollback steps to that checklist as well.',
+    discordCreatedAt: clock.at(16.8),
+    mentioning: [bot],
+  })
+
+  const noteToSelf = await feed.postMessage({
+    author: owner,
+    channel: engineering,
+    content: `<@${owner.discordUserId}> circle back on the runbook link tomorrow`,
+    discordCreatedAt: clock.at(17),
+  })
+
   const recordedAfter = await readTheStoreInstant()
+
+  await waitForTheStoreClockToTick()
 
   return {
     answer,
+    followUp,
+    noteToSelf,
     posted,
     recordedAfter,
     recordedBefore,

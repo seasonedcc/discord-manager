@@ -60,6 +60,7 @@ async function feedEveryJourney() {
     channels,
     clock,
     members,
+    owner,
   })
   const reactions = await aQuestionGetsAnsweredWithAReaction({
     channels,
