@@ -70,6 +70,11 @@ const parityExemptions: ParityExemption[] = [
       'Records the daemon liveness signal; the owner reads it through ingestion_status.',
   },
   {
+    functionName: 'ingestion.recordGatewayIdentification',
+    reason:
+      'Records which bot user the daemon authenticated as, read off the client the moment a shard is ready. The owner never chooses it, and reads it only as the answers to that bot showing up in mentions_list.',
+  },
+  {
     functionName: 'ingestion.recordIncomingMessage',
     reason:
       'Records a message the gateway just delivered, called by the daemon on every messageCreate event.',

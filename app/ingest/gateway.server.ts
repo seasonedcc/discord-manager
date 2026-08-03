@@ -24,6 +24,7 @@ import {
   recordGatewayConnection,
   recordGatewayDisconnection,
   recordGatewayHeartbeat,
+  recordGatewayIdentification,
   recordIncomingMessage,
   type recordIncomingMessageSchema,
   recordMessageDeletion,
@@ -303,6 +304,12 @@ async function handleGatewayConnected({
   return connection
 }
 
+async function handleGatewayIdentified(botDiscordUserId: string | undefined) {
+  if (!botDiscordUserId) return
+
+  return await recordGatewayIdentification({ botDiscordUserId }, ownerContext())
+}
+
 async function handleGatewayDisconnected() {
   return await recordGatewayDisconnection({}, ownerContext())
 }
@@ -395,6 +402,8 @@ function registerGatewayListeners(
   { fetchChannelHistory }: { fetchChannelHistory: FetchChannelHistory }
 ) {
   async function reconnect() {
+    await handleGatewayIdentified(client.user?.id)
+
     return await handleGatewayConnected({
       activeThreadDiscordChannelIds:
         await fetchActiveThreadDiscordChannelIds(client),
@@ -530,6 +539,7 @@ export {
   handleGatewayConnected,
   handleGatewayDisconnected,
   handleGatewayHeartbeat,
+  handleGatewayIdentified,
   handleIncomingMessage,
   handleMessageDeletion,
   handleMessageEdit,

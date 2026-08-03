@@ -23,6 +23,7 @@ import {
   handleGatewayConnected,
   handleGatewayDisconnected,
   handleGatewayHeartbeat,
+  handleGatewayIdentified,
   handleIncomingMessage,
   handleMessageDeletion,
   handleMessageEdit,
@@ -893,9 +894,11 @@ function mentionedUserIdsOf(discordMessageId: string) {
 }
 
 function fakeGatewayClient<Fired>({
+  botDiscordUserId,
   fetchActiveThreads,
   handlers,
 }: {
+  botDiscordUserId?: string
   fetchActiveThreads: () => Promise<{ threads: Collection<string, unknown> }>
   handlers: Map<string, GatewayHandler<Fired>[]>
 }) {
@@ -909,6 +912,7 @@ function fakeGatewayClient<Fired>({
     on: (event: string, handler: GatewayHandler<Fired>) => {
       handlers.set(event, [...(handlers.get(event) ?? []), handler])
     },
+    user: botDiscordUserId ? { id: botDiscordUserId } : undefined,
   } as unknown as Client
 }
 
@@ -952,6 +956,39 @@ describe('registerGatewayListeners', () => {
     expect(enqueue).toHaveBeenCalledTimes(1)
 
     enqueue.mockRestore()
+  })
+
+  it('records which bot user the ready shard authenticated as', async () => {
+    const guild = await configuredGuild()
+    const botDiscordUserId = randomUUID()
+    const handlers = new Map<string, GatewayHandler<RecordedConnection>[]>()
+    const client = fakeGatewayClient({
+      botDiscordUserId,
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const enqueue = vi
+      .spyOn(backfillIngestedChannels, 'enqueue')
+      .mockImplementation(() => {})
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.ShardReady, 0)
+
+    const identifications = await db()
+      .selectFrom('gatewayIdentifications')
+      .selectAll()
+      .where('botDiscordUserId', '=', botDiscordUserId)
+      .execute()
+
+    expect(identifications).toHaveLength(1)
+    expect(identifications[0].guildId).toBe(guild.id)
+
+    enqueue.mockRestore()
+  })
+
+  it('records no bot identity while the client has not said who it is', async () => {
+    expect(await handleGatewayIdentified(undefined)).toBeUndefined()
   })
 
   it('records the drop when a shard starts reconnecting after a transient close', async () => {
