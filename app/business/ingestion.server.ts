@@ -86,6 +86,10 @@ const recordGatewayDisconnectionSchema = z.object({})
 
 const recordGatewayHeartbeatSchema = z.object({})
 
+const recordGatewayIdentificationSchema = z.object({
+  botDiscordUserId: z.string().min(1),
+})
+
 const recordIncomingMessageSchema = z.object({
   attachments: observedAttachmentsSchema.default([]),
   author: observedAuthorSchema,
@@ -649,6 +653,28 @@ const recordGatewayHeartbeat = applySchema(
     .executeTakeFirstOrThrow()
 
   return { gatewayHeartbeatId: heartbeat.id, outcome: 'recorded' as const }
+})
+
+const recordGatewayIdentification = applySchema(
+  recordGatewayIdentificationSchema,
+  ingestionContextSchema
+)(async ({ botDiscordUserId }, context) => {
+  const identification = await db()
+    .transaction()
+    .execute(async (trx) => {
+      const guild = await findOrCreateGuild(trx, context.owner.guildId)
+
+      return await trx
+        .insertInto('gatewayIdentifications')
+        .values({ botDiscordUserId, guildId: guild.id, id: newId() })
+        .returning('id')
+        .executeTakeFirstOrThrow()
+    })
+
+  return {
+    gatewayIdentificationId: identification.id,
+    outcome: 'recorded' as const,
+  }
 })
 
 const recordIncomingMessage = applySchema(
@@ -1468,6 +1494,8 @@ export {
   recordGatewayDisconnectionSchema,
   recordGatewayHeartbeat,
   recordGatewayHeartbeatSchema,
+  recordGatewayIdentification,
+  recordGatewayIdentificationSchema,
   recordIncomingMessage,
   recordIncomingMessageSchema,
   recordMessageDeletion,

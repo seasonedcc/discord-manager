@@ -1,9 +1,10 @@
-import { feed } from './feed'
+import { type SeededMember, feed } from './feed'
 
-async function theTeamServerComesOnline() {
+async function theTeamServerComesOnline({ bot }: { bot: SeededMember }) {
   await feed.connectGateway()
   await feed.disconnectGateway()
   await feed.connectGateway()
+  await feed.identifyAsBot(bot)
 
   const announcements = await feed.observeChannel({
     category: 'Company',

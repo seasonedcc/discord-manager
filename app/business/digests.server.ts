@@ -300,6 +300,17 @@ const catchUpSince = applySchema(
   return await readDigest(query.where('messages.channelId', '=', channel.id))
 })
 
+function latestBotIdentityOf(guildId: string) {
+  return db()
+    .selectFrom('gatewayIdentifications')
+    .innerJoin('guilds', 'guilds.id', 'gatewayIdentifications.guildId')
+    .select('gatewayIdentifications.botDiscordUserId')
+    .where('guilds.discordGuildId', '=', guildId)
+    .orderBy('gatewayIdentifications.createdAt', 'desc')
+    .orderBy('gatewayIdentifications.id', 'desc')
+    .limit(1)
+}
+
 const listMentions = applySchema(
   listMentionsSchema,
   digestsContextSchema
@@ -311,34 +322,52 @@ const listMentions = applySchema(
   })
 
   return await readDigest(
-    query.where(({ eb, exists, or, selectFrom }) =>
-      or([
-        exists(
-          selectFrom('messageRevisionUserMentions')
-            .select('messageRevisionUserMentions.id')
-            .whereRef(
-              'messageRevisionUserMentions.messageRevisionId',
-              '=',
-              'latestRevisions.revisionId'
+    query.where((eb) => {
+      const owner = eb.val(context.owner.discordUserId)
+      const bot = latestBotIdentityOf(context.owner.guildId)
+
+      const pings = (identity: typeof owner | typeof bot) =>
+        eb.and([
+          eb.or([
+            eb.exists(
+              eb
+                .selectFrom('messageRevisionUserMentions')
+                .select('messageRevisionUserMentions.id')
+                .whereRef(
+                  'messageRevisionUserMentions.messageRevisionId',
+                  '=',
+                  'latestRevisions.revisionId'
+                )
+                .where(
+                  'messageRevisionUserMentions.mentionedDiscordUserId',
+                  '=',
+                  identity
+                )
+            ),
+            eb(
+              'latestRevisions.content',
+              'like',
+              sql<string>`'%<@' || ${identity} || '>%'`
+            ),
+            eb(
+              'latestRevisions.content',
+              'like',
+              sql<string>`'%<@!' || ${identity} || '>%'`
+            ),
+          ]),
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom('members')
+                .select('members.id')
+                .whereRef('members.id', '=', 'messages.authorMemberId')
+                .where('members.discordUserId', '=', identity)
             )
-            .where(
-              'messageRevisionUserMentions.mentionedDiscordUserId',
-              '=',
-              context.owner.discordUserId
-            )
-        ),
-        eb(
-          'latestRevisions.content',
-          'like',
-          `%<@${context.owner.discordUserId}>%`
-        ),
-        eb(
-          'latestRevisions.content',
-          'like',
-          `%<@!${context.owner.discordUserId}>%`
-        ),
-      ])
-    )
+          ),
+        ])
+
+      return eb.or([pings(owner), pings(bot)])
+    })
   )
 })
 

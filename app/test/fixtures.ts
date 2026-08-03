@@ -16,8 +16,15 @@ type ChannelAttributes = {
 }
 
 type MemberAttributes = {
+  discordUserId?: string
   username?: string
   displayName?: string
+}
+
+type GatewayIdentificationAttributes = {
+  guildId: string
+  botDiscordUserId?: string
+  identifiedAt?: string
 }
 
 type MessageAttributes = {
@@ -143,7 +150,25 @@ async function createChannel({
     })
 }
 
+async function createGatewayIdentification({
+  guildId,
+  botDiscordUserId = snowflake(),
+  identifiedAt,
+}: GatewayIdentificationAttributes) {
+  return await db()
+    .insertInto('gatewayIdentifications')
+    .values({
+      id: newId(),
+      guildId,
+      botDiscordUserId,
+      ...(identifiedAt === undefined ? {} : { createdAt: identifiedAt }),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow()
+}
+
 async function createMember({
+  discordUserId = snowflake(),
   username = `username-${randomUUID()}`,
   displayName = `display-name-${randomUUID()}`,
 }: MemberAttributes = {}) {
@@ -152,7 +177,7 @@ async function createMember({
     .execute(async (trx) => {
       const member = await trx
         .insertInto('members')
-        .values({ id: newId(), discordUserId: snowflake() })
+        .values({ id: newId(), discordUserId })
         .returningAll()
         .executeTakeFirstOrThrow()
 
@@ -328,6 +353,7 @@ export {
   configuredGuild,
   createBookmarkedMessage,
   createChannel,
+  createGatewayIdentification,
   createGuild,
   createMember,
   createMessage,

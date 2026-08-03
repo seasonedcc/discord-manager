@@ -1,5 +1,5 @@
 import { applySchema } from 'composable-functions'
-import type { ExpressionBuilder } from 'kysely'
+import { type ExpressionBuilder, sql } from 'kysely'
 import { z } from 'zod'
 import { activitySinceSchema } from '~/business/activity.common'
 import { ownerContextSchema } from '~/business/auth.server'
@@ -22,6 +22,67 @@ function latestRevisionOf(eb: ExpressionBuilder<DB, 'messages'>) {
     .orderBy('messageRevisions.createdAt', 'desc')
     .orderBy('messageRevisions.id', 'desc')
     .limit(1)
+}
+
+function latestBotIdentityOf(guildId: string) {
+  return db()
+    .selectFrom('gatewayIdentifications')
+    .innerJoin('guilds', 'guilds.id', 'gatewayIdentifications.guildId')
+    .select('gatewayIdentifications.botDiscordUserId')
+    .where('guilds.discordGuildId', '=', guildId)
+    .orderBy('gatewayIdentifications.createdAt', 'desc')
+    .orderBy('gatewayIdentifications.id', 'desc')
+    .limit(1)
+}
+
+function pingsTheOwnerOrTheBot(
+  eb: ExpressionBuilder<DB, 'messages'>,
+  { discordUserId, guildId }: { discordUserId: string; guildId: string }
+) {
+  const owner = eb.val(discordUserId)
+  const bot = latestBotIdentityOf(guildId)
+
+  const pings = (identity: typeof owner | typeof bot) =>
+    eb.and([
+      eb.or([
+        eb.exists(
+          eb
+            .selectFrom('messageRevisionUserMentions')
+            .select('messageRevisionUserMentions.id')
+            .where(
+              'messageRevisionUserMentions.messageRevisionId',
+              '=',
+              latestRevisionOf(eb).select('messageRevisions.id')
+            )
+            .where(
+              'messageRevisionUserMentions.mentionedDiscordUserId',
+              '=',
+              identity
+            )
+        ),
+        eb(
+          latestRevisionOf(eb).select('messageRevisions.content'),
+          'like',
+          sql<string>`'%<@' || ${identity} || '>%'`
+        ),
+        eb(
+          latestRevisionOf(eb).select('messageRevisions.content'),
+          'like',
+          sql<string>`'%<@!' || ${identity} || '>%'`
+        ),
+      ]),
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom('members')
+            .select('members.id')
+            .whereRef('members.id', '=', 'messages.authorMemberId')
+            .where('members.discordUserId', '=', identity)
+        )
+      ),
+    ])
+
+  return eb.or([pings(owner), pings(bot)])
 }
 
 async function countActivity({
@@ -58,36 +119,9 @@ async function countActivity({
         )
         .select((eb) => [
           'messages.createdAt',
-          eb
-            .or([
-              eb.exists(
-                eb
-                  .selectFrom('messageRevisionUserMentions')
-                  .select('messageRevisionUserMentions.id')
-                  .where(
-                    'messageRevisionUserMentions.messageRevisionId',
-                    '=',
-                    latestRevisionOf(eb).select('messageRevisions.id')
-                  )
-                  .where(
-                    'messageRevisionUserMentions.mentionedDiscordUserId',
-                    '=',
-                    discordUserId
-                  )
-              ),
-              eb(
-                latestRevisionOf(eb).select('messageRevisions.content'),
-                'like',
-                `%<@${discordUserId}>%`
-              ),
-              eb(
-                latestRevisionOf(eb).select('messageRevisions.content'),
-                'like',
-                `%<@!${discordUserId}>%`
-              ),
-            ])
+          pingsTheOwnerOrTheBot(eb, { discordUserId, guildId })
             .$castTo<number>()
-            .as('pingsTheOwner'),
+            .as('pingsTheOwnerOrTheBot'),
         ])
     )
     .with('newBookmarkAdditions', (qb) =>
@@ -112,11 +146,11 @@ async function countActivity({
       eb.fn.max<string | null>('createdAt').as('messagesNewestAt'),
       eb.fn
         .countAll<number>()
-        .filterWhere('pingsTheOwner', '=', 1)
+        .filterWhere('pingsTheOwnerOrTheBot', '=', 1)
         .as('mentionCount'),
       eb.fn
         .max<string | null>('createdAt')
-        .filterWhere('pingsTheOwner', '=', 1)
+        .filterWhere('pingsTheOwnerOrTheBot', '=', 1)
         .as('mentionsNewestAt'),
       eb
         .selectFrom('newBookmarkAdditions')

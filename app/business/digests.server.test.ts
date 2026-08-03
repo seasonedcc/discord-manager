@@ -5,6 +5,7 @@ import { db } from '~/db/db.server'
 import { newId } from '~/framework/db.server'
 import {
   createChannel,
+  createGatewayIdentification,
   createGuild,
   createMember,
   createMessage,
@@ -800,6 +801,209 @@ describe('listMentions', () => {
         size: 90210,
         url: 'https://cdn.example.test/incident-timeline.pdf',
       },
+    ])
+  })
+
+  it('keeps a message that names the bot the owner sends through', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const bot = await createGatewayIdentification({ guildId: guild.id })
+    const named = await createMessage({
+      channelId: channel.id,
+      content: `<@${bot.botDiscordUserId}> can you repost that in #releases?`,
+      discordCreatedAt: '2099-12-01T00:00:00.000Z',
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-01T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      named.id,
+    ])
+  })
+
+  it('keeps a reply Discord says pinged the bot even when its text names nobody', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const bot = await createGatewayIdentification({ guildId: guild.id })
+    const answer = await createMessage({
+      channelId: channel.id,
+      content: 'that worked, thank you',
+      discordCreatedAt: '2099-12-02T00:00:00.000Z',
+      mentionedDiscordUserIds: [bot.botDiscordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-02T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      answer.id,
+    ])
+  })
+
+  it('leaves out a reply to the bot whose sender suppressed the ping', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+
+    await createGatewayIdentification({ guildId: guild.id })
+    await createMessage({
+      channelId: channel.id,
+      content: 'that worked, thank you',
+      discordCreatedAt: '2099-12-03T00:00:00.000Z',
+      mentionedDiscordUserIds: [],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-03T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages).toHaveLength(0)
+  })
+
+  it('leaves out a message the bot posted naming the bot', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const bot = await createGatewayIdentification({ guildId: guild.id })
+    const botMember = await createMember({
+      discordUserId: bot.botDiscordUserId,
+    })
+
+    await createMessage({
+      authorMemberId: botMember.id,
+      channelId: channel.id,
+      content: `<@${bot.botDiscordUserId}> here is the summary you asked for`,
+      discordCreatedAt: '2099-12-04T00:00:00.000Z',
+      mentionedDiscordUserIds: [bot.botDiscordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-04T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages).toHaveLength(0)
+  })
+
+  it('leaves out a message the owner posted naming the owner', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const ownerMember = await createMember({
+      discordUserId: context.owner.discordUserId,
+    })
+
+    await createMessage({
+      authorMemberId: ownerMember.id,
+      channelId: channel.id,
+      content: `noting for myself <@${context.owner.discordUserId}>`,
+      discordCreatedAt: '2099-12-05T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-05T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages).toHaveLength(0)
+  })
+
+  it('keeps a message the bot posted naming the owner', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const bot = await createGatewayIdentification({ guildId: guild.id })
+    const botMember = await createMember({
+      discordUserId: bot.botDiscordUserId,
+    })
+    const relayed = await createMessage({
+      authorMemberId: botMember.id,
+      channelId: channel.id,
+      content: `<@${context.owner.discordUserId}> the deploy finished`,
+      discordCreatedAt: '2099-12-06T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-06T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      relayed.id,
+    ])
+  })
+
+  it('answers with the owner alone while no gateway has said which bot it is', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const unidentifiedBot = snowflake()
+    const pingedTheOwner = await createMessage({
+      channelId: channel.id,
+      content: `<@${context.owner.discordUserId}> can you take this?`,
+      discordCreatedAt: '2099-12-07T00:00:00.000Z',
+    })
+
+    await createMessage({
+      channelId: channel.id,
+      content: `<@${unidentifiedBot}> can you repost that?`,
+      discordCreatedAt: '2099-12-07T00:01:00.000Z',
+      mentionedDiscordUserIds: [unidentifiedBot],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-07T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      pingedTheOwner.id,
+    ])
+  })
+
+  it('follows the newest bot identity the gateway recorded', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const retired = await createGatewayIdentification({
+      guildId: guild.id,
+      identifiedAt: '2099-12-08T00:00:00.000Z',
+    })
+    const current = await createGatewayIdentification({
+      guildId: guild.id,
+      identifiedAt: '2099-12-08T01:00:00.000Z',
+    })
+
+    await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      discordCreatedAt: '2099-12-09T00:00:00.000Z',
+      mentionedDiscordUserIds: [retired.botDiscordUserId],
+    })
+    const answeredTheCurrentBot = await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      discordCreatedAt: '2099-12-09T00:01:00.000Z',
+      mentionedDiscordUserIds: [current.botDiscordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-09T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      answeredTheCurrentBot.id,
     ])
   })
 

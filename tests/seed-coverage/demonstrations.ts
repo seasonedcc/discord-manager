@@ -129,6 +129,42 @@ async function aMessageNobodyBookmarkedYet(context: OwnerContext) {
   return spare
 }
 
+async function theBotThisDeploymentPostsThrough() {
+  const identification = await db()
+    .selectFrom('gatewayIdentifications')
+    .select('botDiscordUserId')
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .executeTakeFirst()
+
+  if (!identification) {
+    throw new Error(
+      'the seeded store records no gateway identification, so nothing knows which bot the owner posts through'
+    )
+  }
+
+  return identification.botDiscordUserId
+}
+
+async function messagesAnswering(botDiscordUserId: string) {
+  const answers = await db()
+    .selectFrom('messageRevisionUserMentions')
+    .innerJoin(
+      'messageRevisions',
+      'messageRevisions.id',
+      'messageRevisionUserMentions.messageRevisionId'
+    )
+    .select('messageRevisions.messageId')
+    .where(
+      'messageRevisionUserMentions.mentionedDiscordUserId',
+      '=',
+      botDiscordUserId
+    )
+    .execute()
+
+  return new Set(answers.map(({ messageId }) => messageId))
+}
+
 async function theSendTheSeedLeftBehind() {
   const request = await db()
     .selectFrom('messageSendRequests')
@@ -268,7 +304,8 @@ const seedDemonstrations: Record<
     },
   },
   mentions_list: {
-    demonstrates: 'a ping waiting on the owner',
+    demonstrates:
+      'a ping waiting on the owner, and an answer waiting on their bot',
     prove: async (context) => {
       const { messages } = await fromSuccess(listMentions)(
         { since: anInstantBeforeTheSeedRan() },
@@ -281,7 +318,20 @@ const seedDemonstrations: Record<
         )
       }
 
-      return `${messages.length} messages that pinged you`
+      const answering = await messagesAnswering(
+        await theBotThisDeploymentPostsThrough()
+      )
+      const answers = messages.filter(({ messageId }) =>
+        answering.has(messageId)
+      )
+
+      if (answers.length === 0) {
+        throw new Error(
+          'no message answering the seeded bot reaches the mention list, so an answer to what the owner posted through it would go unseen'
+        )
+      }
+
+      return `${messages.length} messages that pinged you, ${answers.length} of them answering your bot`
     },
   },
   bookmark_reasons_list: {

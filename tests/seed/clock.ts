@@ -39,5 +39,5 @@ async function readClock() {
 
 type Clock = Awaited<ReturnType<typeof readClock>>
 
-export { readClock, waitForTheStoreClockToTick }
+export { readClock, readTheStoreInstant, waitForTheStoreClockToTick }
 export type { Clock }

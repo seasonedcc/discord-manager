@@ -179,6 +179,13 @@ export interface GatewayHeartbeats {
   id: string;
 }
 
+export interface GatewayIdentifications {
+  botDiscordUserId: string;
+  createdAt: Generated<string>;
+  guildId: string;
+  id: string;
+}
+
 export interface Guilds {
   createdAt: Generated<string>;
   discordGuildId: string;
@@ -359,6 +366,7 @@ export interface DB {
   gatewayConnections: GatewayConnections;
   gatewayDisconnections: GatewayDisconnections;
   gatewayHeartbeats: GatewayHeartbeats;
+  gatewayIdentifications: GatewayIdentifications;
   guilds: Guilds;
   memberDetailRevisions: MemberDetailRevisions;
   members: Members;

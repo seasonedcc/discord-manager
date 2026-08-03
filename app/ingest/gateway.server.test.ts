@@ -23,6 +23,7 @@ import {
   handleGatewayConnected,
   handleGatewayDisconnected,
   handleGatewayHeartbeat,
+  handleGatewayIdentified,
   handleIncomingMessage,
   handleMessageDeletion,
   handleMessageEdit,
@@ -668,6 +669,27 @@ describe('handleGatewayConnected', () => {
   })
 })
 
+function gatewayIdentificationsOfTheConfiguredGuild() {
+  return db()
+    .selectFrom('gatewayIdentifications')
+    .innerJoin('guilds', 'guilds.id', 'gatewayIdentifications.guildId')
+    .select('gatewayIdentifications.id')
+    .where('guilds.discordGuildId', '=', configuredGuildId)
+    .execute()
+}
+
+describe('handleGatewayIdentified', () => {
+  it('records no bot identity while the client has not said who it is', async () => {
+    await configuredGuild()
+    const before = await gatewayIdentificationsOfTheConfiguredGuild()
+
+    expect(await handleGatewayIdentified(undefined)).toBeUndefined()
+    expect(await gatewayIdentificationsOfTheConfiguredGuild()).toHaveLength(
+      before.length
+    )
+  })
+})
+
 type GatewayHandler<Fired = unknown> = (...args: never[]) => Promise<Fired>
 
 async function fire<Fired>(
@@ -893,9 +915,11 @@ function mentionedUserIdsOf(discordMessageId: string) {
 }
 
 function fakeGatewayClient<Fired>({
+  botDiscordUserId,
   fetchActiveThreads,
   handlers,
 }: {
+  botDiscordUserId?: string
   fetchActiveThreads: () => Promise<{ threads: Collection<string, unknown> }>
   handlers: Map<string, GatewayHandler<Fired>[]>
 }) {
@@ -909,6 +933,7 @@ function fakeGatewayClient<Fired>({
     on: (event: string, handler: GatewayHandler<Fired>) => {
       handlers.set(event, [...(handlers.get(event) ?? []), handler])
     },
+    user: botDiscordUserId ? { id: botDiscordUserId } : undefined,
   } as unknown as Client
 }
 
@@ -950,6 +975,35 @@ describe('registerGatewayListeners', () => {
         .execute()
     ).toHaveLength(1)
     expect(enqueue).toHaveBeenCalledTimes(1)
+
+    enqueue.mockRestore()
+  })
+
+  it('records which bot user the ready shard authenticated as', async () => {
+    const guild = await configuredGuild()
+    const botDiscordUserId = randomUUID()
+    const handlers = new Map<string, GatewayHandler<RecordedConnection>[]>()
+    const client = fakeGatewayClient({
+      botDiscordUserId,
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const enqueue = vi
+      .spyOn(backfillIngestedChannels, 'enqueue')
+      .mockImplementation(() => {})
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.ShardReady, 0)
+
+    const identifications = await db()
+      .selectFrom('gatewayIdentifications')
+      .selectAll()
+      .where('botDiscordUserId', '=', botDiscordUserId)
+      .execute()
+
+    expect(identifications).toHaveLength(1)
+    expect(identifications[0].guildId).toBe(guild.id)
 
     enqueue.mockRestore()
   })

@@ -22,6 +22,7 @@ import {
   recordGatewayConnection,
   recordGatewayDisconnection,
   recordGatewayHeartbeat,
+  recordGatewayIdentification,
   recordIncomingMessage,
   recordMessageDeletion,
   recordMessageEdit,
@@ -1228,6 +1229,88 @@ describe('recordGatewayHeartbeat', () => {
       .execute()
 
     expect(heartbeats).toHaveLength(1)
+  })
+})
+
+describe('recordGatewayIdentification', () => {
+  it('records which bot user the gateway authenticated as, against the configured server', async () => {
+    const guild = await createGuild()
+    const botDiscordUserId = snowflake()
+
+    const result = await fromSuccess(recordGatewayIdentification)(
+      { botDiscordUserId },
+      ownerContextFor(guild)
+    )
+
+    const identifications = await db()
+      .selectFrom('gatewayIdentifications')
+      .selectAll()
+      .where('id', '=', result.gatewayIdentificationId)
+      .execute()
+
+    expect(identifications).toHaveLength(1)
+    expect(identifications[0].botDiscordUserId).toBe(botDiscordUserId)
+    expect(identifications[0].guildId).toBe(guild.id)
+  })
+
+  it('creates the configured server on the way in, so a first ready has somewhere to record', async () => {
+    const discordGuildId = snowflake()
+    const botDiscordUserId = snowflake()
+
+    const result = await fromSuccess(recordGatewayIdentification)(
+      { botDiscordUserId },
+      ownerContextFor({ discordGuildId })
+    )
+
+    const identification = await db()
+      .selectFrom('gatewayIdentifications')
+      .innerJoin('guilds', 'guilds.id', 'gatewayIdentifications.guildId')
+      .select('guilds.discordGuildId')
+      .where('gatewayIdentifications.id', '=', result.gatewayIdentificationId)
+      .executeTakeFirstOrThrow()
+
+    expect(identification.discordGuildId).toBe(discordGuildId)
+  })
+
+  it('records every identification, so a rotated bot leaves the older one in history', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const retired = snowflake()
+    const current = snowflake()
+
+    await fromSuccess(recordGatewayIdentification)(
+      { botDiscordUserId: retired },
+      context
+    )
+    await fromSuccess(recordGatewayIdentification)(
+      { botDiscordUserId: current },
+      context
+    )
+
+    const identifications = await db()
+      .selectFrom('gatewayIdentifications')
+      .select('botDiscordUserId')
+      .where('guildId', '=', guild.id)
+      .orderBy('createdAt', 'asc')
+      .orderBy('id', 'asc')
+      .execute()
+
+    expect(
+      identifications.map(({ botDiscordUserId }) => botDiscordUserId)
+    ).toEqual([retired, current])
+  })
+
+  it('refuses a context that cannot read messages', async () => {
+    const guild = await createGuild()
+
+    const result = await recordGatewayIdentification(
+      { botDiscordUserId: snowflake() },
+      { ...ownerContextFor(guild), canReadMessages: false }
+    )
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    expect(isContextError(result.errors[0])).toBe(true)
   })
 })
 
