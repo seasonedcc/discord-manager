@@ -10,7 +10,9 @@ import { newId } from '~/framework/db.server'
 import {
   createBookmarkedMessage,
   createChannel,
+  createGatewayIdentification,
   createGuild,
+  createMember,
   createMessage,
   ownerContext,
   snowflake,
@@ -233,6 +235,117 @@ describe('readActivitySince', () => {
 
     expect(activity.messages.count).toBe(1)
     expect(activity.mentions).toEqual({ count: 0, newestAt: null })
+  })
+
+  it('counts a reply that pinged the bot the owner sends through', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const bot = await createGatewayIdentification({ guildId: guild.id })
+
+    await createMessage({
+      channelId: channel.id,
+      content: 'that worked, thank you',
+      recordedAt: '2100-05-21T00:00:00.000Z',
+      mentionedDiscordUserIds: [bot.botDiscordUserId],
+    })
+    await createMessage({
+      channelId: channel.id,
+      content: 'unrelated chatter',
+      recordedAt: '2100-05-22T00:00:00.000Z',
+    })
+
+    const { activity } = await fromSuccess(readActivitySince)(
+      { since: '2100-05-20T00:00:00.000Z' },
+      context
+    )
+
+    expect(activity.messages.count).toBe(2)
+    expect(activity.mentions).toEqual({
+      count: 1,
+      newestAt: '2100-05-21T00:00:00.000Z',
+    })
+  })
+
+  it('leaves out a message the bot posted naming the bot', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const bot = await createGatewayIdentification({ guildId: guild.id })
+    const botMember = await createMember({
+      discordUserId: bot.botDiscordUserId,
+    })
+
+    await createMessage({
+      authorMemberId: botMember.id,
+      channelId: channel.id,
+      content: `<@${bot.botDiscordUserId}> here is the summary you asked for`,
+      recordedAt: '2100-05-31T00:00:00.000Z',
+      mentionedDiscordUserIds: [bot.botDiscordUserId],
+    })
+
+    const { activity } = await fromSuccess(readActivitySince)(
+      { since: '2100-05-30T00:00:00.000Z' },
+      context
+    )
+
+    expect(activity.messages.count).toBe(1)
+    expect(activity.mentions).toEqual({ count: 0, newestAt: null })
+  })
+
+  it('leaves out a message the owner posted naming the owner', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const ownerMember = await createMember({
+      discordUserId: context.owner.discordUserId,
+    })
+
+    await createMessage({
+      authorMemberId: ownerMember.id,
+      channelId: channel.id,
+      content: `noting for myself <@${context.owner.discordUserId}>`,
+      recordedAt: '2100-06-11T00:00:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+    })
+
+    const { activity } = await fromSuccess(readActivitySince)(
+      { since: '2100-06-10T00:00:00.000Z' },
+      context
+    )
+
+    expect(activity.messages.count).toBe(1)
+    expect(activity.mentions).toEqual({ count: 0, newestAt: null })
+  })
+
+  it('counts the owner alone while no gateway has said which bot it is', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const unidentifiedBot = snowflake()
+
+    await createMessage({
+      channelId: channel.id,
+      content: `<@${context.owner.discordUserId}> can you take this?`,
+      recordedAt: '2100-06-21T00:00:00.000Z',
+    })
+    await createMessage({
+      channelId: channel.id,
+      content: `<@${unidentifiedBot}> can you repost that?`,
+      recordedAt: '2100-06-22T00:00:00.000Z',
+      mentionedDiscordUserIds: [unidentifiedBot],
+    })
+
+    const { activity } = await fromSuccess(readActivitySince)(
+      { since: '2100-06-20T00:00:00.000Z' },
+      context
+    )
+
+    expect(activity.messages.count).toBe(2)
+    expect(activity.mentions).toEqual({
+      count: 1,
+      newestAt: '2100-06-21T00:00:00.000Z',
+    })
   })
 
   it('counts a bookmark addition after the cutoff, even one a later removal undid', async () => {
