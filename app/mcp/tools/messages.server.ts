@@ -15,10 +15,11 @@ import {
   MessageFetchRejectedError,
   type MessageFetchTransport,
   type ObservedEmoji,
+  countMessagesSchema,
   fetchMessageSchema,
   renderEmoji,
 } from '~/business/messages.common'
-import { fetchMessage } from '~/business/messages.server'
+import { countMessages, fetchMessage } from '~/business/messages.server'
 import { restClient } from '~/mcp/discord-rest.server'
 import type { McpTool } from '~/mcp/tool'
 
@@ -181,6 +182,14 @@ const messagesTools: McpTool[] = [
     wraps: ['messages.fetchMessage'],
     execute: (input, context) =>
       fetchMessage(readThroughDiscord)(input, context),
+  },
+  {
+    name: 'messages_count',
+    description:
+      'Count stored messages without reading any of them back: the answer is numbers and timestamps, however wide the window. This is how you tell an unusual night from a normal one — ask for `groupBy: "day"` with a `contentContains` that matches the alert, and read one bucket per UTC day against the days before it, over as much history as the store holds. `oldestMatch` and `newestMatch` say how far back the matching history actually reaches, so a baseline drawn from four days of history is visibly four days of history rather than a month of it. Narrow with `channelId`, `since` and `until`. What it counts is what the other readers show: a message deleted in Discord is left out, and only the wording a message carries now is matched, never wording an edit replaced. Answers with `total`, `oldestMatch` and `newestMatch` — the two timestamps null when nothing matched — plus `days`, oldest first, when you asked for grouping; a day nothing matched on is absent rather than a zero. Read the messages themselves with messages_catch_up, `since` set to `oldestMatch` and the same `channelId` — it carries no text filter, so it answers with everything posted from there on, matching and not, 200 at a time.',
+    inputSchema: countMessagesSchema,
+    wraps: ['messages.countMessages'],
+    execute: (input, context) => countMessages(input, context),
   },
 ]
 
