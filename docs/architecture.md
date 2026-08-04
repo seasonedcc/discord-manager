@@ -348,7 +348,7 @@ discovers everything by introspection and hardcodes no table name.
   first, the new chunk directories move in next, and `manifest.json` and `schema.sql` land
   last, so a crash mid-swap leaves a dump the import refuses rather than a plausible wrong
   one. An empty table gets no directory at all. A non-empty destination carrying no
-  `schema.sql` is still refused outright — with nothing of its own to recognise there, an
+  `schema.sql` is still refused outright — with nothing of its own to recognize there, an
   export pointed at `./data` must not take the store with it.
 - **A verifying restore.** The import only ever writes a fresh file — it refuses an existing
   `DATABASE_PATH` — and refuses a dump carrying no `schema.sql` or no `manifest.json`. It
