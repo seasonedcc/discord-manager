@@ -655,6 +655,38 @@ describe('countMessages', () => {
     expect(openEnded.newestMatch).toBe(outsideAfter)
   })
 
+  it('counts what was posted at the instant a window starts and ends on', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+    const instant = '2026-03-02T12:00:00.000Z'
+
+    for (const discordCreatedAt of [
+      '2026-03-02T11:59:59.999Z',
+      instant,
+      '2026-03-02T12:00:00.001Z',
+    ]) {
+      await createMessage({
+        channelId: channel.id,
+        content: `alarm, ${needle}`,
+        discordCreatedAt,
+      })
+    }
+
+    const counted = await fromSuccess(countMessages)(
+      {
+        channelId: channel.id,
+        contentContains: needle,
+        since: instant,
+        until: instant,
+      },
+      context
+    )
+
+    expect(counted.total).toBe(1)
+    expect(counted.oldestMatch).toBe(instant)
+    expect(counted.newestMatch).toBe(instant)
+  })
+
   it('reads a window given in another offset against the same clock the store keeps', async () => {
     const { channel, context } = await countGround()
     const needle = randomUUID()
