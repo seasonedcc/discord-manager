@@ -29,6 +29,8 @@ Delivered, failed, and skipped are three different things, and skipped is never 
 
 Every exit from an operation body reaches exactly one recorded row. A vendor call sits in a `try` that records the failure and rethrows when a retry could still help; a failure no retry can help records and returns instead. An error that leaves a request with no outcome row is a defect, not a missing log line — the owner's reading would call it pending forever until the silence window turns that into a lie.
 
+A skip pre-refuses a call only on facts the store can prove under Discord rules that are actually documented. Where Discord's behavior is undocumented — whether a message whose deleted thread can take a new one, say — send the call and let the mapped failure answer honestly: a wrong local refusal blocks an operation the vendor would have allowed, while a wrong optimistic call costs one request and still comes back as mapped guidance. And when more than one skip reason holds at once, record the one whose next action gives the owner the most — a message that is both deleted and already threaded skips as `thread_already_exists`, because "post into it" beats "pick another message".
+
 ## Status is derived in SQL, never stored
 
 Union the outcome tables into one `requestId, createdAt, id, outcome` shape, rank with `row_number() over (partition by request_id order by created_at desc, id desc)` and keep rank 1 — the `id desc` tie-break stops a repeated read from flipping between two answers — then `coalesce` that outcome with a `case` over the request's own age:
@@ -77,6 +79,8 @@ const messageSendSkipCopy = {
 ```
 
 Sibling `...FailureCopy` and `...StallCopy` maps cover the two outcomes that have no reason column. A next action names something the owner can actually do — a permission to grant, a setting to change, a command to re-run — never "try again later" alone.
+
+Failure kinds come from the vendor's own documented error codes for the operation, not from a taxonomy copied off a sibling family. Before settling the kinds, read the codes Discord documents for this endpoint and give every cause whose remedy differs its own kind keyed on its code — the way `gone` keys on `Unknown Message` and a thread create's `thread_already_exists` keys on `Thread already created for this message` — because whatever stays inside the catch-all `rejected` shares one next action, and that action must be safe under every cause left in it.
 
 Raw Discord text may be recorded on the failure row, because what the vendor said is a fact worth keeping. It never leaves the store: no tool result and no derived reading reads that column.
 
