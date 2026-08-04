@@ -3,6 +3,10 @@ import { openMcpSession } from './mcp-client'
 import { fixtures } from './seed'
 import { test } from './spec'
 
+type ChannelList = {
+  channels: { channelId: string }[]
+}
+
 type IngestionStatus = {
   ingestion: {
     backfill: {
@@ -69,7 +73,17 @@ test('ingestion status owns up to the channels no backfill has visited', async (
     running: 0,
     stalled: 0,
   })
-  assert.equal(ingestion.backfill.neverRanChannelCount, 3)
+  const { channels } = await session.call<ChannelList>('channels_list')
+  const visited = Object.values(ingestion.backfill.channels).reduce(
+    (total, count) => total + count,
+    0
+  )
+
+  assert.equal(
+    ingestion.backfill.neverRanChannelCount,
+    channels.length - visited
+  )
+  assert.ok(ingestion.backfill.neverRanChannelCount >= 3)
   assert.deepEqual(ingestion.backfill.failedChannelNames, [])
   assert.deepEqual(ingestion.backfill.reactionsUnreadChannelNames, [
     backfill.reactionsUnread.channel.name,

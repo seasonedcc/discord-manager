@@ -37,6 +37,7 @@ type ToolName =
   | 'messages_fetch'
   | 'messages_send'
   | 'messages_send_status'
+  | 'threads_create'
 
 type OwnerContext = ReturnType<typeof ownerContext>
 
@@ -52,6 +53,8 @@ const declaredUnseedable = {
     'reads one message live from Discord, so no local store can answer for it — the README says under "Try it before inviting a bot" that it needs a real bot token and a real server',
   messages_send:
     'posts to a channel through Discord, so no local store can answer for it — the README says under "Try it before inviting a bot" that sending fails on demo credentials, which is why the seed leaves a refused send behind for messages_send_status to read',
+  threads_create:
+    'opens a thread through Discord and answers with the channel id Discord gave it, so no local store can answer for it — the README says under "Try it before inviting a bot" that it needs a real bot token and a real server, and the seeded thread in channels_list is what demonstrates a thread locally',
 } satisfies Partial<Record<ToolName, string>>
 
 type UnseedableTool = keyof typeof declaredUnseedable

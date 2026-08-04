@@ -4,7 +4,6 @@ import {
   type APIReaction,
   DiscordAPIError,
   MessageFlags,
-  REST,
   type RESTGetAPIChannelMessageReactionUsersResult,
   type RESTGetAPIChannelMessageResult,
   RESTJSONErrorCodes,
@@ -20,7 +19,7 @@ import {
   renderEmoji,
 } from '~/business/messages.common'
 import { fetchMessage } from '~/business/messages.server'
-import { env } from '~/env.server'
+import { restClient } from '~/mcp/discord-rest.server'
 import type { McpTool } from '~/mcp/tool'
 
 const reactorPageSize = 100
@@ -29,16 +28,6 @@ const reactorPageSize = 100
 // deleted from the server — which comes back nameless — is still walkable under
 // a stand-in name.
 const namelessEmojiRouteName = '_'
-
-let discordRest: REST | undefined
-
-function restClient() {
-  discordRest ??= new REST({ api: env().discordApiBaseUrl }).setToken(
-    env().discordBotToken
-  )
-
-  return discordRest
-}
 
 function observeEmbed(embed: APIEmbed) {
   return {
