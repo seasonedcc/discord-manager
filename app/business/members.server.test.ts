@@ -90,9 +90,9 @@ describe('listMembers', () => {
   it('matches part of a display name whatever its case, accents included', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
-    const devid = await somebodyWhoPosted(channel.id, {
-      displayName: 'Dêvid',
-      username: 'devid.souza',
+    const jose = await somebodyWhoPosted(channel.id, {
+      displayName: 'José Álvarez',
+      username: 'zeca.alvarez',
     })
     await somebodyWhoPosted(channel.id, {
       displayName: 'Maya Fischer',
@@ -100,15 +100,15 @@ describe('listMembers', () => {
     })
 
     const { members } = await fromSuccess(listMembers)(
-      { query: 'DÊVID' },
+      { query: 'JOSÉ' },
       await ownerContext({ guildId: guild.id })
     )
 
     expect(members).toEqual([
       {
-        discordUserId: devid.discordUserId,
-        displayName: 'Dêvid',
-        username: 'devid.souza',
+        discordUserId: jose.discordUserId,
+        displayName: 'José Álvarez',
+        username: 'zeca.alvarez',
       },
     ])
   })
@@ -116,9 +116,9 @@ describe('listMembers', () => {
   it('matches part of a username the display name never spells', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
-    const devid = await somebodyWhoPosted(channel.id, {
-      displayName: 'Dêvid',
-      username: 'devid.souza',
+    const jose = await somebodyWhoPosted(channel.id, {
+      displayName: 'José Álvarez',
+      username: 'zeca.alvarez',
     })
     await somebodyWhoPosted(channel.id, {
       displayName: 'Maya Fischer',
@@ -126,15 +126,113 @@ describe('listMembers', () => {
     })
 
     const { members } = await fromSuccess(listMembers)(
-      { query: 'SOUZA' },
+      { query: 'ZECA' },
       await ownerContext({ guildId: guild.id })
     )
 
     expect(members).toEqual([
       {
-        discordUserId: devid.discordUserId,
-        displayName: 'Dêvid',
-        username: 'devid.souza',
+        discordUserId: jose.discordUserId,
+        displayName: 'José Álvarez',
+        username: 'zeca.alvarez',
+      },
+    ])
+  })
+
+  it('matches a name spelled with a dotted capital İ from a plainly typed query', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const irem = await somebodyWhoPosted(channel.id, {
+      displayName: 'İrem Kaya',
+      username: 'kaya',
+    })
+    await somebodyWhoPosted(channel.id, {
+      displayName: 'Maya Fischer',
+      username: 'maya',
+    })
+
+    const { members } = await fromSuccess(listMembers)(
+      { query: 'irem' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members).toEqual([
+      {
+        discordUserId: irem.discordUserId,
+        displayName: 'İrem Kaya',
+        username: 'kaya',
+      },
+    ])
+  })
+
+  it('matches a plainly spelled name from a query typed with a dotted capital İ', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const irem = await somebodyWhoPosted(channel.id, {
+      displayName: 'Irem Yilmaz',
+      username: 'yilmaz',
+    })
+
+    const { members } = await fromSuccess(listMembers)(
+      { query: 'İREM' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members).toEqual([
+      {
+        discordUserId: irem.discordUserId,
+        displayName: 'Irem Yilmaz',
+        username: 'yilmaz',
+      },
+    ])
+  })
+
+  it('matches a plainly spelled name from a query typed with a dotless ı', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const isabel = await somebodyWhoPosted(channel.id, {
+      displayName: 'Isabel Ferreira',
+      username: 'ferreira',
+    })
+
+    const { members } = await fromSuccess(listMembers)(
+      { query: 'ısabel' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members).toEqual([
+      {
+        discordUserId: isabel.discordUserId,
+        displayName: 'Isabel Ferreira',
+        username: 'ferreira',
+      },
+    ])
+  })
+
+  it('tells an accented letter apart from the plain one it looks like', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const jose = await somebodyWhoPosted(channel.id, {
+      displayName: 'José Álvarez',
+      username: 'zeca.alvarez',
+    })
+
+    const context = await ownerContext({ guildId: guild.id })
+    const { members: plain } = await fromSuccess(listMembers)(
+      { query: 'jose' },
+      context
+    )
+    const { members: accented } = await fromSuccess(listMembers)(
+      { query: 'JOSÉ' },
+      context
+    )
+
+    expect(plain).toEqual([])
+    expect(accented).toEqual([
+      {
+        discordUserId: jose.discordUserId,
+        displayName: 'José Álvarez',
+        username: 'zeca.alvarez',
       },
     ])
   })

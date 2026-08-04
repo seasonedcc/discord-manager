@@ -45,8 +45,14 @@ function latestBotIdentityOf(guildId: string) {
     .limit(1)
 }
 
+const dottedOrDotlessI = /i\u0307|\u0131/gu
+
+function caseFolded(text: string) {
+  return text.toLowerCase().replace(dottedOrDotlessI, 'i')
+}
+
 function carries(text: string, needle: string) {
-  return text.toLowerCase().includes(needle)
+  return caseFolded(text).includes(needle)
 }
 
 const listMembers = applySchema(
@@ -80,7 +86,7 @@ const listMembers = applySchema(
     ])
     .execute()
 
-  const needle = query?.toLowerCase()
+  const needle = query === undefined ? undefined : caseFolded(query)
   const matching =
     needle === undefined
       ? roster

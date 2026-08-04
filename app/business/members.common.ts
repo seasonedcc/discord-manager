@@ -9,7 +9,7 @@ const listMembersSchema = z.object({
     .min(1, memberQueryMessage)
     .optional()
     .describe(
-      'Bring back only the people whose current username or display name contains this text. Case is ignored, on accented letters as much as plain ones, and the text can sit anywhere in the name — `fisch` finds Maya Fischer, `DÊVID` finds Dêvid. Left out, everyone comes back.'
+      'Bring back only the people whose current username or display name contains this text. Case is ignored, on accented letters as much as plain ones, and the text can sit anywhere in the name — `fisch` finds Maya Fischer, `JOSÉ` finds José Álvarez. The accent itself is part of the letter, so `jose` does not. Left out, everyone comes back.'
     ),
 })
 
