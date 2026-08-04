@@ -8,13 +8,6 @@ const membersContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
 })
 
-type MemberRow = {
-  discordUserId: string
-  displayName: string
-  isYourBot: number
-  username: string
-}
-
 function latestMemberDetails() {
   const ranked = db()
     .selectFrom('memberDetailRevisions')
@@ -56,14 +49,6 @@ function carries(text: string, needle: string) {
   return text.toLowerCase().includes(needle)
 }
 
-function inDiscordsMemberOrder(left: MemberRow, right: MemberRow) {
-  return (
-    left.displayName.localeCompare(right.displayName, 'en') ||
-    left.username.localeCompare(right.username, 'en') ||
-    (BigInt(left.discordUserId) < BigInt(right.discordUserId) ? -1 : 1)
-  )
-}
-
 const listMembers = applySchema(
   listMembersSchema,
   membersContextSchema
@@ -90,26 +75,32 @@ const listMembers = applySchema(
         '=',
         latestBotIdentityOf(context.owner.guildId)
       )
-        .$castTo<number>()
+        .$castTo<number | null>()
         .as('isYourBot'),
     ])
     .execute()
 
   const needle = query?.toLowerCase()
+  const matching =
+    needle === undefined
+      ? roster
+      : roster.filter(
+          ({ displayName, username }) =>
+            carries(displayName, needle) || carries(username, needle)
+        )
+
+  matching.sort(
+    (left, right) =>
+      left.displayName.localeCompare(right.displayName, 'en') ||
+      left.username.localeCompare(right.username, 'en') ||
+      (BigInt(left.discordUserId) < BigInt(right.discordUserId) ? -1 : 1)
+  )
 
   return {
-    members: roster
-      .filter(
-        ({ displayName, username }) =>
-          needle === undefined ||
-          carries(displayName, needle) ||
-          carries(username, needle)
-      )
-      .sort(inDiscordsMemberOrder)
-      .map(({ isYourBot, ...member }) => ({
-        ...member,
-        ...(isYourBot === 1 ? { isYourBot: true } : {}),
-      })),
+    members: matching.map(({ isYourBot, ...member }) => ({
+      ...member,
+      ...(isYourBot === 1 ? { isYourBot: true } : {}),
+    })),
   }
 })
 
