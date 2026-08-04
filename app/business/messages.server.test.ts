@@ -4,11 +4,12 @@ import {
   MessageFetchGoneError,
   MessageFetchRejectedError,
   type MessageFetchTransport,
+  countWindowMessage,
   messageFetchFailureCopy,
   messageFetchRetrievalCopy,
   messageFetchSkipCopy,
 } from '~/business/messages.common'
-import { fetchMessage } from '~/business/messages.server'
+import { countMessages, fetchMessage } from '~/business/messages.server'
 import { db } from '~/db/db.server'
 import { newId } from '~/framework/db.server'
 import {
@@ -436,5 +437,384 @@ describe('fetchMessage', () => {
     }
     expect(error.path).toEqual(['canReadMessages'])
     expect(await telemetryOf(message.id).requests()).toHaveLength(0)
+  })
+})
+
+async function countGround() {
+  const guild = await createGuild()
+  const context = await ownerContext({ guildId: guild.id })
+  const channel = await createChannel({ guildId: guild.id })
+
+  return { channel, context, guild }
+}
+
+async function appendRevision(
+  messageId: string,
+  content: string,
+  embeds: string[] = []
+) {
+  const revision = await db()
+    .insertInto('messageRevisions')
+    .values({ id: newId(), messageId, content })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+
+  if (embeds.length === 0) return revision
+
+  await db()
+    .insertInto('messageRevisionEmbeds')
+    .values(
+      embeds.map((embed, position) => ({
+        content: embed,
+        id: newId(),
+        messageRevisionId: revision.id,
+        position,
+      }))
+    )
+    .execute()
+
+  return revision
+}
+
+describe('countMessages', () => {
+  it('counts a message once however many revisions and embeds it carries', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+    const message = await createMessage({
+      channelId: channel.id,
+      content: `first wording, ${needle}`,
+      embeds: [`first embed, ${needle}`, `second embed, ${needle}`],
+    })
+
+    await appendRevision(message.id, `second wording, ${needle}`, [
+      `third embed, ${needle}`,
+      `fourth embed, ${needle}`,
+    ])
+    await appendRevision(message.id, `third wording, ${needle}`, [
+      `fifth embed, ${needle}`,
+      `sixth embed, ${needle}`,
+    ])
+
+    const counted = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: needle },
+      context
+    )
+
+    expect(counted.total).toBe(1)
+  })
+
+  it('leaves the messages Discord deleted out of the count', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+    const standing = await createMessage({
+      channelId: channel.id,
+      content: `standing, ${needle}`,
+    })
+    const withdrawn = await createMessage({
+      channelId: channel.id,
+      content: `withdrawn, ${needle}`,
+    })
+
+    await db()
+      .insertInto('messageDeletions')
+      .values({ id: newId(), messageId: withdrawn.id })
+      .execute()
+
+    const counted = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: needle },
+      context
+    )
+
+    expect(counted.total).toBe(1)
+    expect(counted.oldestMatch).toBe(standing.discordCreatedAt)
+    expect(counted.newestMatch).toBe(standing.discordCreatedAt)
+  })
+
+  it('matches the wording a message carries now, never the wording it replaced', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+    const message = await createMessage({
+      channelId: channel.id,
+      content: `frozen until Thursday, ${needle}`,
+    })
+
+    await appendRevision(message.id, `frozen until Friday, ${needle}`)
+
+    const replaced = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: `Thursday, ${needle}` },
+      context
+    )
+    const current = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: `Friday, ${needle}` },
+      context
+    )
+
+    expect(replaced.total).toBe(0)
+    expect(replaced.oldestMatch).toBe(null)
+    expect(replaced.newestMatch).toBe(null)
+    expect(current.total).toBe(1)
+    expect(current.oldestMatch).toBe(message.discordCreatedAt)
+  })
+
+  it('matches the text of an embed the message carries', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+
+    await createMessage({
+      channelId: channel.id,
+      content: '',
+      embeds: [`Checkout is failing, ${needle}`],
+    })
+
+    const counted = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: `failing, ${needle}` },
+      context
+    )
+
+    expect(counted.total).toBe(1)
+  })
+
+  it('stops matching an embed the latest revision no longer carries', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+    const message = await createMessage({
+      channelId: channel.id,
+      content: '',
+      embeds: [`Checkout is failing, ${needle}`],
+    })
+
+    await appendRevision(message.id, '')
+
+    const counted = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: `failing, ${needle}` },
+      context
+    )
+
+    expect(counted.total).toBe(0)
+  })
+
+  it('matches without regard to case', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+
+    await createMessage({
+      channelId: channel.id,
+      content: `CHECKOUT IS FAILING, ${needle}`,
+    })
+    await createMessage({
+      channelId: channel.id,
+      content: '',
+      embeds: [`Checkout Is Failing, ${needle}`],
+    })
+
+    const counted = await fromSuccess(countMessages)(
+      {
+        channelId: channel.id,
+        contentContains: `checkout is failing, ${needle}`,
+      },
+      context
+    )
+
+    expect(counted.total).toBe(2)
+  })
+
+  it('counts only what falls inside the window it was given', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+    const outsideBefore = '2026-03-01T23:59:59.999Z'
+    const since = '2026-03-02T00:00:00.000Z'
+    const until = '2026-03-02T23:59:59.999Z'
+    const outsideAfter = '2026-03-03T00:00:00.000Z'
+
+    for (const discordCreatedAt of [
+      outsideBefore,
+      since,
+      until,
+      outsideAfter,
+    ]) {
+      await createMessage({
+        channelId: channel.id,
+        content: `alarm, ${needle}`,
+        discordCreatedAt,
+      })
+    }
+
+    const counted = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: needle, since, until },
+      context
+    )
+    const openEnded = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: needle, since },
+      context
+    )
+
+    expect(counted.total).toBe(2)
+    expect(counted.oldestMatch).toBe(since)
+    expect(counted.newestMatch).toBe(until)
+    expect(openEnded.total).toBe(3)
+    expect(openEnded.newestMatch).toBe(outsideAfter)
+  })
+
+  it('reads a window given in another offset against the same clock the store keeps', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+
+    await createMessage({
+      channelId: channel.id,
+      content: `alarm, ${needle}`,
+      discordCreatedAt: '2026-03-02T00:30:00.000Z',
+    })
+
+    const counted = await fromSuccess(countMessages)(
+      {
+        channelId: channel.id,
+        contentContains: needle,
+        since: '2026-03-02T02:00:00+02:00',
+      },
+      context
+    )
+
+    expect(counted.total).toBe(1)
+  })
+
+  it('buckets the count by the UTC day each message was posted on', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+
+    for (const discordCreatedAt of [
+      '2026-03-01T23:59:59.999Z',
+      '2026-03-02T00:00:00.000Z',
+      '2026-03-02T12:00:00.000Z',
+      '2026-03-04T08:00:00.000Z',
+    ]) {
+      await createMessage({
+        channelId: channel.id,
+        content: `alarm, ${needle}`,
+        discordCreatedAt,
+      })
+    }
+
+    const counted = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: needle, groupBy: 'day' },
+      context
+    )
+
+    expect(counted.total).toBe(4)
+    expect(counted.days).toEqual([
+      { date: '2026-03-01', count: 1 },
+      { date: '2026-03-02', count: 2 },
+      { date: '2026-03-04', count: 1 },
+    ])
+  })
+
+  it('answers with no days and no timestamps when nothing matched', async () => {
+    const { channel, context } = await countGround()
+
+    await createMessage({
+      channelId: channel.id,
+      content: 'nothing to do with the search',
+    })
+
+    const counted = await fromSuccess(countMessages)(
+      {
+        channelId: channel.id,
+        contentContains: randomUUID(),
+        groupBy: 'day',
+      },
+      context
+    )
+
+    expect(counted.total).toBe(0)
+    expect(counted.oldestMatch).toBe(null)
+    expect(counted.newestMatch).toBe(null)
+    expect(counted.days).toEqual([])
+  })
+
+  it('leaves days out of the answer when no grouping was asked for', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+
+    await createMessage({ channelId: channel.id, content: `alarm, ${needle}` })
+
+    const counted = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: needle },
+      context
+    )
+
+    expect(counted.total).toBe(1)
+    expect(counted.days).toBe(undefined)
+  })
+
+  it('counts the whole configured server when no channel is named', async () => {
+    const { channel, context, guild } = await countGround()
+    const alongside = await createChannel({ guildId: guild.id })
+    const elsewhere = await createChannel()
+    const needle = randomUUID()
+
+    for (const channelId of [channel.id, alongside.id, elsewhere.id]) {
+      await createMessage({ channelId, content: `alarm, ${needle}` })
+    }
+
+    const counted = await fromSuccess(countMessages)(
+      { contentContains: needle },
+      context
+    )
+
+    expect(counted.total).toBe(2)
+  })
+
+  it('refuses a channel the store never ingested', async () => {
+    const { context } = await countGround()
+
+    const result = await countMessages({ channelId: randomUUID() }, context)
+    const [error] = result.errors
+
+    expect(result.success).toBe(false)
+    if (!(error instanceof InputError)) {
+      throw new Error('expected an input error')
+    }
+    expect(error.path).toEqual(['channelId'])
+  })
+
+  it('refuses a channel in another server', async () => {
+    const { context } = await countGround()
+    const elsewhere = await createChannel()
+
+    const result = await countMessages({ channelId: elsewhere.id }, context)
+    const [error] = result.errors
+
+    expect(result.success).toBe(false)
+    if (!(error instanceof InputError)) {
+      throw new Error('expected an input error')
+    }
+    expect(error.path).toEqual(['channelId'])
+  })
+
+  it('refuses a window that ends before it starts', async () => {
+    const { context } = await countGround()
+
+    const result = await countMessages(
+      { since: '2026-03-04T00:00:00Z', until: '2026-03-02T00:00:00Z' },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.errors[0].message).toBe(countWindowMessage)
+  })
+
+  it('fails a context that cannot read messages', async () => {
+    const { channel, context } = await countGround()
+
+    const result = await countMessages(
+      { channelId: channel.id },
+      { ...context, canReadMessages: false }
+    )
+    const [error] = result.errors
+
+    expect(result.success).toBe(false)
+    if (!(error instanceof ContextError)) {
+      throw new Error('expected a context error')
+    }
+    expect(error.path).toEqual(['canReadMessages'])
   })
 })

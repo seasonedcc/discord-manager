@@ -1,5 +1,5 @@
 import { InputError, applySchema } from 'composable-functions'
-import type { Transaction } from 'kysely'
+import { type Expression, type SqlBool, type Transaction, sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -7,6 +7,7 @@ import {
   MessageFetchGoneError,
   MessageFetchRejectedError,
   type MessageFetchTransport,
+  countMessagesSchema,
   fetchMessageSchema,
   messageFetchGuidance,
   renderEmbed,
@@ -185,4 +186,157 @@ function fetchMessage(transport: MessageFetchTransport) {
   })
 }
 
-export { fetchMessage }
+const dayBucket = sql<string>`substr(messages.discord_created_at, 1, 10)`
+
+function carriesTheText(text: Expression<string>, wanted: string) {
+  return sql<SqlBool>`instr(lower(${text}), lower(${wanted})) > 0`
+}
+
+function messagesMatching({
+  channelId,
+  contentContains,
+  guildId,
+  since,
+  until,
+}: {
+  channelId: string | undefined
+  contentContains: string | undefined
+  guildId: string
+  since: string | undefined
+  until: string | undefined
+}) {
+  let matching = db()
+    .with('latestRevisions', (qb) =>
+      qb.selectFrom('messageRevisions').select((eb) => [
+        'messageRevisions.id',
+        'messageRevisions.messageId',
+        'messageRevisions.content',
+        eb.fn
+          .agg<number>('row_number')
+          .over((over) =>
+            over
+              .partitionBy('messageId')
+              .orderBy('createdAt', 'desc')
+              .orderBy('id', 'desc')
+          )
+          .as('rowNumber'),
+      ])
+    )
+    .selectFrom('messages')
+    .innerJoin('channels', 'channels.id', 'messages.channelId')
+    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+    .where('guilds.discordGuildId', '=', guildId)
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom('messageDeletions')
+            .select('messageDeletions.id')
+            .whereRef('messageDeletions.messageId', '=', 'messages.id')
+        )
+      )
+    )
+
+  if (channelId) {
+    matching = matching.where('messages.channelId', '=', channelId)
+  }
+
+  if (since) {
+    matching = matching.where('messages.discordCreatedAt', '>=', since)
+  }
+
+  if (until) {
+    matching = matching.where('messages.discordCreatedAt', '<=', until)
+  }
+
+  if (contentContains) {
+    matching = matching.where((eb) =>
+      eb.exists(
+        eb
+          .selectFrom('latestRevisions')
+          .select('latestRevisions.id')
+          .whereRef('latestRevisions.messageId', '=', 'messages.id')
+          .where('latestRevisions.rowNumber', '=', 1)
+          .where((revision) =>
+            revision.or([
+              carriesTheText(
+                revision.ref('latestRevisions.content'),
+                contentContains
+              ),
+              revision.exists(
+                revision
+                  .selectFrom('messageRevisionEmbeds')
+                  .select('messageRevisionEmbeds.id')
+                  .whereRef(
+                    'messageRevisionEmbeds.messageRevisionId',
+                    '=',
+                    'latestRevisions.id'
+                  )
+                  .where((embed) =>
+                    carriesTheText(
+                      embed.ref('messageRevisionEmbeds.content'),
+                      contentContains
+                    )
+                  )
+              ),
+            ])
+          )
+      )
+    )
+  }
+
+  return matching
+}
+
+const countMessages = applySchema(
+  countMessagesSchema,
+  messagesContextSchema
+)(async ({ channelId, contentContains, groupBy, since, until }, context) => {
+  if (channelId) {
+    const channel = await db()
+      .selectFrom('channels')
+      .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+      .select('channels.id')
+      .where('channels.id', '=', channelId)
+      .where('guilds.discordGuildId', '=', context.owner.guildId)
+      .executeTakeFirst()
+
+    if (!channel) {
+      throw new InputError(
+        'No channel with that id has been ingested. List the channels to pick one.',
+        ['channelId']
+      )
+    }
+  }
+
+  const matching = messagesMatching({
+    channelId,
+    contentContains,
+    guildId: context.owner.guildId,
+    since: since ? new Date(since).toISOString() : undefined,
+    until: until ? new Date(until).toISOString() : undefined,
+  })
+
+  const counted = await matching
+    .select((eb) => [
+      eb.fn.count<number>('messages.id').distinct().as('total'),
+      eb.fn.min<string | null>('messages.discordCreatedAt').as('oldestMatch'),
+      eb.fn.max<string | null>('messages.discordCreatedAt').as('newestMatch'),
+    ])
+    .executeTakeFirstOrThrow()
+
+  const days =
+    groupBy === 'day'
+      ? await matching
+          .select((eb) => [
+            dayBucket.as('date'),
+            eb.fn.count<number>('messages.id').distinct().as('count'),
+          ])
+          .groupBy(dayBucket)
+          .orderBy(dayBucket, 'asc')
+          .execute()
+      : undefined
+
+  return { ...counted, days }
+})
+
+export { countMessages, fetchMessage }

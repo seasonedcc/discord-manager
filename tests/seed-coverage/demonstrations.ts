@@ -16,6 +16,7 @@ import {
 import { listChannels } from '~/business/channels.server'
 import { catchUpSince, listMentions } from '~/business/digests.server'
 import { readIngestionStatus } from '~/business/ingestion-status.server'
+import { countMessages } from '~/business/messages.server'
 import { readMessageSendStatus } from '~/business/sending.server'
 import { db } from '~/db/db.server'
 
@@ -34,6 +35,7 @@ type ToolName =
   | 'ingestion_status'
   | 'mentions_list'
   | 'messages_catch_up'
+  | 'messages_count'
   | 'messages_fetch'
   | 'messages_send'
   | 'messages_send_status'
@@ -304,6 +306,64 @@ const seedDemonstrations: Record<
       }
 
       return `${messages.length} messages, ${narrowed.messages.length} of them in one channel`
+    },
+  },
+  messages_count: {
+    demonstrates:
+      'a day-by-day count of the stored history, and what an alert adds up to inside it',
+    prove: async (context) => {
+      const counted = await fromSuccess(countMessages)(
+        { groupBy: 'day' },
+        context
+      )
+      const days = counted.days ?? []
+
+      if (counted.total === 0) {
+        throw new Error(
+          'the seeded store holds no message, so every count answers zero'
+        )
+      }
+
+      if (days.length === 0) {
+        throw new Error(
+          'a grouped count of the seeded store comes back with no day at all, so a day-by-day baseline reads empty'
+        )
+      }
+
+      const bucketed = days.reduce((sum, { count }) => sum + count, 0)
+
+      if (bucketed !== counted.total) {
+        throw new Error(
+          `the day buckets add up to ${bucketed} of the ${counted.total} messages counted, so a baseline read off them would be wrong`
+        )
+      }
+
+      if (!counted.oldestMatch || !counted.newestMatch) {
+        throw new Error(
+          'the count answers no oldest or newest match, so nothing says how far back the seeded history reaches'
+        )
+      }
+
+      const alerts = await fromSuccess(countMessages)(
+        { contentContains: 'checkout' },
+        context
+      )
+
+      if (alerts.total === 0) {
+        throw new Error(
+          'no seeded message says checkout in its text or in an embed on it, so narrowing a count by what an alert says answers zero'
+        )
+      }
+
+      if (alerts.total === counted.total) {
+        throw new Error(
+          'every seeded message matches the alert wording, so narrowing a count by what an alert says shows nothing'
+        )
+      }
+
+      const spread = days.length === 1 ? '1 day' : `${days.length} days`
+
+      return `${counted.total} messages across ${spread} since ${counted.oldestMatch}, ${alerts.total} of them saying checkout`
     },
   },
   mentions_list: {

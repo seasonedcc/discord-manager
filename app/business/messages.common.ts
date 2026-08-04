@@ -133,6 +133,64 @@ const fetchMessageSchema = z.object({
       'The `messageId` from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake.'
     ),
 })
+
+const channelIdMessage =
+  'Pass a `channelId` from channels_list, or leave it out to count the whole server'
+
+const contentContainsMessage =
+  'Write the text to look for, as it would read in a message'
+
+const groupByMessage =
+  'Group the count by `day`, or leave it out for the total alone'
+
+const isoInstantMessage =
+  'Use an ISO-8601 timestamp such as 2026-07-30T09:00:00Z (offsets allowed)'
+
+const countWindowMessage =
+  'Give `since` an instant at or before `until` — the window runs forward from `since` to `until`'
+
+const countMessagesSchema = z
+  .object({
+    channelId: z
+      .string({ error: channelIdMessage })
+      .min(1, channelIdMessage)
+      .optional()
+      .describe(
+        'Count only what was posted in one channel: the `channelId` from channels_list — not the Discord channel snowflake. Left out, the whole server is counted.'
+      ),
+    contentContains: z
+      .string({ error: contentContainsMessage })
+      .min(1, contentContainsMessage)
+      .optional()
+      .describe(
+        'Count only the messages whose text, or the text of an embed on them, carries this — plain text matched without regard to case, not a pattern. An alert that says everything in an embed is matched on that text, and only the wording a message carries now is read. Left out, every message in range is counted.'
+      ),
+    groupBy: z
+      .literal('day', { error: groupByMessage })
+      .optional()
+      .describe(
+        'Break the answer into one bucket per UTC day alongside the total — how a day-by-day baseline is read. `day` is the only grouping there is. Left out, you get the total alone.'
+      ),
+    since: z.iso
+      .datetime({ error: isoInstantMessage, offset: true })
+      .optional()
+      .describe(
+        "Count only messages posted at or after this instant, on Discord's own send time. An ISO-8601 timestamp such as 2026-07-30T09:00:00Z (offsets allowed). Left out, the count reaches back to the oldest message the store holds."
+      ),
+    until: z.iso
+      .datetime({ error: isoInstantMessage, offset: true })
+      .optional()
+      .describe(
+        "Count only messages posted at or before this instant, on Discord's own send time. An ISO-8601 timestamp such as 2026-07-30T09:00:00Z (offsets allowed). Left out, the count runs to the newest message the store holds."
+      ),
+  })
+  .refine(
+    ({ since, until }) =>
+      since === undefined ||
+      until === undefined ||
+      Date.parse(since) <= Date.parse(until),
+    { error: countWindowMessage }
+  )
 type ObservedEmoji = z.infer<typeof observedEmojiSchema>
 
 function renderEmbed({
@@ -170,6 +228,8 @@ function renderEmoji({ animated, id, name }: ObservedEmoji) {
 export {
   MessageFetchGoneError,
   MessageFetchRejectedError,
+  countMessagesSchema,
+  countWindowMessage,
   fetchMessageSchema,
   messageAttachmentsSchema,
   messageEmbedsSchema,

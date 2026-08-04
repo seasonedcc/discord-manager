@@ -100,6 +100,7 @@ The seed only ever runs against a freshly created, empty database. With demo cre
 | `activity_since` | Whether the store recorded anything after an instant — counts and newest timestamps for new messages, pings of you or of your bot, and bookmark additions, on the store's own clock, with no content — answering at once, or holding the call open until something lands |
 | `messages_catch_up` | Everything posted since a moment in time, across the server or in one channel, 200 at a time — each message with its text, the text of any embeds it carries, what is attached to it, and the reactions still on it |
 | `mentions_list` | The messages that pinged you or your bot since a moment in time — someone naming either of you, plus replies the sender left the ping on — each with its text, the text of any embeds it carries, what is attached to it, and the reactions still on it |
+| `messages_count` | How many messages match and nothing else — a total, the first and last matching timestamps, and a count per UTC day when you ask for one — narrowed by channel, by text in a message or its embeds, and by a window, over as much history as the store holds |
 | `bookmarks_add` | A bookmark from a Discord message link, filed under the reason you pick |
 | `bookmarks_list` | The bookmarks still waiting on you, each with its reason, its text, the text of any embeds it carries, what is attached to it, and the reactions still on it — snoozed ones and single-reason views on request |
 | `bookmarks_resolve` | A bookmark cleared, leaving any reaction in Discord untouched |
