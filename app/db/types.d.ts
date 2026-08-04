@@ -339,6 +339,42 @@ export interface MessageSendSkips {
   reason: string;
 }
 
+export interface ThreadCreationFailures {
+  createdAt: Generated<string>;
+  errorMessage: string;
+  id: string;
+  kind: string;
+  threadCreationRequestId: string;
+}
+
+export interface ThreadCreationRequestAnchors {
+  createdAt: Generated<string>;
+  id: string;
+  messageId: string;
+  threadCreationRequestId: string;
+}
+
+export interface ThreadCreationRequests {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+  name: string;
+}
+
+export interface ThreadCreations {
+  channelId: string;
+  createdAt: Generated<string>;
+  id: string;
+  threadCreationRequestId: string;
+}
+
+export interface ThreadCreationSkips {
+  createdAt: Generated<string>;
+  id: string;
+  reason: string;
+  threadCreationRequestId: string;
+}
+
 export interface DB {
   backfillRunCompletions: BackfillRunCompletions;
   backfillRunFailures: BackfillRunFailures;
@@ -388,4 +424,9 @@ export interface DB {
   messageSendRequestRetries: MessageSendRequestRetries;
   messageSendRequests: MessageSendRequests;
   messageSendSkips: MessageSendSkips;
+  threadCreationFailures: ThreadCreationFailures;
+  threadCreationRequestAnchors: ThreadCreationRequestAnchors;
+  threadCreationRequests: ThreadCreationRequests;
+  threadCreations: ThreadCreations;
+  threadCreationSkips: ThreadCreationSkips;
 }

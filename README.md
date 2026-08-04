@@ -15,6 +15,7 @@ Each person runs their own bot and their own local stack. Nothing is shared, not
 - **Bookmarks without Nitro** — react to any message with 🔖 and your bot records a bookmark; remove the reaction and it's gone. Your assistant can also bookmark by message link, resolve, and snooze — privately, with no reaction anyone can see. Only *your* 🔖 becomes a bookmark, so a whole team of bots coexists in one server without crosstalk.
 - **Bookmarks that know why they're there** — every bookmark is filed under a reason you manage, so *"what am I on the hook to answer?"* is a different question from *"what should I read on the train?"*. A 🔖 reaction can't carry intent, so those land in your *Inbox* for your assistant to sort.
 - **Draft and send** — messages posted to any channel as your bot, optionally as a reply, with a status trail for every send. When a send comes back refused, your assistant can retry it as a linked second attempt, and the retry is refused outright unless the first one provably never reached the channel — so a message you asked for once can never turn up twice.
+- **Threads on demand** — a public thread created in any channel, or anchored on a message somebody already posted, and its own `channelId` comes straight back for the messages that follow. A report too long for Discord's 2000 characters stays together under one heading instead of spreading across the channel, and the thread shows up in your channel list right away.
 - **Ingestion health** — whether the bot is still receiving from Discord and how far its history backfills have got, as plain readings with a concrete next action.
 
 Everything is stored locally in SQLite as an append-only event history: edits are revisions, deletions are events, and nothing is ever erased — a bookmarked message survives the author's edit.
@@ -34,10 +35,10 @@ You'll need [Node.js](https://nodejs.org) 22.12+ and [pnpm](https://pnpm.io) 10.
 In **OAuth2**, copy your **Client ID**, put it into this URL, open it, and pick your server:
 
 ```
-https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot&permissions=274877975552
+https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot&permissions=309237713920
 ```
 
-`274877975552` is exactly View Channels + Send Messages + Send Messages in Threads + Read Message History — everything the product does, nothing it doesn't. You'll need to be a server admin, or ask one.
+`309237713920` is exactly View Channels + Send Messages + Send Messages in Threads + Create Public Threads + Read Message History — everything the product does, nothing it doesn't. You'll need to be a server admin, or ask one.
 
 ### 3. Configure
 
@@ -89,7 +90,7 @@ pnpm run db:migrate
 pnpm run db:seed:dev
 ```
 
-The seed only ever runs against a freshly created, empty database. With demo credentials, everything that reads from the local store works — catch-ups, mentions, bookmarks, channels, and `ingestion_status`, which reads as a bot connected and caught up on every channel. Sending fails, and so does `messages_fetch`: both go to Discord live and need a real bot token and a real server. The seed leaves one refused send behind so you can see `messages_send_status` offer a retry.
+The seed only ever runs against a freshly created, empty database. With demo credentials, everything that reads from the local store works — catch-ups, mentions, bookmarks, channels, and `ingestion_status`, which reads as a bot connected and caught up on every channel. Sending fails, and so do `messages_fetch` and `threads_create`: all three go to Discord live and need a real bot token and a real server. The seed leaves one refused send behind so you can see `messages_send_status` offer a retry.
 
 ## The tools
 
@@ -111,6 +112,7 @@ The seed only ever runs against a freshly created, empty database. With demo cre
 | `messages_fetch` | One message read live from Discord — the text, embeds, reactions and freshly signed attachment links it has right now — for when the stored copy has gone stale |
 | `messages_send` | A message posted to a channel as your bot, optionally as a reply, or as a guarded retry of an earlier send |
 | `messages_send_status` | Where a send ended up — delivered, skipped, failed, still on its way, or stalled when nothing was ever recorded — whether it can be retried, and every attempt already made at it |
+| `threads_create` | A public thread created in a channel, or anchored on a message the bot has ingested, with a `channelId` of its own to post into and the link that opens it in Discord |
 | `ingestion_status` | Whether the bot is receiving from Discord, and how far backfills have got |
 
 ## Good to know

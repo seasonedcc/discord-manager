@@ -27,14 +27,27 @@ const channelMessagePath =
   /^\/v10\/channels\/(\d{17,20})\/messages\/(\d{17,20})$/
 const messageReactionPath =
   /^\/v10\/channels\/(\d{17,20})\/messages\/(\d{17,20})\/reactions\/([^/]+)$/
+const channelThreadsPath = /^\/v10\/channels\/(\d{17,20})\/threads$/
+const messageThreadsPath =
+  /^\/v10\/channels\/(\d{17,20})\/messages\/(\d{17,20})\/threads$/
 const unknownMessageCode = 10008
 const unknownChannelCode = 10003
+const publicThreadType = 11
 
 type RecordedSend = {
   content: string
   discordChannelId: string
   discordMessageId: string
   replyToDiscordMessageId: string | null
+}
+
+type RecordedThread = {
+  anchorDiscordMessageId: string | null
+  autoArchiveDuration: number
+  discordThreadId: string
+  name: string
+  parentDiscordChannelId: string
+  type: number | undefined
 }
 
 type RecordedRead = {
@@ -81,7 +94,9 @@ function reactionAnswersTo({ emoji }: LiveReaction, key: string) {
 async function startDiscordDouble() {
   const sends: RecordedSend[] = []
   const reads: RecordedRead[] = []
+  const threads: RecordedThread[] = []
   const refusedChannelIds = new Set<string>()
+  const refusedThreadChannelIds = new Set<string>()
   const heldMessages = new Map<string, LiveMessage>()
   const forgottenMessageIds = new Set<string>()
   const unlistableReactionMessageIds = new Set<string>()
@@ -115,6 +130,55 @@ async function startDiscordDouble() {
       id: discordMessageId,
       channel_id: discordChannelId,
       content: sent.content,
+    })
+  }
+
+  // Discord gives a thread anchored on a message the message's own snowflake as
+  // its channel id; a thread of its own gets a fresh one.
+  function serveThread(
+    response: ServerResponse,
+    parentDiscordChannelId: string,
+    anchorDiscordMessageId: string | null,
+    body: Buffer
+  ) {
+    if (refusedThreadChannelIds.has(parentDiscordChannelId)) {
+      return answer(response, 403, {
+        message: 'Missing Permissions',
+        code: 50013,
+      })
+    }
+
+    if (
+      anchorDiscordMessageId &&
+      forgottenMessageIds.has(anchorDiscordMessageId)
+    ) {
+      return answer(response, 404, {
+        message: 'Unknown Message',
+        code: unknownMessageCode,
+      })
+    }
+
+    const asked = JSON.parse(body.toString('utf8')) as {
+      auto_archive_duration: number
+      name: string
+      type?: number
+    }
+    const discordThreadId = anchorDiscordMessageId ?? nextDiscordId()
+
+    threads.push({
+      anchorDiscordMessageId,
+      autoArchiveDuration: asked.auto_archive_duration,
+      discordThreadId,
+      name: asked.name,
+      parentDiscordChannelId,
+      type: asked.type,
+    })
+
+    answer(response, 200, {
+      id: discordThreadId,
+      name: asked.name,
+      parent_id: parentDiscordChannelId,
+      type: publicThreadType,
     })
   }
 
@@ -222,9 +286,26 @@ async function startDiscordDouble() {
         request.method === 'GET' ? pathname.match(channelMessagePath) : null
       const reactors =
         request.method === 'GET' ? pathname.match(messageReactionPath) : null
+      const threaded =
+        request.method === 'POST' ? pathname.match(channelThreadsPath) : null
+      const anchored =
+        request.method === 'POST' ? pathname.match(messageThreadsPath) : null
 
       if (posted) {
         return serveSend(response, posted[1], Buffer.concat(chunks))
+      }
+
+      if (threaded) {
+        return serveThread(response, threaded[1], null, Buffer.concat(chunks))
+      }
+
+      if (anchored) {
+        return serveThread(
+          response,
+          anchored[1],
+          anchored[2],
+          Buffer.concat(chunks)
+        )
       }
 
       if (read) return serveMessage(response, read[1], read[2])
@@ -271,7 +352,11 @@ async function startDiscordDouble() {
     refuseSendsTo(discordChannelId: string) {
       refusedChannelIds.add(discordChannelId)
     },
+    refuseThreadsIn(discordChannelId: string) {
+      refusedThreadChannelIds.add(discordChannelId)
+    },
     sends,
+    threads,
     async stop() {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()))

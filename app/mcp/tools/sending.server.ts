@@ -1,6 +1,5 @@
 import {
   DiscordAPIError,
-  REST,
   type RESTPostAPIChannelMessageResult,
   Routes,
 } from 'discord.js'
@@ -11,18 +10,8 @@ import {
   sendMessageSchema,
 } from '~/business/sending.common'
 import { readMessageSendStatus, sendMessage } from '~/business/sending.server'
-import { env } from '~/env.server'
+import { restClient } from '~/mcp/discord-rest.server'
 import type { McpTool } from '~/mcp/tool'
-
-let discordRest: REST | undefined
-
-function restClient() {
-  discordRest ??= new REST({ api: env().discordApiBaseUrl }).setToken(
-    env().discordBotToken
-  )
-
-  return discordRest
-}
 
 const postThroughDiscord: MessageSendTransport = async ({
   content,
