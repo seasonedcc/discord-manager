@@ -305,7 +305,11 @@ function sendMessage(transport: MessageSendTransport) {
       const replyTarget = replyToMessageId
         ? await db()
             .selectFrom('messages')
-            .select(['messages.id', 'messages.discordMessageId'])
+            .select([
+              'messages.id',
+              'messages.channelId',
+              'messages.discordMessageId',
+            ])
             .where('messages.id', '=', replyToMessageId)
             .executeTakeFirst()
         : undefined
@@ -313,6 +317,13 @@ function sendMessage(transport: MessageSendTransport) {
       if (replyToMessageId && !replyTarget) {
         throw new InputError(
           'No message with that id has been ingested, so there is nothing to reply to.',
+          ['replyToMessageId']
+        )
+      }
+
+      if (replyTarget && replyTarget.channelId !== channel.id) {
+        throw new InputError(
+          'That message is in a different channel, and Discord only attaches a reply to a message in the same channel. Send to the `channelId` that message came with, or leave out `replyToMessageId` to post on its own.',
           ['replyToMessageId']
         )
       }

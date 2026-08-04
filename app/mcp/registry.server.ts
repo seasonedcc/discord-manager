@@ -6,6 +6,7 @@ import { digestsTools } from '~/mcp/tools/digests.server'
 import { ingestionStatusTools } from '~/mcp/tools/ingestion-status.server'
 import { messagesTools } from '~/mcp/tools/messages.server'
 import { sendingTools } from '~/mcp/tools/sending.server'
+import { threadsTools } from '~/mcp/tools/threads.server'
 
 const registeredTools: McpTool[] = [
   ...activityTools,
@@ -15,6 +16,7 @@ const registeredTools: McpTool[] = [
   ...ingestionStatusTools,
   ...messagesTools,
   ...sendingTools,
+  ...threadsTools,
 ]
 
 export { registeredTools }

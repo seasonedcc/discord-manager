@@ -34,11 +34,17 @@ Two processes share one SQLite database file (WAL mode makes this safe):
   gateway, so queueing it would let a long sweep read as silence. Each beat is gated on the
   client actually being ready — a beat is a claim about the link, not about the process.
 - The MCP server — a stdio process the owner's AI client spawns per session (wired via
-  `.mcp.json`). It reads the store, and it calls Discord's REST API twice over: to post
-  sends, and to read one message live for `messages_fetch`. It writes only what those calls
-  observe — the telemetry of every call it makes, and the deletion Discord reports when a
-  message the store holds is gone from there. It never writes message content: the daemon
-  stays the only writer of messages, revisions, embeds, attachments and reactions.
+  `.mcp.json`). It reads the store, and it calls Discord's REST API three ways over: to post
+  sends, to read one message live for `messages_fetch`, and to create a thread for
+  `threads_create`. It writes only what those calls observe — the telemetry of every call it
+  makes, the deletion Discord reports when a message the store holds is gone from there, and
+  the channel rows describing a thread it just created, so `channels_list` shows the thread
+  before the daemon has heard of it. That last one makes the MCP process a second writer of
+  ingested structure; the daemon's `THREAD_CREATE` handler dedupes against it, because
+  `findOrCreateChannel` appends a detail revision only when the name or the thread flag
+  differs, and the row the MCP process wrote already carries both. It never writes message
+  content: the daemon stays the only writer of messages, revisions, embeds, attachments and
+  reactions.
 
 Both processes are thin shells over `app/business/` functions.
 
@@ -71,6 +77,7 @@ app/
     messages.server.ts         one message read live from Discord, with its telemetry
     bookmarks.server.ts        add/remove/resolve/snooze + list derivation
     sending.server.ts          draft-and-send with its telemetry family
+    threads.server.ts          public thread creation with its telemetry family
     jobs.server.ts             registered jobs array
     *.common.ts                schemas, copy maps, named constants per domain
   db/
@@ -84,6 +91,7 @@ app/
   mcp/
     tool.ts             McpTool shape
     server.server.ts    stdio server: listTools/callTool, JSON-schema projection
+    discord-rest.server.ts  the lazy REST client every tool's Discord transport calls
     registry.server.ts  accumulate-only tool array
     run.ts              stdio entrypoint
     tools/<domain>.server.ts
@@ -249,6 +257,22 @@ skip-reason enum; no shared framework, no shared enums:
   `gone` is keyed on Discord's own `Unknown Message` code rather than on the 404 status,
   because a bare 404 also covers a channel the bot can no longer see — a cause "it was
   deleted there" would be a conclusion, not an observation.
+- `thread_creation_requests` / `...request_anchors` / `thread_creations` /
+  `thread_creation_failures` (with a `kind` of `gone`, `rejected`, `thread_already_exists`
+  or `unreachable`) / `thread_creation_skips` (with a `reason` of `anchor_message_deleted`,
+  `channel_is_a_thread`, `channel_not_found`, `channel_not_in_guild` or
+  `thread_already_exists`) — `threads_create` opening a thread. Like the fetch family it is
+  one synchronous REST call answering inline, so it carries no silence window and no status
+  reader. The request row names the parent channel; the anchor row, written only for the
+  message-anchored flavor, names the message Discord hangs the thread off. `thread_creations`
+  points at the `channels` row for the thread itself, which the same transaction writes with
+  its detail revision and its category — the parent channel's name, exactly what the daemon
+  records for a thread. `thread_already_exists` names one fact from two vantage points: the
+  skip is the store's own thread channel under that message, the failure is Discord's
+  `Thread already created for this message` on a thread the store cannot see. Keeping the
+  refusal out of `rejected` is what lets `rejected` keep saying "create it again": no retry
+  can ever turn 160004 into a thread. The `gone` failure writes the deletion it observed
+  alongside the failure row, in one transaction, exactly as `messages_fetch` does.
 
 Owner-facing status is always mapped copy from exhaustive typed maps in `.common.ts`
 (summary + nextAction per reason), never raw vendor text — pinned by serialization tests.
@@ -357,6 +381,7 @@ reason filter), `bookmarks_add` (by message link + reason), `bookmarks_resolve`,
 `bookmark_reasons_add`, `bookmark_reasons_edit`, `bookmark_reasons_retire`,
 `messages_fetch` (by stored message id), `messages_send` (channel, content, optional
 reply, optional retry of an earlier request), `messages_send_status` (by request id),
+`threads_create` (a name plus either a channel or a message to anchor on, never both),
 `ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the

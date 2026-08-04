@@ -12,7 +12,7 @@ const channelIdMessage =
 const contentMessage = `Write the message text to post, up to ${messageContentLimit} characters`
 
 const replyToMessageIdMessage =
-  'Pass the `messageId` of the message to reply to, from messages_catch_up, mentions_list or bookmarks_list, or leave it out to post on its own'
+  'Pass the `messageId` of a message in the channel you are posting to, from messages_catch_up, mentions_list or bookmarks_list, or leave it out to post on its own'
 
 const requestIdMessage = 'Pass the `requestId` messages_send answered with'
 
@@ -229,7 +229,7 @@ const sendMessageSchema = z.object({
     .min(1, replyToMessageIdMessage)
     .optional()
     .describe(
-      'The `messageId` of the message to reply to, from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake.'
+      'The `messageId` of the message to reply to, from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake. It has to be a message in `channelId`: Discord only attaches a reply to a message in the same channel.'
     ),
   retryOfRequestId: z
     .string({ error: retryOfRequestIdMessage })
