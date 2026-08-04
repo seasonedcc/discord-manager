@@ -55,6 +55,12 @@ Measured in this repo (issues #28/#29, 2026-07/08, opus/xhigh build and remediat
 - **Release audit** over the merged mainline (3 read-only auditors with distinct lenses, then a verifier per finding): 16 agents, auditors **20–23%**, verifiers **4–7%**. An auditor reading a whole release costs about what a finder reading one lane costs, plus the mainline.
 - **Read-only design scout** answering a fixed question list across the tree: **7–11%**.
 
+Measured in this repo (issue #59, 2026-08, opus/xhigh lanes, sonnet/xhigh verifiers):
+
+- **Full-feature build lane, one agent** (a migration + gateway identity capture, widening a shared derivation in two business files, tool copy, 18 unit tests, an E2E seed story and spec, dev seed, a live MCP stdio proof, and draft-PR authorship — +941/−77 over 24 files): landed at **30%** (302k). Confirms the single-subsystem guidance; note the live proof and PR authorship are part of the load, not free.
+- **Remediation lane on the same branch**, 4 fixes with mutation proofs plus a redone live proof and a PR-body rewrite: **21%** — higher per-fix than the 7-fix/18% entry above because the proof redo and body rewrite ride along; when a remediation must redo the live proof, size it as roughly two extra fixes.
+- **Review fan-out** (3 finder lenses over the ~1k-line lane diff, one adversarial verifier per finding): 13 agents, finders **11–14%**, verifiers **5–6%** — inside the standing ranges.
+
 ## Measure a live or finished agent's context
 
 Transcripts record per-turn token usage. Extract just the numbers — never read the JSONL wholesale (it overflows the reader's own window). The last turn's `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` is that agent's current context occupancy:
