@@ -61,6 +61,13 @@ Measured in this repo (issue #59, 2026-08, opus/xhigh lanes, sonnet/xhigh verifi
 - **Remediation lane on the same branch**, 4 fixes with mutation proofs plus a redone live proof and a PR-body rewrite: **21%** — higher per-fix than the 7-fix/18% entry above because the proof redo and body rewrite ride along; when a remediation must redo the live proof, size it as roughly two extra fixes.
 - **Review fan-out** (3 finder lenses over the ~1k-line lane diff, one adversarial verifier per finding): 13 agents, finders **11–14%**, verifiers **5–6%** — inside the standing ranges.
 
+Measured in this repo (issues #62/#63/#64, 2026-08, opus/xhigh build/fix lanes, sonnet/xhigh reviews):
+
+- **Full-feature build lane, one agent**: a new business domain with its own telemetry family and MCP tool, plus a shared REST-client extraction, three E2E specs with new test-double routes, docs, and a live MCP-session proof (+1655/−33 over 19 files) landed at **31%** — consistent with the 27–29% band above for this shape, with the live proof and double work accounting for the extra.
+- **Remediation lane on an existing branch**: 5 rulings — including an unmerged-migration constraint edit, a new failure kind end to end, a test-double lever, an E2E spec, and a PR-body rewrite — landed at **22%**, on the fixes-not-branch-size curve above.
+- **TDD single-defect fix lane** (red test → guard → E2E spec → copy sweep → live proof, own PR): **13%**. A single-E2E-spec lane with a mutation proof: **8%** — the floor for anything that runs the full gate set even once.
+- **Review fan-out, 3 finders + 8 verifiers** over a ~1.7k-line feature diff: finders **13–20%**, verifiers **5–8%**. A 2-finder review of a 140-line fix still costs **10–11%** per finder — finder cost has a floor set by reading the skills and the surrounding code, so below ~200 diff lines the fan-out's overhead approaches the build's.
+
 ## Measure a live or finished agent's context
 
 Transcripts record per-turn token usage. Extract just the numbers — never read the JSONL wholesale (it overflows the reader's own window). The last turn's `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` is that agent's current context occupancy:
