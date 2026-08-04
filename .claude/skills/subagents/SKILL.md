@@ -68,6 +68,12 @@ Measured in this repo (issues #62/#63/#64, 2026-08, opus/xhigh build/fix lanes, 
 - **TDD single-defect fix lane** (red test → guard → E2E spec → copy sweep → live proof, own PR): **13%**. A single-E2E-spec lane with a mutation proof: **8%** — the floor for anything that runs the full gate set even once.
 - **Review fan-out, 3 finders + 8 verifiers** over a ~1.7k-line feature diff: finders **13–20%**, verifiers **5–8%**. A 2-finder review of a 140-line fix still costs **10–11%** per finder — finder cost has a floor set by reading the skills and the surrounding code, so below ~200 diff lines the fan-out's overhead approaches the build's.
 
+Measured in this repo (issues #68/#69, 2026-08, opus/xhigh build and remediation lanes, sonnet/xhigh reviewers):
+
+- **Full-feature build lane, one agent**, two in parallel: a read-only aggregate MCP tool over existing tables — business function, tool, 30 unit tests, an E2E spec, a seed demonstration, docs, a live stdio proof, and draft-PR authorship (+801/−4 over 8 files) — landed at **22%**; the sibling roster-lookup tool (+619/−1 over 9 files) at **19%**. A migration-free read tool sits at the light end of the single-feature band.
+- **Remediation lane on an existing branch**, confirming the fixes-not-branch-size curve at its small end: 3 fixes (a boundary test, a doc-list entry, a copy sentence) with a live-proof redo landed at **9%**; 4 fixes — a TDD'd Unicode-matching change, mutation-proofed ordering tests, a personal-data scrub across code and PR body, and a live-proof redo — at **13%**.
+- **Review fan-out** (3 sonnet finders + 1 verifier per finding over 620–800-line diffs): 6 agents per review, finders **9–13%**, verifiers **3–5%**.
+
 ## Measure a live or finished agent's context
 
 Transcripts record per-turn token usage. Extract just the numbers — never read the JSONL wholesale (it overflows the reader's own window). The last turn's `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` is that agent's current context occupancy:
