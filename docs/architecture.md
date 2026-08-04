@@ -374,16 +374,16 @@ contains zero authorization — tools call business functions with the real cont
 
 ## MCP tools (v1)
 
-`channels_list`, `activity_since` (since + optional waitSeconds), `messages_catch_up`
-(since + optional channel), `mentions_list`, `messages_count` (optional channel,
-contentContains, since/until, day grouping), `bookmarks_list` (optional limit, snoozed,
-reason filter), `bookmarks_add` (by message link + reason), `bookmarks_resolve`,
-`bookmarks_snooze`, `bookmarks_set_reason`, `bookmark_reasons_list`,
-`bookmark_reasons_add`, `bookmark_reasons_edit`, `bookmark_reasons_retire`,
-`messages_fetch` (by stored message id), `messages_send` (channel, content, optional
-reply, optional retry of an earlier request), `messages_send_status` (by request id),
-`threads_create` (a name plus either a channel or a message to anchor on, never both),
-`ingestion_status`.
+`channels_list`, `members_list` (optional name query), `activity_since` (since +
+optional waitSeconds), `messages_catch_up` (since + optional channel), `mentions_list`,
+`messages_count` (optional channel, contentContains, since/until, day grouping),
+`bookmarks_list` (optional limit, snoozed, reason filter), `bookmarks_add` (by message
+link + reason), `bookmarks_resolve`, `bookmarks_snooze`, `bookmarks_set_reason`,
+`bookmark_reasons_list`, `bookmark_reasons_add`, `bookmark_reasons_edit`,
+`bookmark_reasons_retire`, `messages_fetch` (by stored message id), `messages_send`
+(channel, content, optional reply, optional retry of an earlier request),
+`messages_send_status` (by request id), `threads_create` (a name plus either a channel
+or a message to anchor on, never both), `ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the
 business functions' own exported schemas, dates cross the boundary as ISO strings. The

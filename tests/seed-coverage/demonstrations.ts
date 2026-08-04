@@ -16,6 +16,7 @@ import {
 import { listChannels } from '~/business/channels.server'
 import { catchUpSince, listMentions } from '~/business/digests.server'
 import { readIngestionStatus } from '~/business/ingestion-status.server'
+import { listMembers } from '~/business/members.server'
 import { countMessages } from '~/business/messages.server'
 import { readMessageSendStatus } from '~/business/sending.server'
 import { db } from '~/db/db.server'
@@ -33,6 +34,7 @@ type ToolName =
   | 'bookmarks_snooze'
   | 'channels_list'
   | 'ingestion_status'
+  | 'members_list'
   | 'mentions_list'
   | 'messages_catch_up'
   | 'messages_count'
@@ -241,6 +243,46 @@ const seedDemonstrations: Record<
       }
 
       return `${channels.length} channels, ${threads.length} of them threads`
+    },
+  },
+  members_list: {
+    demonstrates:
+      'the people who posted, searchable by name, with the bot this deployment posts through marked',
+    prove: async (context) => {
+      const { members } = await fromSuccess(listMembers)({}, context)
+
+      if (members.length === 0) {
+        throw new Error(
+          'the seeded store has seen nobody post, so a member lookup answers empty'
+        )
+      }
+
+      const bots = members.filter(({ isYourBot }) => isYourBot)
+
+      if (bots.length !== 1) {
+        throw new Error(
+          `the seeded store marks ${bots.length} of them as the bot this deployment posts through, so the demo cannot show what that marker means`
+        )
+      }
+
+      const [searched] = members
+      const query = searched.displayName.slice(1, 4).toUpperCase()
+      const { members: found } = await fromSuccess(listMembers)(
+        { query },
+        context
+      )
+
+      if (
+        !found.some(
+          ({ discordUserId }) => discordUserId === searched.discordUserId
+        )
+      ) {
+        throw new Error(
+          `searching for "${query}" brings back nobody, so the seeded names cannot demonstrate finding somebody by part of a name`
+        )
+      }
+
+      return `${members.length} people, ${searched.displayName} found by "${query}", ${bots[0].displayName} marked as the bot this deployment posts through`
     },
   },
   activity_since: {
