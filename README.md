@@ -110,7 +110,7 @@ The seed only ever runs against a freshly created, empty database. With demo cre
 | `bookmark_reasons_edit` | A reason reworded, on every bookmark already carrying it |
 | `bookmark_reasons_retire` | A reason taken out of circulation, without disturbing the bookmarks that carry it |
 | `messages_fetch` | One message read live from Discord — the text, embeds, reactions and freshly signed attachment links it has right now — for when the stored copy has gone stale |
-| `messages_send` | A message posted to a channel as your bot, optionally as a reply, or as a guarded retry of an earlier send |
+| `messages_send` | A message posted to a channel as your bot, optionally as a reply to a message in that same channel, or as a guarded retry of an earlier send |
 | `messages_send_status` | Where a send ended up — delivered, skipped, failed, still on its way, or stalled when nothing was ever recorded — whether it can be retried, and every attempt already made at it |
 | `threads_create` | A public thread created in a channel, or anchored on a message the bot has ingested, with a `channelId` of its own to post into and the link that opens it in Discord |
 | `ingestion_status` | Whether the bot is receiving from Discord, and how far backfills have got |

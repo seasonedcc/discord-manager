@@ -45,7 +45,7 @@ const sendingTools: McpTool[] = [
   {
     name: 'messages_send',
     description:
-      'Post a message to a channel as your bot, optionally as a reply to a message the bot has ingested. Answers with `send`, whose `status` must be read: delivered means it is live in the channel, skipped means it never went out and `reason` says why, failed means Discord refused it or could not be reached. To make another attempt at an earlier send, pass its `requestId` as `retryOfRequestId` — the send is then refused outright unless that attempt provably never reached the channel, so a message can never be posted twice this way. Read `summary` and `nextAction` to the owner rather than retrying blindly.',
+      'Post a message to a channel as your bot, optionally as a reply to a message the bot has ingested in that same channel. Answers with `send`, whose `status` must be read: delivered means it is live in the channel, skipped means it never went out and `reason` says why, failed means Discord refused it or could not be reached. To make another attempt at an earlier send, pass its `requestId` as `retryOfRequestId` — the send is then refused outright unless that attempt provably never reached the channel, so a message can never be posted twice this way. Read `summary` and `nextAction` to the owner rather than retrying blindly.',
     inputSchema: sendMessageSchema,
     wraps: ['sending.sendMessage'],
     execute: (input, context) =>
