@@ -58,7 +58,7 @@ import { InputError } from 'composable-functions'
 throw new InputError('That message is not in an ingested channel', ['messageLink'])
 ```
 
-A pathless `InputError` leaves the caller guessing — always name the field.
+A pathless `InputError` leaves the caller guessing — always name the field. The one shape that legitimately goes pathless is a contradiction between two fields, where naming either one alone would mislead: a schema-level refinement refusing `channelId` and `messageId` together may carry no path, provided its message names both fields and says how to choose — the way `oneAnchorMessage` in `app/business/threads.common.ts` does. Never pin such an error to one of the two fields arbitrarily just to satisfy this rule.
 
 ### ContextError
 
