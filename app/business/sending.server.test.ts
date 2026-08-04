@@ -260,6 +260,79 @@ describe('sendMessage', () => {
     expect(replyTargets[0].replyToMessageId).toBe(replyTo.id)
   })
 
+  it('fails when the message being replied to is in another channel', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const elsewhere = await createChannel({ guildId: guild.id })
+    const replyTo = await createMessage({ channelId: elsewhere.id })
+    const { requests, transport } = recordingTransport()
+
+    const result = await sendMessage(transport)(
+      {
+        channelId: channel.id,
+        content: 'answering from the wrong room',
+        replyToMessageId: replyTo.id,
+      },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    const issued = await db()
+      .selectFrom('messageSendRequests')
+      .selectAll()
+      .where('channelId', '=', channel.id)
+      .execute()
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    const [error] = result.errors
+    if (!(error instanceof InputError)) {
+      throw new Error('expected an input error')
+    }
+    expect(error.message).toBe(
+      'That message is in a different channel, and Discord only attaches a reply to a message in the same channel. Send to the `channelId` that message came with, or leave out `replyToMessageId` to post on its own.'
+    )
+    expect(error.path).toEqual(['replyToMessageId'])
+    expect(requests).toHaveLength(0)
+    expect(issued).toHaveLength(0)
+  })
+
+  it('fails when the message being replied to belongs to another server', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const formerGuild = await createGuild()
+    const formerChannel = await createChannel({ guildId: formerGuild.id })
+    const replyTo = await createMessage({ channelId: formerChannel.id })
+    const { requests, transport } = recordingTransport()
+
+    const result = await sendMessage(transport)(
+      {
+        channelId: channel.id,
+        content: 'answering from the wrong server',
+        replyToMessageId: replyTo.id,
+      },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    const issued = await db()
+      .selectFrom('messageSendRequests')
+      .selectAll()
+      .where('channelId', '=', channel.id)
+      .execute()
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected a failure')
+    const [error] = result.errors
+    if (!(error instanceof InputError)) {
+      throw new Error('expected an input error')
+    }
+    expect(error.message).toBe(
+      'That message is in a different channel, and Discord only attaches a reply to a message in the same channel. Send to the `channelId` that message came with, or leave out `replyToMessageId` to post on its own.'
+    )
+    expect(error.path).toEqual(['replyToMessageId'])
+    expect(requests).toHaveLength(0)
+    expect(issued).toHaveLength(0)
+  })
+
   it('skips a message with no visible text', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
