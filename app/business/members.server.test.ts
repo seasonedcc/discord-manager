@@ -13,7 +13,7 @@ import { db, describe, expect, it } from '~/test/prelude'
 
 async function somebodyWhoPosted(
   channelId: string,
-  details: { displayName: string; username: string }
+  details: { discordUserId?: string; displayName: string; username: string }
 ) {
   const member = await createMember(details)
 
@@ -50,6 +50,70 @@ describe('listMembers', () => {
         discordUserId: omar.discordUserId,
         displayName: 'Omar Duarte',
         username: 'omar',
+      },
+    ])
+  })
+
+  it('orders people sharing a display name by the username each goes by', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const king = await somebodyWhoPosted(channel.id, {
+      displayName: 'Ada',
+      username: 'ada.king',
+    })
+    const byron = await somebodyWhoPosted(channel.id, {
+      displayName: 'Ada',
+      username: 'ada.byron',
+    })
+
+    const { members } = await fromSuccess(listMembers)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members).toEqual([
+      {
+        discordUserId: byron.discordUserId,
+        displayName: 'Ada',
+        username: 'ada.byron',
+      },
+      {
+        discordUserId: king.discordUserId,
+        displayName: 'Ada',
+        username: 'ada.king',
+      },
+    ])
+  })
+
+  it('orders people sharing a display name and a username by Discord user id as a number, never as text', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const older = await somebodyWhoPosted(channel.id, {
+      discordUserId: '999999999999999999',
+      displayName: 'Sam Okafor',
+      username: 'sam',
+    })
+    const newer = await somebodyWhoPosted(channel.id, {
+      discordUserId: '1000000000000000000',
+      displayName: 'Sam Okafor',
+      username: 'sam',
+    })
+
+    const { members } = await fromSuccess(listMembers)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members).toEqual([
+      {
+        discordUserId: older.discordUserId,
+        displayName: 'Sam Okafor',
+        username: 'sam',
+      },
+      {
+        discordUserId: newer.discordUserId,
+        displayName: 'Sam Okafor',
+        username: 'sam',
       },
     ])
   })
