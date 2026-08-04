@@ -91,6 +91,8 @@ When two files need the same utility, in order of preference:
 2. **Keep a private copy** in each file if the utility is small and trivial
 3. **Extract to a new file** only if the utility is substantial and shared by three or more files
 
+Option 3 is not available to Kysely query fragments — a `latestBotIdentityOf`, a ranked-latest-revision subquery. The parity test reads every exported function in `app/business/*.server.ts` as an owner-facing surface, so exporting a fragment from a shared file would demand a `parity-exemptions.ts` entry that is false by the `mcp-server` skill's own standard: a query fragment is not a machine surface. A fragment therefore stays a verbatim private copy in each domain file however many files carry it — sanctioned duplication, not a smell to fix or a finding to report.
+
 ## When to merge vs split
 
 **Merge** when files serve the same business domain, even when they use different external APIs internally. The library used is an implementation detail, not a reason to separate files.
