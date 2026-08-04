@@ -375,7 +375,8 @@ contains zero authorization — tools call business functions with the real cont
 ## MCP tools (v1)
 
 `channels_list`, `activity_since` (since + optional waitSeconds), `messages_catch_up`
-(since + optional channel), `mentions_list`, `bookmarks_list` (optional limit, snoozed,
+(since + optional channel), `mentions_list`, `messages_count` (optional channel,
+contentContains, since/until, day grouping), `bookmarks_list` (optional limit, snoozed,
 reason filter), `bookmarks_add` (by message link + reason), `bookmarks_resolve`,
 `bookmarks_snooze`, `bookmarks_set_reason`, `bookmark_reasons_list`,
 `bookmark_reasons_add`, `bookmark_reasons_edit`, `bookmark_reasons_retire`,
