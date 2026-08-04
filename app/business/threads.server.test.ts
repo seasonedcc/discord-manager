@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { ContextError, InputError, fromSuccess } from 'composable-functions'
 import { listChannels } from '~/business/channels.server'
 import {
+  ThreadCreateAlreadyThreadedError,
   ThreadCreateGoneError,
   ThreadCreateRejectedError,
   type ThreadCreateTransport,
@@ -104,6 +105,29 @@ function telemetryOf(requestId: string) {
         .execute()
     },
   }
+}
+
+async function deletionsOf(messageId: string) {
+  return await db()
+    .selectFrom('messageDeletions')
+    .selectAll()
+    .where('messageId', '=', messageId)
+    .execute()
+}
+
+async function recordThreadOn(
+  message: { discordMessageId: string },
+  guildId: string
+) {
+  return await db()
+    .insertInto('channels')
+    .values({
+      discordChannelId: message.discordMessageId,
+      guildId,
+      id: newId(),
+    })
+    .returning('id')
+    .executeTakeFirstOrThrow()
 }
 
 async function channelOnTheList(
@@ -322,14 +346,7 @@ describe('createThread', () => {
     const message = await createMessage({ channelId: channel.id })
     const { requests, transport } = openingTransport()
 
-    await db()
-      .insertInto('channels')
-      .values({
-        discordChannelId: message.discordMessageId,
-        guildId: channel.guildId,
-        id: newId(),
-      })
-      .execute()
+    await recordThreadOn(message, channel.guildId)
 
     const { thread } = await fromSuccess(createThread(transport))(
       { messageId: message.id, name: 'a second thread on one message' },
@@ -345,6 +362,76 @@ describe('createThread', () => {
       { reason: 'thread_already_exists' },
     ])
     expect(requests).toEqual([])
+  })
+
+  it('points at the thread a deleted message still carries', async () => {
+    const { channel, context } = await threadGround()
+    const message = await createMessage({ channelId: channel.id })
+    const { requests, transport } = openingTransport()
+
+    await recordThreadOn(message, channel.guildId)
+    await db()
+      .insertInto('messageDeletions')
+      .values({ id: newId(), messageId: message.id })
+      .execute()
+
+    const { thread } = await fromSuccess(createThread(transport))(
+      { messageId: message.id, name: 'the thread outlived its starter' },
+      context
+    )
+
+    expect(thread).toMatchObject({
+      reason: 'thread_already_exists',
+      status: 'skipped',
+      ...threadCreationSkipCopy.thread_already_exists,
+    })
+    expect(requests).toEqual([])
+  })
+
+  it('asks Discord anyway when the thread it recorded for that message is gone from the bot', async () => {
+    const { channel, context } = await threadGround()
+    const message = await createMessage({ channelId: channel.id })
+    const { requests, transport } = openingTransport()
+    const gone = await recordThreadOn(message, channel.guildId)
+
+    await db()
+      .insertInto('channelRemovals')
+      .values({ channelId: gone.id, id: newId() })
+      .execute()
+
+    const { thread } = await fromSuccess(createThread(transport))(
+      { messageId: message.id, name: `asking anyway ${randomUUID()}` },
+      context
+    )
+
+    expect(created(thread).status).toBe('created')
+    expect(requests).toMatchObject([
+      { anchorDiscordMessageId: message.discordMessageId },
+    ])
+  })
+
+  it('records a message Discord says already carries a thread', async () => {
+    const { channel, context } = await threadGround()
+    const message = await createMessage({ channelId: channel.id })
+    const vendorText = `Thread already created ${randomUUID()}`
+    const { transport } = throwingTransport(
+      new ThreadCreateAlreadyThreadedError(vendorText)
+    )
+
+    const { thread } = await fromSuccess(createThread(transport))(
+      { messageId: message.id, name: 'one thread is all it gets' },
+      context
+    )
+
+    expect(thread).toMatchObject({
+      status: 'failed',
+      ...threadCreationFailureCopy.thread_already_exists,
+    })
+    expect(await telemetryOf(thread.requestId).failures()).toMatchObject([
+      { errorMessage: vendorText, kind: 'thread_already_exists' },
+    ])
+    expect(await deletionsOf(message.id)).toEqual([])
+    expect(JSON.stringify(thread)).not.toContain(vendorText)
   })
 
   it('records a message Discord no longer has as gone', async () => {
@@ -368,6 +455,34 @@ describe('createThread', () => {
       { errorMessage: vendorText, kind: 'gone' },
     ])
     expect(JSON.stringify(thread)).not.toContain(vendorText)
+  })
+
+  it('records the deletion Discord reported, once, and turns the next request away', async () => {
+    const { channel, context } = await threadGround()
+    const message = await createMessage({ channelId: channel.id })
+    const { requests, transport } = throwingTransport(
+      new ThreadCreateGoneError(`Unknown Message ${randomUUID()}`)
+    )
+
+    const first = await fromSuccess(createThread(transport))(
+      { messageId: message.id, name: 'gone before we asked' },
+      context
+    )
+
+    expect(first.thread.status).toBe('failed')
+    expect(await deletionsOf(message.id)).toHaveLength(1)
+
+    const second = await fromSuccess(createThread(transport))(
+      { messageId: message.id, name: 'gone the second time too' },
+      context
+    )
+
+    expect(second.thread).toMatchObject({
+      reason: 'anchor_message_deleted',
+      status: 'skipped',
+    })
+    expect(await deletionsOf(message.id)).toHaveLength(1)
+    expect(requests).toHaveLength(1)
   })
 
   it('records a creation Discord refused as rejected', async () => {

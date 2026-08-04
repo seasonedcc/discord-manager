@@ -258,8 +258,8 @@ skip-reason enum; no shared framework, no shared enums:
   because a bare 404 also covers a channel the bot can no longer see — a cause "it was
   deleted there" would be a conclusion, not an observation.
 - `thread_creation_requests` / `...request_anchors` / `thread_creations` /
-  `thread_creation_failures` (with a `kind` of `gone`, `rejected` or `unreachable`) /
-  `thread_creation_skips` (with a `reason` of `anchor_message_deleted`,
+  `thread_creation_failures` (with a `kind` of `gone`, `rejected`, `thread_already_exists`
+  or `unreachable`) / `thread_creation_skips` (with a `reason` of `anchor_message_deleted`,
   `channel_is_a_thread`, `channel_not_found`, `channel_not_in_guild` or
   `thread_already_exists`) — `threads_create` opening a thread. Like the fetch family it is
   one synchronous REST call answering inline, so it carries no silence window and no status
@@ -267,7 +267,12 @@ skip-reason enum; no shared framework, no shared enums:
   message-anchored flavor, names the message Discord hangs the thread off. `thread_creations`
   points at the `channels` row for the thread itself, which the same transaction writes with
   its detail revision and its category — the parent channel's name, exactly what the daemon
-  records for a thread.
+  records for a thread. `thread_already_exists` names one fact from two vantage points: the
+  skip is the store's own thread channel under that message, the failure is Discord's
+  `Thread already created for this message` on a thread the store cannot see. Keeping the
+  refusal out of `rejected` is what lets `rejected` keep saying "create it again": no retry
+  can ever turn 160004 into a thread. The `gone` failure writes the deletion it observed
+  alongside the failure row, in one transaction, exactly as `messages_fetch` does.
 
 Owner-facing status is always mapped copy from exhaustive typed maps in `.common.ts`
 (summary + nextAction per reason), never raw vendor text — pinned by serialization tests.

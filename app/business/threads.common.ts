@@ -17,7 +17,11 @@ const nameMessage = `Write the thread name people will see, up to ${threadNameLi
 const oneAnchorMessage =
   'Pass either `channelId` to create a thread of its own in a channel, or `messageId` to anchor it on a message — one of the two, never both'
 
-type ThreadCreationFailureKind = 'gone' | 'rejected' | 'unreachable'
+type ThreadCreationFailureKind =
+  | 'gone'
+  | 'rejected'
+  | 'thread_already_exists'
+  | 'unreachable'
 
 type ThreadCreationSkipReason =
   | 'anchor_message_deleted'
@@ -43,6 +47,8 @@ type ThreadCreateTransport = (request: {
   name: string
 }) => Promise<{ discordChannelId: string }>
 
+class ThreadCreateAlreadyThreadedError extends Error {}
+
 class ThreadCreateGoneError extends Error {}
 
 class ThreadCreateRejectedError extends Error {}
@@ -63,7 +69,13 @@ const threadCreationFailureCopy = {
   rejected: {
     summary: 'Discord refused to create the thread, so none exists.',
     nextAction:
-      'Give the bot View Channel and Create Public Threads in that channel and check DISCORD_BOT_TOKEN, then create it again.',
+      'Give the bot View Channel and Create Public Threads in that channel, check DISCORD_BOT_TOKEN, or try a plainer name, then create it again — no thread was created, so a second attempt cannot leave two.',
+  },
+  thread_already_exists: {
+    summary:
+      'Discord says that message already carries a thread, so none was created, and that thread is not among the channels the bot can see.',
+    nextAction:
+      "List the channels to find that thread once the ingest daemon records it, then post into it with messages_send. If it never shows up there, pass the channel's `channelId` to create the thread on its own.",
   },
   unreachable: {
     summary:
@@ -146,6 +158,7 @@ const createThreadSchema = z
   )
 
 export {
+  ThreadCreateAlreadyThreadedError,
   ThreadCreateGoneError,
   ThreadCreateRejectedError,
   createThreadSchema,

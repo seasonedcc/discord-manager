@@ -3,6 +3,7 @@ import type { Transaction } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
+  ThreadCreateAlreadyThreadedError,
   ThreadCreateGoneError,
   ThreadCreateRejectedError,
   type ThreadCreateTransport,
@@ -31,10 +32,35 @@ function jumpUrl({
 }
 
 function failureKindOf(error: unknown): ThreadCreationFailureKind {
+  if (error instanceof ThreadCreateAlreadyThreadedError) {
+    return 'thread_already_exists'
+  }
   if (error instanceof ThreadCreateGoneError) return 'gone'
   if (error instanceof ThreadCreateRejectedError) return 'rejected'
 
   return 'unreachable'
+}
+
+async function recordObservedDeletion(trx: Transaction<DB>, messageId: string) {
+  await trx
+    .insertInto('messageDeletions')
+    .columns(['id', 'messageId'])
+    .expression((eb) =>
+      eb
+        .selectFrom('messages')
+        .select([eb.val(newId()).as('id'), 'messages.id as messageId'])
+        .where('messages.id', '=', messageId)
+        .where(({ exists, not, selectFrom }) =>
+          not(
+            exists(
+              selectFrom('messageDeletions')
+                .select('messageDeletions.id')
+                .whereRef('messageDeletions.messageId', '=', 'messages.id')
+            )
+          )
+        )
+    )
+    .execute()
 }
 
 function latestChannelDetails() {
@@ -150,8 +176,10 @@ function skipReasonFor({
   if (channel.discordGuildId !== guildId) return 'channel_not_in_guild'
   if (channel.removed === 1) return 'channel_not_found'
   if (channel.isThread === 1) return 'channel_is_a_thread'
-  if (anchor?.deleted === 1) return 'anchor_message_deleted'
+  // Discord keeps a thread alive after its starter message is deleted, so the
+  // thread the owner can still post into outranks the deletion.
   if (anchor?.threaded === 1) return 'thread_already_exists'
+  if (anchor?.deleted === 1) return 'anchor_message_deleted'
 
   return null
 }
@@ -290,14 +318,23 @@ function createThread(transport: ThreadCreateTransport) {
       const kind = failureKindOf(error)
 
       await db()
-        .insertInto('threadCreationFailures')
-        .values({
-          id: newId(),
-          kind,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          threadCreationRequestId: request.id,
+        .transaction()
+        .execute(async (trx) => {
+          await trx
+            .insertInto('threadCreationFailures')
+            .values({
+              id: newId(),
+              kind,
+              errorMessage:
+                error instanceof Error ? error.message : String(error),
+              threadCreationRequestId: request.id,
+            })
+            .execute()
+
+          if (kind === 'gone' && anchor) {
+            await recordObservedDeletion(trx, anchor.id)
+          }
         })
-        .execute()
 
       return {
         thread: {

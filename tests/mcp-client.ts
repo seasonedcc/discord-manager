@@ -32,6 +32,7 @@ const messageThreadsPath =
   /^\/v10\/channels\/(\d{17,20})\/messages\/(\d{17,20})\/threads$/
 const unknownMessageCode = 10008
 const unknownChannelCode = 10003
+const threadAlreadyCreatedCode = 160004
 const publicThreadType = 11
 
 type RecordedSend = {
@@ -97,6 +98,7 @@ async function startDiscordDouble() {
   const threads: RecordedThread[] = []
   const refusedChannelIds = new Set<string>()
   const refusedThreadChannelIds = new Set<string>()
+  const alreadyThreadedMessageIds = new Set<string>()
   const heldMessages = new Map<string, LiveMessage>()
   const forgottenMessageIds = new Set<string>()
   const unlistableReactionMessageIds = new Set<string>()
@@ -155,6 +157,16 @@ async function startDiscordDouble() {
       return answer(response, 404, {
         message: 'Unknown Message',
         code: unknownMessageCode,
+      })
+    }
+
+    if (
+      anchorDiscordMessageId &&
+      alreadyThreadedMessageIds.has(anchorDiscordMessageId)
+    ) {
+      return answer(response, 400, {
+        message: 'A thread has already been created for this message',
+        code: threadAlreadyCreatedCode,
       })
     }
 
@@ -354,6 +366,9 @@ async function startDiscordDouble() {
     },
     refuseThreadsIn(discordChannelId: string) {
       refusedThreadChannelIds.add(discordChannelId)
+    },
+    refuseThreadsOn(discordMessageId: string) {
+      alreadyThreadedMessageIds.add(discordMessageId)
     },
     sends,
     threads,

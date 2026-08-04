@@ -37,7 +37,7 @@ test('a thread Discord refuses comes back as guidance, not vendor noise', async 
   )
   assert.equal(
     thread.nextAction,
-    'Give the bot View Channel and Create Public Threads in that channel and check DISCORD_BOT_TOKEN, then create it again.'
+    'Give the bot View Channel and Create Public Threads in that channel, check DISCORD_BOT_TOKEN, or try a plainer name, then create it again — no thread was created, so a second attempt cannot leave two.'
   )
   assert.equal(
     session.discord.threads.filter((recorded) => recorded.name === name).length,

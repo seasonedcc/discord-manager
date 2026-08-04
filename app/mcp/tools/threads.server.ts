@@ -7,6 +7,7 @@ import {
   Routes,
 } from 'discord.js'
 import {
+  ThreadCreateAlreadyThreadedError,
   ThreadCreateGoneError,
   ThreadCreateRejectedError,
   type ThreadCreateTransport,
@@ -42,9 +43,15 @@ const openThroughDiscord: ThreadCreateTransport = async ({
     return { discordChannelId: thread.id }
   } catch (error) {
     if (error instanceof DiscordAPIError) {
-      throw error.code === RESTJSONErrorCodes.UnknownMessage
-        ? new ThreadCreateGoneError(error.message)
-        : new ThreadCreateRejectedError(error.message)
+      if (error.code === RESTJSONErrorCodes.UnknownMessage) {
+        throw new ThreadCreateGoneError(error.message)
+      }
+
+      if (error.code === RESTJSONErrorCodes.ThreadAlreadyCreatedForMessage) {
+        throw new ThreadCreateAlreadyThreadedError(error.message)
+      }
+
+      throw new ThreadCreateRejectedError(error.message)
     }
 
     throw error

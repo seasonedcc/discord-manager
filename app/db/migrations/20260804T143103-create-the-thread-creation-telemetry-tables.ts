@@ -2,7 +2,7 @@ import type { Kysely } from 'kysely'
 import { sql } from 'kysely'
 
 const nowIso = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
-const threadCreationFailureKind = sql`kind in ('gone', 'rejected', 'unreachable')`
+const threadCreationFailureKind = sql`kind in ('gone', 'rejected', 'thread_already_exists', 'unreachable')`
 const threadCreationSkipReason = sql`reason in ('anchor_message_deleted', 'channel_is_a_thread', 'channel_not_found', 'channel_not_in_guild', 'thread_already_exists')`
 
 export async function up(db: Kysely<any>): Promise<void> {
