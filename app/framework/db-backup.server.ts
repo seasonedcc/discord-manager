@@ -339,7 +339,7 @@ function exportDatabase({
 
   if (holdsSomethingOtherThanADump(destination)) {
     throw new Error(
-      `${destination} holds something other than a dump — there is no ${schemaFileName} in it. An export only ever replaces the artifacts it wrote, and it recognises none of its own here, so point it at a new directory, an empty one, or a dump it may overwrite.`
+      `${destination} holds something other than a dump — there is no ${schemaFileName} in it. An export only ever replaces the artifacts it wrote, and it recognizes none of its own here, so point it at a new directory, an empty one, or a dump it may overwrite.`
     )
   }
 
