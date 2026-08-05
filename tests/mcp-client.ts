@@ -74,12 +74,16 @@ type LiveReaction = {
 }
 
 type LiveMessage = {
+  answering?: { discordChannelId: string; discordMessageId: string }
   attachments?: { filename: string; size: number; url: string }[]
   content?: string
   embeds?: LiveEmbed[]
   flags?: number
   reactions?: LiveReaction[]
 }
+
+const replyMessageType = 19
+const defaultMessageType = 0
 
 function answer(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, { 'content-type': 'application/json' })
@@ -224,6 +228,14 @@ async function startDiscordDouble() {
       attachments: held.attachments ?? [],
       embeds: held.embeds ?? [],
       flags: held.flags ?? 0,
+      type: held.answering ? replyMessageType : defaultMessageType,
+      message_reference: held.answering
+        ? {
+            channel_id: held.answering.discordChannelId,
+            guild_id: serverEnvironment.DISCORD_GUILD_ID,
+            message_id: held.answering.discordMessageId,
+          }
+        : undefined,
       reactions: (held.reactions ?? []).map((reaction) => ({
         count:
           reaction.reactorDiscordUserIds.length +

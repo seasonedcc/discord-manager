@@ -33,6 +33,7 @@ async function aWorkdayOfConversation({
   })
 
   const replyPing = await feed.postMessage({
+    answering: mention,
     author: maya,
     channel: engineering,
     content: 'Reading it now — I will leave comments before lunch.',
@@ -41,6 +42,7 @@ async function aWorkdayOfConversation({
   })
 
   const suppressedPing = await feed.postMessage({
+    answering: mention,
     author: maya,
     channel: engineering,
     content: 'Comments are in, nothing blocking.',
