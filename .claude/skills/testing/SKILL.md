@@ -43,6 +43,8 @@ A green suite proves nothing about a specific test until that test has been seen
 
 False-green smells worth checking whenever a test passes suspiciously easily: the expected value coincides with the old buggy behavior, so the test passes either way; the code path is stubbed above the change under test; an error assertion satisfied by a different error firing first.
 
+A branch no harness input can reach is worse than unproven — it is untestable, and deleting its guard leaves the whole suite green. When new logic gates on a payload shape the fake feed or the Discord double cannot yet express — a forward-shaped reference, a payload with a field withheld — extending the double's levers is part of the change that adds the logic, in the same PR. And when the same observation logic lives at more than one seam — the gateway's discord.js payload and a transport's raw REST payload — each copy gets its own mutation proof: a proof against one seam says nothing about its sibling.
+
 Never prove timing or ordering with a timer heuristic — it false-passes under load. Use a deterministic signal: a recorded event row, a callback the fake feed fires, a value the transport double captured.
 
 ### Gate reconciliation
