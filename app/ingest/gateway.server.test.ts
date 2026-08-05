@@ -1263,6 +1263,26 @@ describe('registerGatewayListeners', () => {
     expect(await replyReferencesOf(delivered.id)).toHaveLength(0)
   })
 
+  it('records no reply reference for a live reply whose reference names no message', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler[]>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage({
+      reference: { channelId: randomUUID(), guildId: configuredGuildId },
+      type: MessageType.Reply,
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await revisionsOf(delivered.id)).toHaveLength(1)
+    expect(await replyReferencesOf(delivered.id)).toHaveLength(0)
+  })
+
   it('records what a live message carries in its embeds and attachments', async () => {
     await configuredGuild()
     const handlers = new Map<string, GatewayHandler[]>()
@@ -1744,7 +1764,7 @@ describe('makeChannelHistoryFetcher', () => {
   }: {
     discordMessageId: string
     reactors: (() => Promise<Collection<string, { id: string }>>) | undefined
-    reference?: { channelId: string; guildId: string; messageId: string }
+    reference?: { channelId?: string; guildId?: string; messageId?: string }
     type?: MessageType
   }) {
     return {
@@ -1884,6 +1904,25 @@ describe('makeChannelHistoryFetcher', () => {
 
     const [observed] = await makeChannelHistoryFetcher(
       clientHolding([forwarded])
+    )({
+      afterDiscordMessageId: '0',
+      discordChannelId: randomUUID(),
+      limit: 100,
+    })
+
+    expect(observed.repliedTo).toBeUndefined()
+  })
+
+  it('reads no reply reference off a backfilled reply whose reference names no message', async () => {
+    const unnamed = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: undefined,
+      reference: { channelId: randomUUID(), guildId: configuredGuildId },
+      type: MessageType.Reply,
+    })
+
+    const [observed] = await makeChannelHistoryFetcher(
+      clientHolding([unnamed])
     )({
       afterDiscordMessageId: '0',
       discordChannelId: randomUUID(),
