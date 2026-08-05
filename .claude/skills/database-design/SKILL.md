@@ -222,7 +222,11 @@ Event tables never carry a unique constraint on the parent foreign key. Multiple
 
 Unique constraints on **identity** tables are correct and expected — `messages.discordMessageId`, `channels.discordChannelId`, `members.discordUserId` are unique so ingestion can be idempotent through `.onConflict((oc) => oc.doNothing())`.
 
-One child-table shape is identity, not event, and may carry the constraint: an optional **birth fact**. When the vendor fixes a fact at the parent's creation and nothing can ever change it — the message a reply answers is stamped when the reply is posted, and an edit cannot move it — the zero-or-one row recording it is written once, in the creation transaction, and a second row could only be a duplicate observation. There the unique constraint on the parent foreign key states the fact and enforces what a reader assumes when it selects the row as a scalar subquery; `message_reply_references` is the model. The test is immutability by the vendor's design, never by current write-path behavior: a fact that merely happens to be written once today is still an event.
+One child table is an exception, because it is not really an event table: the record of an optional fact that is fixed at the parent's birth and can never change. The message a reply answers is the example — Discord stamps it when the reply is posted, no later edit can move it, and a non-reply simply never has one. `message_reply_references` records it as a zero-or-one-row child of `messages`, written in the same transaction that creates the message and never written again.
+
+Nothing ever happens to such a fact after birth, so there is no history to keep and nothing for latest-wins to resolve: a second row for the same message could only be the same fact recorded twice by mistake. That is why a unique constraint on the parent foreign key is correct there — it states that a message answers at most one message, and it guarantees the at-most-one-row assumption every reader relies on when it looks the reference up with a subquery.
+
+Qualify for this exception strictly: the fact must be unchangeable because Discord fixed it, not because our code happens to write it only once today. If any future event could legitimately change the value, it is an ordinary event table and this rule applies to it in full.
 
 ## No unnecessary defaults
 
