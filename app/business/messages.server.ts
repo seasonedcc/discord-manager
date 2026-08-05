@@ -7,10 +7,13 @@ import {
   MessageFetchGoneError,
   MessageFetchRejectedError,
   type MessageFetchTransport,
+  type ObservedReplyReference,
   countMessagesSchema,
   fetchMessageSchema,
   messageFetchGuidance,
   renderEmbed,
+  repliedTo,
+  storedRepliedTo,
 } from '~/business/messages.common'
 import { db } from '~/db/db.server'
 import type { DB } from '~/db/types'
@@ -49,6 +52,29 @@ async function recordObservedDeletion(trx: Transaction<DB>, messageId: string) {
     .execute()
 }
 
+const replyReferenceAsJson = sql<string>`json_object(
+  'discordChannelId', message_reply_references.replied_to_discord_channel_id,
+  'discordGuildId', message_reply_references.replied_to_discord_guild_id,
+  'discordMessageId', message_reply_references.replied_to_discord_message_id,
+  'messageId', replied_to_messages.id
+)`.as('replyReference')
+
+async function locateTheMessageRepliedTo(
+  reference: ObservedReplyReference,
+  guildId: string
+) {
+  const ingested = await db()
+    .selectFrom('messages')
+    .innerJoin('channels', 'channels.id', 'messages.channelId')
+    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+    .select('messages.id')
+    .where('messages.discordMessageId', '=', reference.discordMessageId)
+    .where('guilds.discordGuildId', '=', guildId)
+    .executeTakeFirst()
+
+  return repliedTo({ ...reference, messageId: ingested?.id ?? null })
+}
+
 function fetchMessage(transport: MessageFetchTransport) {
   return applySchema(
     fetchMessageSchema,
@@ -75,6 +101,16 @@ function fetchMessage(transport: MessageFetchTransport) {
           )
           .$castTo<number>()
           .as('deleted'),
+        eb
+          .selectFrom('messageReplyReferences')
+          .leftJoin(
+            'messages as repliedToMessages',
+            'repliedToMessages.discordMessageId',
+            'messageReplyReferences.repliedToDiscordMessageId'
+          )
+          .select(replyReferenceAsJson)
+          .whereRef('messageReplyReferences.messageId', '=', 'messages.id')
+          .as('replyReference'),
       ])
       .executeTakeFirst()
 
@@ -85,10 +121,11 @@ function fetchMessage(transport: MessageFetchTransport) {
       )
     }
 
-    const { deleted, discordGuildId, ...message } = found
+    const { deleted, discordGuildId, replyReference, ...message } = found
     const located = {
       ...message,
       jumpUrl: `https://discord.com/channels/${discordGuildId}/${message.discordChannelId}/${message.discordMessageId}`,
+      repliedTo: storedRepliedTo(replyReference),
     }
 
     const request = await db()
@@ -179,6 +216,12 @@ function fetchMessage(transport: MessageFetchTransport) {
             ),
           })
         ),
+        repliedTo: live.repliedTo
+          ? await locateTheMessageRepliedTo(
+              live.repliedTo,
+              context.owner.guildId
+            )
+          : null,
         status: 'retrieved' as const,
         ...messageFetchGuidance({ status: 'retrieved' }),
       },

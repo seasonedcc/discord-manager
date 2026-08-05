@@ -86,6 +86,7 @@ describe('catchUpSince', () => {
         embeds: [],
         jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
         reactions: [],
+        repliedTo: null,
       },
     ])
   })
@@ -508,6 +509,69 @@ describe('catchUpSince', () => {
 
     expect(digest.messages).toHaveLength(digestMessageLimit)
     expect(digest.truncated).toBe(true)
+  })
+
+  it('says which message a reply answers, and where in the store to find it', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const answered = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-03-01T00:00:00.000Z',
+    })
+    const answer = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-03-01T00:01:00.000Z',
+      repliedTo: {
+        discordChannelId: channel.discordChannelId,
+        discordGuildId: guild.discordGuildId,
+        discordMessageId: answered.discordMessageId,
+      },
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-03-01T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+    const rows = digest.messages.filter(({ messageId }) =>
+      [answered.id, answer.id].includes(messageId)
+    )
+
+    expect(rows.map(({ repliedTo }) => repliedTo)).toEqual([
+      null,
+      {
+        discordMessageId: answered.discordMessageId,
+        jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${answered.discordMessageId}`,
+        messageId: answered.id,
+      },
+    ])
+  })
+
+  it('still says which message a reply answers when that message was never ingested', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const unseenDiscordChannelId = snowflake()
+    const unseenDiscordMessageId = snowflake()
+    const answer = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-03-02T00:00:00.000Z',
+      repliedTo: {
+        discordChannelId: unseenDiscordChannelId,
+        discordGuildId: guild.discordGuildId,
+        discordMessageId: unseenDiscordMessageId,
+      },
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-03-02T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+    const row = digest.messages.find(({ messageId }) => messageId === answer.id)
+
+    expect(row?.repliedTo).toEqual({
+      discordMessageId: unseenDiscordMessageId,
+      jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${unseenDiscordChannelId}/${unseenDiscordMessageId}`,
+      messageId: null,
+    })
   })
 
   it('refuses a context that cannot read messages', async () => {
@@ -1005,6 +1069,41 @@ describe('listMentions', () => {
     expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
       answeredTheCurrentBot.id,
     ])
+  })
+
+  it('says which message a ping answers when the sender left the ping on', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const asked = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-12-20T00:00:00.000Z',
+    })
+    const answered = await createMessage({
+      channelId: channel.id,
+      content: 'on it',
+      discordCreatedAt: '2099-12-20T00:01:00.000Z',
+      mentionedDiscordUserIds: [context.owner.discordUserId],
+      repliedTo: {
+        discordChannelId: channel.discordChannelId,
+        discordGuildId: guild.discordGuildId,
+        discordMessageId: asked.discordMessageId,
+      },
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-20T00:00:00.000Z' },
+      context
+    )
+    const row = mentions.messages.find(
+      ({ messageId }) => messageId === answered.id
+    )
+
+    expect(row?.repliedTo).toEqual({
+      discordMessageId: asked.discordMessageId,
+      jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${asked.discordMessageId}`,
+      messageId: asked.id,
+    })
   })
 
   it('refuses a context that cannot read messages', async () => {
