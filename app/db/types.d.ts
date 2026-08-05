@@ -255,6 +255,15 @@ export interface MessageReactionRemovals {
   reactorDiscordUserId: string;
 }
 
+export interface MessageReplyReferences {
+  createdAt: Generated<string>;
+  id: string;
+  messageId: string;
+  repliedToDiscordChannelId: string;
+  repliedToDiscordGuildId: string;
+  repliedToDiscordMessageId: string;
+}
+
 export interface MessageRevisionAttachments {
   createdAt: Generated<string>;
   filename: string;
@@ -413,6 +422,7 @@ export interface DB {
   messageFetchSkips: MessageFetchSkips;
   messageReactionAdditions: MessageReactionAdditions;
   messageReactionRemovals: MessageReactionRemovals;
+  messageReplyReferences: MessageReplyReferences;
   messageRevisionAttachments: MessageRevisionAttachments;
   messageRevisionEmbeds: MessageRevisionEmbeds;
   messageRevisions: MessageRevisions;

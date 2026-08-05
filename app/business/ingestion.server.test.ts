@@ -82,6 +82,19 @@ function backfilledMessage(
   }
 }
 
+function replyReferencesOf(discordMessageId: string) {
+  return db()
+    .selectFrom('messageReplyReferences')
+    .innerJoin('messages', 'messages.id', 'messageReplyReferences.messageId')
+    .select([
+      'messageReplyReferences.repliedToDiscordChannelId',
+      'messageReplyReferences.repliedToDiscordGuildId',
+      'messageReplyReferences.repliedToDiscordMessageId',
+    ])
+    .where('messages.discordMessageId', '=', discordMessageId)
+    .execute()
+}
+
 function fakeChannelHistory(pages: BackfilledMessage[][]) {
   const requests: Parameters<FetchChannelHistory>[0][] = []
   let nextPage = 0
@@ -459,6 +472,85 @@ describe('recordIncomingMessage', () => {
     expect(result.success).toBe(false)
     if (result.success) throw new Error('expected a failure')
     expect(isContextError(result.errors[0])).toBe(true)
+  })
+
+  it('records the whole locator of the message a reply answers', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const discordMessageId = randomUUID()
+    const repliedTo = {
+      discordChannelId: snowflake(),
+      discordGuildId: guild.discordGuildId,
+      discordMessageId: snowflake(),
+    }
+
+    await fromSuccess(recordIncomingMessage)(
+      {
+        author: observedAuthor(),
+        channel: observedChannel(),
+        content: 'answering that',
+        discordCreatedAt: '2026-07-30T10:00:00.000Z',
+        discordMessageId,
+        mentionedDiscordUserIds: [],
+        repliedTo,
+      },
+      context
+    )
+
+    expect(await replyReferencesOf(discordMessageId)).toEqual([
+      {
+        repliedToDiscordChannelId: repliedTo.discordChannelId,
+        repliedToDiscordGuildId: repliedTo.discordGuildId,
+        repliedToDiscordMessageId: repliedTo.discordMessageId,
+      },
+    ])
+  })
+
+  it('records no reply reference for a message that answers nothing', async () => {
+    const guild = await createGuild()
+    const discordMessageId = randomUUID()
+
+    await fromSuccess(recordIncomingMessage)(
+      {
+        author: observedAuthor(),
+        channel: observedChannel(),
+        content: 'standing on its own',
+        discordCreatedAt: '2026-07-30T10:00:00.000Z',
+        discordMessageId,
+        mentionedDiscordUserIds: [],
+      },
+      ownerContextFor(guild)
+    )
+
+    expect(await replyReferencesOf(discordMessageId)).toHaveLength(0)
+  })
+
+  it('keeps one reply reference when the same reply arrives twice', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const author = observedAuthor()
+    const channel = observedChannel()
+    const discordMessageId = randomUUID()
+    const repliedTo = {
+      discordChannelId: snowflake(),
+      discordGuildId: guild.discordGuildId,
+      discordMessageId: snowflake(),
+    }
+    const observed = {
+      author,
+      channel,
+      content: 'delivered twice',
+      discordCreatedAt: '2026-07-30T10:00:00.000Z',
+      discordMessageId,
+      mentionedDiscordUserIds: [],
+      repliedTo,
+    }
+
+    await fromSuccess(recordIncomingMessage)(observed, context)
+    const second = await fromSuccess(recordIncomingMessage)(observed, context)
+
+    expect(second.outcome).toBe('already_ingested')
+    expect(await replyReferencesOf(discordMessageId)).toHaveLength(1)
   })
 })
 
@@ -2013,6 +2105,37 @@ describe('runChannelBackfill', () => {
     expect(telemetry.progress[0].storedMessageCount).toBe(2)
     expect(telemetry.completions[0].fetchedMessageCount).toBe(2)
     expect(telemetry.completions[0].storedMessageCount).toBe(2)
+  })
+
+  it('stores the whole locator of the message a backfilled reply answers', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const channel = await createChannel({ guildId: guild.id })
+    const repliedTo = {
+      discordChannelId: snowflake(),
+      discordGuildId: guild.discordGuildId,
+      discordMessageId: snowflake(),
+    }
+    const answer = backfilledMessage({ repliedTo })
+    const aside = backfilledMessage()
+    const history = fakeChannelHistory([[answer, aside]])
+
+    await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+      },
+      context
+    )
+
+    expect(await replyReferencesOf(answer.discordMessageId)).toEqual([
+      {
+        repliedToDiscordChannelId: repliedTo.discordChannelId,
+        repliedToDiscordGuildId: repliedTo.discordGuildId,
+        repliedToDiscordMessageId: repliedTo.discordMessageId,
+      },
+    ])
+    expect(await replyReferencesOf(aside.discordMessageId)).toHaveLength(0)
   })
 
   it('stores a message whose reactors Discord would not list, and records them as unread', async () => {

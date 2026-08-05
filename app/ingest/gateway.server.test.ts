@@ -5,6 +5,8 @@ import {
   Events,
   type Message,
   MessageFlags,
+  MessageReferenceType,
+  MessageType,
   ReactionType,
 } from 'discord.js'
 import { ownerContext } from '~/business/auth.server'
@@ -746,16 +748,34 @@ function deliveredMessage({
   discordMessageId = randomUUID(),
   embeds = [],
   mentions = [],
+  reference,
   suppressesEmbeds = false,
+  type = MessageType.Default,
 }: {
   attachments?: { name: string; size: number; url: string }[]
   content?: string
   discordMessageId?: string
   embeds?: ReturnType<typeof deliveredEmbed>[]
   mentions?: string[]
+  reference?: {
+    channelId?: string
+    guildId?: string
+    messageId?: string
+    type?: MessageReferenceType
+  }
   suppressesEmbeds?: boolean
+  type?: MessageType
 } = {}) {
   return {
+    reference: reference
+      ? {
+          channelId: reference.channelId,
+          guildId: reference.guildId,
+          messageId: reference.messageId,
+          type: reference.type ?? MessageReferenceType.Default,
+        }
+      : null,
+    type,
     attachments: new Collection(
       attachments.map(({ name, size, url }) => {
         const id = randomUUID()
@@ -912,6 +932,19 @@ function mentionedUserIdsOf(discordMessageId: string) {
     .orderBy('messageRevisions.id', 'desc')
     .execute()
     .then((rows) => rows.map((row) => row.mentionedDiscordUserId))
+}
+
+function replyReferencesOf(discordMessageId: string) {
+  return db()
+    .selectFrom('messageReplyReferences')
+    .innerJoin('messages', 'messages.id', 'messageReplyReferences.messageId')
+    .select([
+      'messageReplyReferences.repliedToDiscordChannelId',
+      'messageReplyReferences.repliedToDiscordGuildId',
+      'messageReplyReferences.repliedToDiscordMessageId',
+    ])
+    .where('messages.discordMessageId', '=', discordMessageId)
+    .execute()
 }
 
 function fakeGatewayClient<Fired>({
@@ -1175,6 +1208,59 @@ describe('registerGatewayListeners', () => {
     await fire(handlers, Events.MessageCreate, delivered)
 
     expect(await mentionedUserIdsOf(delivered.id)).toHaveLength(0)
+  })
+
+  it('records the whole locator of the message a live reply answers', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler[]>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const answered = {
+      channelId: randomUUID(),
+      guildId: configuredGuildId,
+      messageId: randomUUID(),
+    }
+    const delivered = deliveredMessage({
+      reference: answered,
+      type: MessageType.Reply,
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await replyReferencesOf(delivered.id)).toEqual([
+      {
+        repliedToDiscordChannelId: answered.channelId,
+        repliedToDiscordGuildId: answered.guildId,
+        repliedToDiscordMessageId: answered.messageId,
+      },
+    ])
+  })
+
+  it('records no reply reference for a live message that only forwards another', async () => {
+    await configuredGuild()
+    const handlers = new Map<string, GatewayHandler[]>()
+    const client = fakeGatewayClient({
+      fetchActiveThreads: async () => ({ threads: new Collection() }),
+      handlers,
+    })
+    const delivered = deliveredMessage({
+      reference: {
+        channelId: randomUUID(),
+        guildId: configuredGuildId,
+        messageId: randomUUID(),
+        type: MessageReferenceType.Forward,
+      },
+    })
+
+    registerGatewayListeners(client, { fetchChannelHistory: async () => [] })
+
+    await fire(handlers, Events.MessageCreate, delivered)
+
+    expect(await replyReferencesOf(delivered.id)).toHaveLength(0)
   })
 
   it('records what a live message carries in its embeds and attachments', async () => {
@@ -1653,11 +1739,17 @@ describe('makeChannelHistoryFetcher', () => {
   function fetchedMessage({
     discordMessageId,
     reactors,
+    reference,
+    type = MessageType.Default,
   }: {
     discordMessageId: string
     reactors: (() => Promise<Collection<string, { id: string }>>) | undefined
+    reference?: { channelId: string; guildId: string; messageId: string }
+    type?: MessageType
   }) {
     return {
+      reference: reference ?? null,
+      type,
       attachments: new Collection(),
       author: {
         displayName: `display-name-${randomUUID()}`,
@@ -1749,6 +1841,56 @@ describe('makeChannelHistoryFetcher', () => {
     })
 
     expect(observed.reactions).toEqual([])
+  })
+
+  it('reads the whole locator of the message a backfilled reply answers', async () => {
+    const answered = {
+      channelId: randomUUID(),
+      guildId: configuredGuildId,
+      messageId: randomUUID(),
+    }
+    const answer = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: undefined,
+      reference: answered,
+      type: MessageType.Reply,
+    })
+
+    const [observed] = await makeChannelHistoryFetcher(clientHolding([answer]))(
+      {
+        afterDiscordMessageId: '0',
+        discordChannelId: randomUUID(),
+        limit: 100,
+      }
+    )
+
+    expect(observed.repliedTo).toEqual({
+      discordChannelId: answered.channelId,
+      discordGuildId: answered.guildId,
+      discordMessageId: answered.messageId,
+    })
+  })
+
+  it('reads no reply reference off a backfilled message that only forwards another', async () => {
+    const forwarded = fetchedMessage({
+      discordMessageId: randomUUID(),
+      reactors: undefined,
+      reference: {
+        channelId: randomUUID(),
+        guildId: configuredGuildId,
+        messageId: randomUUID(),
+      },
+    })
+
+    const [observed] = await makeChannelHistoryFetcher(
+      clientHolding([forwarded])
+    )({
+      afterDiscordMessageId: '0',
+      discordChannelId: randomUUID(),
+      limit: 100,
+    })
+
+    expect(observed.repliedTo).toBeUndefined()
   })
 })
 

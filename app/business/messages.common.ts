@@ -28,6 +28,16 @@ const observedEmojiSchema = z
     error: 'An emoji is identified by its name, its id, or both',
   })
 
+const observedReplyReferenceSchema = z.object({
+  discordChannelId: z.string().min(1),
+  discordGuildId: z.string().min(1),
+  discordMessageId: z.string().min(1),
+})
+
+const storedReplyReferenceSchema = observedReplyReferenceSchema.extend({
+  messageId: z.string().min(1).nullable(),
+})
+
 const messageEmbedsSchema = z.array(z.string())
 
 const messageAttachmentsSchema = z.array(observedAttachmentSchema)
@@ -43,6 +53,10 @@ const messageReactionsSchema = z.array(
 type ObservedEmbed = z.infer<typeof observedEmbedSchema>
 
 type ObservedAttachment = z.infer<typeof observedAttachmentSchema>
+
+type ObservedReplyReference = z.infer<typeof observedReplyReferenceSchema>
+
+type StoredReplyReference = z.infer<typeof storedReplyReferenceSchema>
 
 type ObservedReaction = {
   count: number
@@ -72,6 +86,7 @@ type MessageFetchTransport = (request: {
   content: string
   embeds: ObservedEmbed[]
   reactions?: ObservedReaction[]
+  repliedTo?: ObservedReplyReference
 }>
 
 class MessageFetchGoneError extends Error {}
@@ -218,6 +233,25 @@ function renderEmbed({
   return parts.flatMap((part) => (part?.trim() ? [part] : [])).join('\n')
 }
 
+function repliedTo({
+  discordChannelId,
+  discordGuildId,
+  discordMessageId,
+  messageId,
+}: StoredReplyReference) {
+  return {
+    discordMessageId,
+    jumpUrl: `https://discord.com/channels/${discordGuildId}/${discordChannelId}/${discordMessageId}`,
+    messageId,
+  }
+}
+
+function storedRepliedTo(replyReference: string | null) {
+  if (!replyReference) return null
+
+  return repliedTo(storedReplyReferenceSchema.parse(JSON.parse(replyReference)))
+}
+
 function renderEmoji({ animated, id, name }: ObservedEmoji) {
   if (!id) return name
   if (!name) return `:${id}`
@@ -241,8 +275,11 @@ export {
   observedAttachmentSchema,
   observedEmbedSchema,
   observedEmojiSchema,
+  observedReplyReferenceSchema,
   renderEmbed,
   renderEmoji,
+  repliedTo,
+  storedRepliedTo,
 }
 export type {
   MessageFetchFailureKind,
@@ -253,4 +290,5 @@ export type {
   ObservedEmbed,
   ObservedEmoji,
   ObservedReaction,
+  ObservedReplyReference,
 }

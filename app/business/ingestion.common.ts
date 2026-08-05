@@ -2,6 +2,7 @@ import type {
   ObservedAttachment,
   ObservedEmbed,
   ObservedEmoji,
+  ObservedReplyReference,
 } from './messages.common'
 
 type BackfilledMessage = {
@@ -17,6 +18,7 @@ type BackfilledMessage = {
   embeds: ObservedEmbed[]
   mentionedDiscordUserIds: string[]
   reactions?: { emoji: ObservedEmoji; reactorDiscordUserIds: string[] }[]
+  repliedTo?: ObservedReplyReference
 }
 
 type FetchChannelHistory = (request: {
