@@ -222,6 +222,8 @@ Event tables never carry a unique constraint on the parent foreign key. Multiple
 
 Unique constraints on **identity** tables are correct and expected — `messages.discordMessageId`, `channels.discordChannelId`, `members.discordUserId` are unique so ingestion can be idempotent through `.onConflict((oc) => oc.doNothing())`.
 
+One child-table shape is identity, not event, and may carry the constraint: an optional **birth fact**. When the vendor fixes a fact at the parent's creation and nothing can ever change it — the message a reply answers is stamped when the reply is posted, and an edit cannot move it — the zero-or-one row recording it is written once, in the creation transaction, and a second row could only be a duplicate observation. There the unique constraint on the parent foreign key states the fact and enforces what a reader assumes when it selects the row as a scalar subquery; `message_reply_references` is the model. The test is immutability by the vendor's design, never by current write-path behavior: a fact that merely happens to be written once today is still an event.
+
 ## No unnecessary defaults
 
 Use `defaultTo(...)` only for `createdAt`. Any other default makes Kysely's generator emit `Generated<T>`, which turns the column optional on insert and silently loses the compile error that would have caught a missing value.
