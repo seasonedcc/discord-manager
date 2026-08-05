@@ -180,6 +180,13 @@ rows are one set read whole (`message_revision_user_mentions`, `message_revision
   only: no bytes are ever downloaded, and the URL is signed and short-lived, so it names
   a file rather than links to one forever. `contentType` is deliberately not stored — it
   is optional upstream and adds nothing a text-triage reader uses.
+- `message_reply_references` — zero or one row per message, carrying the guild, channel and
+  message snowflakes of the message a reply answers, all three so the jump link rebuilds
+  without a join. Written in the same transaction as the message it belongs to, and never
+  again: Discord fixes a reply's target when the reply is posted and an edit cannot move
+  it, so a second row could only be a duplicate observation, which the unique key on
+  `message_id` refuses. Attached to the message rather than the revision for the same
+  reason — unlike the mention set, this fact does not change per version.
 - `message_reaction_additions` / `message_reaction_removals` — reversible pair keyed by
   the (message, emoji, reactor) triple; the newer of that triple's two latest rows says
   whether the reaction is still standing, and no rows at all means it never was. `emoji`
@@ -402,7 +409,8 @@ is a read path, with no table and no event of its own.
 Gateway intents: Guilds, GuildMessages, MessageContent, GuildMessageReactions (with
 partials for reactions on uncached messages). Handlers translate events to business calls:
 
-- messageCreate → record message (+ first revision, member revision as needed)
+- messageCreate → record message (+ first revision, member revision as needed, plus the
+  reply reference when Discord types the message as a reply)
 - messageUpdate → record revision (full snapshot)
 - messageDelete → record deletion
 - messageReactionAdd/Remove → a reaction event for every reactor and every emoji, plus a
@@ -489,6 +497,10 @@ when the sender switched it off, a distinction `<@id>` text matching cannot see 
   because Discord pings the owner for it.
 - Role mentions and `@everyone`/`@here` are deliberately excluded. No role tracking exists,
   and a broadcast ping is not personal triage. `mentions_list`'s description says so.
+- A reply whose sender switched the ping off stays out of `mentions_list`, and that is
+  right — Discord did not ping the owner for it. What it no longer does is disappear: the
+  reply reference below puts the answered message on the row wherever the reply shows up,
+  so a catch-up reads it as an answer even though triage never claimed it.
 - `activity_since` applies the same ping test, and says so: `countActivity` derives
   `pingsTheOwnerOrTheBot` with the identical two arms, over its own correlated
   latest-revision subquery rather than the digest's joined one. The two shapes cannot be
@@ -503,6 +515,42 @@ when the sender switched it off, a distinction `<@id>` text matching cannot see 
   stamped it. A week-old ping a backfill has just walked therefore raises the count at a
   cursor `mentions_list` answers nothing for. What the count says is that something new
   landed, not that reading with the same cursor returns exactly it.
+
+### What a message answers
+
+Discord renders a reply under a header naming the message it answers, and that header stays
+whether or not the sender left the ping on. Mention capture alone therefore leaves a hole:
+a reply whose sender switched the ping off carries no mention row, correctly stays out of
+`listMentions`, and used to read in a catch-up as a remark out of nowhere. The reply
+reference closes it, and it is a locator only — never a word of the answered message.
+
+- The seam gates on the message **type**, not on the presence of a reference. Forwards,
+  crossposts, pin notifications and thread starters all carry `message_reference` too, and
+  Discord draws no reply header for any of them, so only `MessageType.Reply` is captured —
+  Discord's own UI is the tiebreaker. `observeRepliedTo` in `app/ingest/gateway.server.ts`
+  makes that call for the live handler and for the REST backfill alike, and the live fetch's
+  transport repeats it against the raw payload's numeric `type`.
+- A partial locator is not stored. discord.js types a reference's `guildId` and `messageId`
+  as possibly absent, so a reference missing either — or missing the channel — is dropped
+  rather than half-recorded, because half a locator cannot rebuild a jump link and a null
+  column is not available to this schema.
+- The row lands in `insertMessageWithFirstRevision`, the one insert path both the gateway
+  and the backfill go through, so history and live traffic record the same fact and neither
+  path can forget it. A re-observed message returns before the insert, so re-delivery cannot
+  duplicate the row and the unique key never has to fire.
+- `messageUpdate` never re-captures it. Discord fixes a reply's target when the reply is
+  posted and an edit cannot move it, and `recordMessageEdit` skips a message the store has
+  never seen rather than creating one, so there is no edit path that could learn a reference
+  the create path missed.
+- The readers (`digestMessagesSince`, `listBookmarks`, `fetchMessage`) each select the
+  reference as one correlated `json_object`, left-joined to `messages` on the answered
+  snowflake — unique store-wide — and parse it into `repliedTo` at the boundary, exactly as
+  they already do for embeds and attachments. `messageId` is the store's own id when the
+  answered message was ingested and null when it was not, so an answer to history the bot
+  never walked still opens in Discord through `jumpUrl`.
+- Capture is forward-only, like embeds and attachments: a message ingested before this
+  existed carries `repliedTo` null forever. `messages_fetch` is the way out, and the only
+  place a live read outranks the store — see the live escape hatch below.
 
 ### What a message says outside its text
 
@@ -574,8 +622,9 @@ store without touching the network.
   the business layer stays vendor-free. The transport is duplicated rather than shared
   with sending — two small lazy clients beat one premature abstraction.
 - It writes no message *content*. The ingest daemon stays the only writer of messages,
-  revisions, embeds and attachments, so a live read can never rewrite recorded history or
-  resurrect content Discord deleted.
+  revisions, embeds, attachments and reply references, so a live read can never rewrite
+  recorded history or resurrect content Discord deleted — a reply reference it reads is
+  answered to the owner and thrown away, never appended.
 - The one message event a fetch does append is a **deletion**. When Discord answers
   `Unknown Message` for a message the store holds, the fetch has observed the same fact the
   gateway's `MESSAGE_DELETE` carries, so the transaction that records the `gone` failure
@@ -609,6 +658,13 @@ store without touching the network.
   differently. A custom emoji deleted from the server comes back nameless; the route
   resolves it by id alone, so the walk sends a stand-in name while the owner-facing emoji
   stays `:id`, never the string `null:id` and never `a::id`.
+- `repliedTo` is the one field where a retrieved read outranks the store. Every other
+  locator on the answer — `messageId`, `channelId`, `jumpUrl` — comes from the store under
+  every status, and `repliedTo` joins them on a skip or a failure. On a retrieval it is
+  whatever Discord's payload says instead, which is the whole point: a message ingested
+  before reply capture existed has nothing stored, and its live payload still carries the
+  reference. Discord fixes the target when the reply is posted, so the two can only differ
+  when one of them is silent.
 - The reactor walk is isolated from the read. A reaction listing Discord refuses cannot
   void a message it already handed over: the fetch still records a retrieval and answers
   `retrieved`, with `reactions` absent. Absent means *Discord would not say*; an empty array
