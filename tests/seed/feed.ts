@@ -56,6 +56,11 @@ type SeededMessage = {
   discordMessageId: string
   id: string
   jumpUrl: string
+  repliedTo: {
+    discordMessageId: string
+    jumpUrl: string
+    messageId: string
+  } | null
 }
 
 async function withADistinctInstant<Event>(recording: Promise<Event>) {
@@ -68,6 +73,20 @@ async function withADistinctInstant<Event>(recording: Promise<Event>) {
 
 function jumpUrl(discordChannelId: string, discordMessageId: string) {
   return `https://discord.com/channels/${ownerContext().owner.guildId}/${discordChannelId}/${discordMessageId}`
+}
+
+function observedReplyReference({
+  discordChannelId,
+  discordMessageId,
+}: {
+  discordChannelId: string
+  discordMessageId: string
+}) {
+  return {
+    discordChannelId,
+    discordGuildId: ownerContext().owner.guildId,
+    discordMessageId,
+  }
 }
 
 function member({
@@ -167,6 +186,7 @@ async function loseChannel(channel: SeededChannel) {
 }
 
 async function postMessage({
+  answering,
   attachments = [],
   author,
   channel,
@@ -175,6 +195,7 @@ async function postMessage({
   embeds = [],
   mentioning = [],
 }: {
+  answering?: SeededMessage
   attachments?: ObservedAttachment[]
   author: SeededMember
   channel: SeededChannel
@@ -204,6 +225,7 @@ async function postMessage({
         mentionedDiscordUserIds: mentioning.map(
           (member) => member.discordUserId
         ),
+        repliedTo: answering && observedReplyReference(answering),
       },
       ownerContext()
     )
@@ -219,6 +241,13 @@ async function postMessage({
     discordMessageId,
     id: messageId,
     jumpUrl: jumpUrl(channel.discordChannelId, discordMessageId),
+    repliedTo: answering
+      ? {
+          discordMessageId: answering.discordMessageId,
+          jumpUrl: answering.jumpUrl,
+          messageId: answering.id,
+        }
+      : null,
   }
 }
 
@@ -350,6 +379,7 @@ async function clearReactions({
 }
 
 function draftHistory({
+  answering,
   attachments = [],
   author,
   content,
@@ -359,6 +389,7 @@ function draftHistory({
   reactedTo = [],
   reactorsDiscordRefusedToList = false,
 }: {
+  answering?: { channel: SeededChannel; message: BackfilledMessage }
   attachments?: ObservedAttachment[]
   author: SeededMember
   content: string
@@ -382,6 +413,12 @@ function draftHistory({
           emoji: { animated: false, name: emoji },
           reactorDiscordUserIds: reactors.map((member) => member.discordUserId),
         })),
+    repliedTo:
+      answering &&
+      observedReplyReference({
+        discordChannelId: answering.channel.discordChannelId,
+        discordMessageId: answering.message.discordMessageId,
+      }),
   }
 }
 

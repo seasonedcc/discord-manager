@@ -1,6 +1,9 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { ownerCaps } from '~/business/auth.server'
-import type { ObservedAttachment } from '~/business/messages.common'
+import type {
+  ObservedAttachment,
+  ObservedReplyReference,
+} from '~/business/messages.common'
 import { db } from '~/db/db.server'
 import { env } from '~/env.server'
 import { newId } from '~/framework/db.server'
@@ -37,6 +40,7 @@ type MessageAttributes = {
   mentionedDiscordUserIds?: string[]
   embeds?: string[]
   attachments?: ObservedAttachment[]
+  repliedTo?: ObservedReplyReference
 }
 
 type BookmarkedMessageAttributes = MessageAttributes & {
@@ -200,6 +204,7 @@ async function createMessage({
   mentionedDiscordUserIds = [],
   embeds = [],
   attachments = [],
+  repliedTo,
 }: MessageAttributes = {}) {
   const resolvedChannelId = channelId ?? (await createChannel()).id
   const resolvedAuthorMemberId = authorMemberId ?? (await createMember()).id
@@ -266,6 +271,19 @@ async function createMessage({
               url,
             }))
           )
+          .execute()
+      }
+
+      if (repliedTo) {
+        await trx
+          .insertInto('messageReplyReferences')
+          .values({
+            id: newId(),
+            messageId: message.id,
+            repliedToDiscordChannelId: repliedTo.discordChannelId,
+            repliedToDiscordGuildId: repliedTo.discordGuildId,
+            repliedToDiscordMessageId: repliedTo.discordMessageId,
+          })
           .execute()
       }
 

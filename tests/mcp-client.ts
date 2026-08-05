@@ -74,16 +74,49 @@ type LiveReaction = {
 }
 
 type LiveMessage = {
+  answering?: { discordChannelId: string; discordMessageId: string }
+  answeringAMessageDiscordDoesNotName?: { discordChannelId: string }
   attachments?: { filename: string; size: number; url: string }[]
   content?: string
   embeds?: LiveEmbed[]
   flags?: number
+  forwarding?: { discordChannelId: string; discordMessageId: string }
   reactions?: LiveReaction[]
 }
+
+const replyMessageType = 19
+const defaultMessageType = 0
 
 function answer(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, { 'content-type': 'application/json' })
   response.end(JSON.stringify(body))
+}
+
+function messageTypeOf(held: LiveMessage) {
+  return held.answering || held.answeringAMessageDiscordDoesNotName
+    ? replyMessageType
+    : defaultMessageType
+}
+
+function messageReferenceOf(held: LiveMessage) {
+  const located = held.answering ?? held.forwarding
+
+  if (located) {
+    return {
+      channel_id: located.discordChannelId,
+      guild_id: serverEnvironment.DISCORD_GUILD_ID,
+      message_id: located.discordMessageId,
+    }
+  }
+
+  const unnamed = held.answeringAMessageDiscordDoesNotName
+
+  if (!unnamed) return undefined
+
+  return {
+    channel_id: unnamed.discordChannelId,
+    guild_id: serverEnvironment.DISCORD_GUILD_ID,
+  }
 }
 
 function reactionAnswersTo({ emoji }: LiveReaction, key: string) {
@@ -224,6 +257,8 @@ async function startDiscordDouble() {
       attachments: held.attachments ?? [],
       embeds: held.embeds ?? [],
       flags: held.flags ?? 0,
+      type: messageTypeOf(held),
+      message_reference: messageReferenceOf(held),
       reactions: (held.reactions ?? []).map((reaction) => ({
         count:
           reaction.reactorDiscordUserIds.length +

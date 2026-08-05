@@ -15,16 +15,23 @@ async function theOwnerBookmarksAMessage({
   const corrected = requireSeeded(messages, 'corrected', 'message')
   const mention = requireSeeded(messages, 'mention', 'message')
   const offsite = requireSeeded(messages, 'offsite', 'message')
+  const suppressedPing = requireSeeded(messages, 'suppressedPing', 'message')
   const maya = requireSeeded(members, 'maya', 'member')
 
   await feed.reactToMessage({ emoji: '🔖', message: offsite, reactor: owner })
   await feed.reactToMessage({ emoji: '🔖', message: alert, reactor: owner })
+  await feed.reactToMessage({
+    emoji: '🔖',
+    message: suppressedPing,
+    reactor: owner,
+  })
   await feed.reactToMessage({ emoji: '🔖', message: corrected, reactor: maya })
   await feed.reactToMessage({ emoji: '❤️', message: mention, reactor: owner })
 
   return {
     bookmarked: offsite,
     bookmarkedAlert: alert,
+    bookmarkedReply: suppressedPing,
     reactedByATeammate: corrected,
     reactedWithAnotherEmoji: mention,
   }

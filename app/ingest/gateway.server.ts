@@ -6,7 +6,7 @@ import type {
   MessageReaction,
   PartialMessage,
 } from 'discord.js'
-import { Events, MessageFlags, ReactionType } from 'discord.js'
+import { Events, MessageFlags, MessageType, ReactionType } from 'discord.js'
 import type { z } from 'zod'
 import { ownerContext } from '~/business/auth.server'
 import {
@@ -151,6 +151,20 @@ function observeAttachments(message: Message) {
     size,
     url,
   }))
+}
+
+function observeRepliedTo(message: Message) {
+  if (message.type !== MessageType.Reply) return undefined
+
+  const { channelId, guildId, messageId } = message.reference ?? {}
+
+  if (!channelId || !guildId || !messageId) return undefined
+
+  return {
+    discordChannelId: channelId,
+    discordGuildId: guildId,
+    discordMessageId: messageId,
+  }
 }
 
 async function wholeMessage(message: Message | PartialMessage) {
@@ -352,6 +366,7 @@ function makeChannelHistoryFetcher(client: Client): FetchChannelHistory {
         embeds: observeEmbeds(message),
         mentionedDiscordUserIds: [...message.mentions.users.keys()],
         reactions: await observeReactionsUnlessDiscordRefuses(message),
+        repliedTo: observeRepliedTo(message),
       }))
     )
   }
@@ -436,6 +451,7 @@ function registerGatewayListeners(
       discordMessageId: message.id,
       embeds: observeEmbeds(message),
       mentionedDiscordUserIds: [...message.mentions.users.keys()],
+      repliedTo: observeRepliedTo(message),
     })
   })
 

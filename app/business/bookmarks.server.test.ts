@@ -645,8 +645,37 @@ describe('listBookmarks', () => {
         deletedUpstream: false,
         jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
         reactions: [],
+        repliedTo: null,
       },
     ])
+  })
+
+  it('says which message a bookmarked reply answers', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const answered = await createMessage({ channelId: channel.id })
+    const message = await createBookmarkedMessage({
+      channelId: channel.id,
+      repliedTo: {
+        discordChannelId: channel.discordChannelId,
+        discordGuildId: guild.discordGuildId,
+        discordMessageId: answered.discordMessageId,
+      },
+    })
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const bookmarked = bookmarks.find(
+      ({ messageId }) => messageId === message.id
+    )
+
+    expect(bookmarked?.repliedTo).toEqual({
+      discordMessageId: answered.discordMessageId,
+      jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${answered.discordMessageId}`,
+      messageId: answered.id,
+    })
   })
 
   it('reads what a bookmarked alert says in its embeds and attachments', async () => {

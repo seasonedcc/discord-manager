@@ -11,6 +11,7 @@ import {
   messageAttachmentsSchema,
   messageEmbedsSchema,
   messageReactionsSchema,
+  storedRepliedTo,
 } from '~/business/messages.common'
 import { db } from '~/db/db.server'
 
@@ -37,6 +38,13 @@ const reactionsAsJsonArray = sql<string>`json_group_array(
     'ownerReacted', standing_reactions.owner_reacted
   ) order by first_appearances.first_appeared_at, first_appearances.first_appearance_id
 )`.as('reactions')
+
+const replyReferenceAsJson = sql<string>`json_object(
+  'discordChannelId', message_reply_references.replied_to_discord_channel_id,
+  'discordGuildId', message_reply_references.replied_to_discord_guild_id,
+  'discordMessageId', message_reply_references.replied_to_discord_message_id,
+  'messageId', replied_to_messages.id
+)`.as('replyReference')
 
 function standingReactionsOfTheMessage(ownerDiscordUserId: string) {
   const reactionEvents = db()
@@ -241,6 +249,16 @@ function digestMessagesSince({
         )
         .as('attachments'),
       standingReactionsOfTheMessage(ownerDiscordUserId).as('reactions'),
+      eb
+        .selectFrom('messageReplyReferences')
+        .leftJoin(
+          'messages as repliedToMessages',
+          'repliedToMessages.discordMessageId',
+          'messageReplyReferences.repliedToDiscordMessageId'
+        )
+        .select(replyReferenceAsJson)
+        .whereRef('messageReplyReferences.messageId', '=', 'messages.id')
+        .as('replyReference'),
     ])
     .orderBy('messages.discordCreatedAt', 'asc')
     .orderBy(sql`cast(messages.discord_message_id as integer)`, 'asc')
@@ -254,7 +272,14 @@ async function readDigest(query: ReturnType<typeof digestMessagesSince>) {
     messages: rows
       .slice(0, digestMessageLimit)
       .map(
-        ({ attachments, discordGuildId, embeds, reactions, ...message }) => ({
+        ({
+          attachments,
+          discordGuildId,
+          embeds,
+          reactions,
+          replyReference,
+          ...message
+        }) => ({
           ...message,
           attachments: messageAttachmentsSchema.parse(
             JSON.parse(attachments ?? '[]')
@@ -264,6 +289,7 @@ async function readDigest(query: ReturnType<typeof digestMessagesSince>) {
           reactions: messageReactionsSchema.parse(
             JSON.parse(reactions ?? '[]')
           ),
+          repliedTo: storedRepliedTo(replyReference),
         })
       ),
     truncated: rows.length > digestMessageLimit,

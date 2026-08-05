@@ -152,12 +152,16 @@ async function postMessage({
   discordCreatedAt,
   embeds = [],
   mentionedDiscordUserIds = [],
+  repliedTo,
 }: Pick<
   ObservedMessage,
   'author' | 'channel' | 'content' | 'discordCreatedAt'
 > &
   Partial<
-    Pick<ObservedMessage, 'attachments' | 'embeds' | 'mentionedDiscordUserIds'>
+    Pick<
+      ObservedMessage,
+      'attachments' | 'embeds' | 'mentionedDiscordUserIds' | 'repliedTo'
+    >
   >) {
   const discordMessageId = nextDiscordId()
 
@@ -171,11 +175,23 @@ async function postMessage({
       discordMessageId,
       embeds,
       mentionedDiscordUserIds,
+      repliedTo,
     } satisfies ObservedMessage,
     context
   )
 
   return { discordMessageId, messageId }
+}
+
+function answering(
+  channel: ObservedChannel,
+  message: { discordMessageId: string }
+) {
+  return {
+    discordChannelId: channel.discordChannelId,
+    discordGuildId: context.owner.guildId,
+    discordMessageId: message.discordMessageId,
+  }
 }
 
 function recordedByTheGateway(
@@ -300,6 +316,15 @@ await postMessage({
   content: 'Reading them now — I will leave comments before lunch.',
   discordCreatedAt: secondsAfterTheAnchor(4),
   mentionedDiscordUserIds: [context.owner.discordUserId],
+  repliedTo: answering(engineering, awaitingAnAnswer),
+})
+
+await postMessage({
+  author: maya,
+  channel: engineering,
+  content: 'Comments are in, nothing blocking.',
+  discordCreatedAt: secondsAfterTheAnchor(4.5),
+  repliedTo: answering(engineering, awaitingAnAnswer),
 })
 
 const alert = await postMessage({
@@ -498,5 +523,5 @@ await fromSuccess(
 await db().destroy()
 
 console.log(
-  `Seeded a development server: two channels, an archived thread, nine messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you that you answered with a 👍 rather than words, one reply that pinged you without naming you, one post from your own bot that two people answered — a reply that pinged it and a question that named it, both waiting in mentions_list alongside your own — reactions on two messages including a custom one and one a teammate took back, two bookmarks — one captured with the 🔖 reaction that still shows on the message and still sitting in Inbox, one filed under Answer later — one send Discord refused, one live fetch of that alert already recorded, and a finished history backfill on every channel, so ingestion_status reads as a bot that is connected and caught up. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
+  `Seeded a development server: two channels, an archived thread, ten messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you that you answered with a 👍 rather than words, one reply that pinged you without naming you and one whose sender switched the ping off, both saying which message they answer, one post from your own bot that two people answered — a reply that pinged it and a question that named it, both waiting in mentions_list alongside your own — reactions on two messages including a custom one and one a teammate took back, two bookmarks — one captured with the 🔖 reaction that still shows on the message and still sitting in Inbox, one filed under Answer later — one send Discord refused, one live fetch of that alert already recorded, and a finished history backfill on every channel, so ingestion_status reads as a bot that is connected and caught up. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
 )

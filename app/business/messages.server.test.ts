@@ -420,6 +420,112 @@ describe('fetchMessage', () => {
     expect(await telemetryOf(stranger.id).requests()).toHaveLength(0)
   })
 
+  it('says which message a reply answers from what Discord has now, even when the store never captured it', async () => {
+    const { channel, context, guild, message } = await fetchGround()
+    const answered = await createMessage({ channelId: channel.id })
+    const { transport } = answeringTransport({
+      repliedTo: {
+        discordChannelId: channel.discordChannelId,
+        discordGuildId: guild.discordGuildId,
+        discordMessageId: answered.discordMessageId,
+      },
+    })
+
+    const fetched = await fromSuccess(fetchMessage(transport))(
+      { messageId: message.id },
+      context
+    )
+
+    expect(retrieved(fetched.message).repliedTo).toEqual({
+      discordMessageId: answered.discordMessageId,
+      jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${answered.discordMessageId}`,
+      messageId: answered.id,
+    })
+  })
+
+  it('answers no reply reference when Discord says the message answers nothing, whatever the store captured', async () => {
+    const guild = await createGuild()
+    const context = await ownerContext({ guildId: guild.id })
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      repliedTo: {
+        discordChannelId: channel.discordChannelId,
+        discordGuildId: guild.discordGuildId,
+        discordMessageId: snowflake(),
+      },
+    })
+    const { transport } = answeringTransport()
+
+    const fetched = await fromSuccess(fetchMessage(transport))(
+      { messageId: message.id },
+      context
+    )
+
+    expect(retrieved(fetched.message).repliedTo).toBe(null)
+  })
+
+  it('falls back to the captured reply reference when Discord refuses the read', async () => {
+    const guild = await createGuild()
+    const context = await ownerContext({ guildId: guild.id })
+    const channel = await createChannel({ guildId: guild.id })
+    const answered = await createMessage({ channelId: channel.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      repliedTo: {
+        discordChannelId: channel.discordChannelId,
+        discordGuildId: guild.discordGuildId,
+        discordMessageId: answered.discordMessageId,
+      },
+    })
+
+    const fetched = await fromSuccess(
+      fetchMessage(throwingTransport(new MessageFetchRejectedError('nope')))
+    )({ messageId: message.id }, context)
+
+    expect(fetched.message.status).toBe('failed')
+    expect(fetched.message.repliedTo).toEqual({
+      discordMessageId: answered.discordMessageId,
+      jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${answered.discordMessageId}`,
+      messageId: answered.id,
+    })
+  })
+
+  it('falls back to the captured reply reference when the store already recorded the deletion', async () => {
+    const guild = await createGuild()
+    const context = await ownerContext({ guildId: guild.id })
+    const channel = await createChannel({ guildId: guild.id })
+    const unseenDiscordChannelId = snowflake()
+    const unseenDiscordMessageId = snowflake()
+    const message = await createMessage({
+      channelId: channel.id,
+      repliedTo: {
+        discordChannelId: unseenDiscordChannelId,
+        discordGuildId: guild.discordGuildId,
+        discordMessageId: unseenDiscordMessageId,
+      },
+    })
+
+    await db()
+      .insertInto('messageDeletions')
+      .values({ id: newId(), messageId: message.id })
+      .execute()
+
+    const { requests, transport } = answeringTransport()
+    const fetched = await fromSuccess(fetchMessage(transport))(
+      { messageId: message.id },
+      context
+    )
+
+    expect(requests).toEqual([])
+    expect(fetched.message.status).toBe('skipped')
+    expect(fetched.message.repliedTo).toEqual({
+      discordMessageId: unseenDiscordMessageId,
+      jumpUrl: `https://discord.com/channels/${guild.discordGuildId}/${unseenDiscordChannelId}/${unseenDiscordMessageId}`,
+      messageId: null,
+    })
+  })
+
   it('fails a context that cannot read messages', async () => {
     const { context, message } = await fetchGround()
     const { transport } = answeringTransport()

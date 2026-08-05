@@ -307,7 +307,7 @@ const seedDemonstrations: Record<
   },
   messages_catch_up: {
     demonstrates:
-      'a digest carrying text, an embed, an attachment and reactions',
+      'a digest carrying text, an embed, an attachment, reactions and a reply saying which message it answers',
     prove: async (context) => {
       const since = anInstantBeforeTheSeedRan()
       const { messages } = await fromSuccess(catchUpSince)({ since }, context)
@@ -318,6 +318,12 @@ const seedDemonstrations: Record<
         )
       }
 
+      const answers = messages.filter(({ repliedTo }) => repliedTo !== null)
+      const resolved = answers.filter(
+        ({ repliedTo }) =>
+          repliedTo?.messageId &&
+          messages.some(({ messageId }) => messageId === repliedTo.messageId)
+      )
       const carried = [
         ['an embed', messages.some(({ embeds }) => embeds.length > 0)],
         [
@@ -325,6 +331,11 @@ const seedDemonstrations: Record<
           messages.some(({ attachments }) => attachments.length > 0),
         ],
         ['a reaction', messages.some(({ reactions }) => reactions.length > 0)],
+        ['a reply reference', answers.length > 0],
+        [
+          'a reply reference pointing at a message in the same digest',
+          resolved.length > 0,
+        ],
       ] as const
 
       for (const [what, present] of carried) {
@@ -347,7 +358,7 @@ const seedDemonstrations: Record<
         )
       }
 
-      return `${messages.length} messages, ${narrowed.messages.length} of them in one channel`
+      return `${messages.length} messages, ${narrowed.messages.length} of them in one channel, ${answers.length} of them answering another message`
     },
   },
   messages_count: {

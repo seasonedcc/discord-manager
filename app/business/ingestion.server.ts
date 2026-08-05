@@ -19,9 +19,11 @@ import {
 import {
   type ObservedAttachment,
   type ObservedEmbed,
+  type ObservedReplyReference,
   observedAttachmentSchema,
   observedEmbedSchema,
   observedEmojiSchema,
+  observedReplyReferenceSchema,
   renderEmbed,
   renderEmoji,
 } from './messages.common'
@@ -99,6 +101,7 @@ const recordIncomingMessageSchema = z.object({
   discordMessageId: z.string().min(1),
   embeds: observedEmbedsSchema.default([]),
   mentionedDiscordUserIds: mentionedDiscordUserIdsSchema,
+  repliedTo: observedReplyReferenceSchema.optional(),
 })
 
 const recordMessageDeletionSchema = z.object({
@@ -486,6 +489,7 @@ async function insertMessageWithFirstRevision(
     discordMessageId: string
     embeds: ObservedEmbed[]
     mentionedDiscordUserIds: string[]
+    repliedTo: ObservedReplyReference | undefined
   }
 ) {
   const inserted = await trx
@@ -518,6 +522,19 @@ async function insertMessageWithFirstRevision(
     mentionedDiscordUserIds: values.mentionedDiscordUserIds,
     messageId: inserted.id,
   })
+
+  if (values.repliedTo) {
+    await trx
+      .insertInto('messageReplyReferences')
+      .values({
+        id: newId(),
+        messageId: inserted.id,
+        repliedToDiscordChannelId: values.repliedTo.discordChannelId,
+        repliedToDiscordGuildId: values.repliedTo.discordGuildId,
+        repliedToDiscordMessageId: values.repliedTo.discordMessageId,
+      })
+      .execute()
+  }
 
   return { messageId: inserted.id, outcome: 'recorded' as const }
 }
@@ -697,6 +714,7 @@ const recordIncomingMessage = applySchema(
         discordMessageId: input.discordMessageId,
         embeds: input.embeds,
         mentionedDiscordUserIds: input.mentionedDiscordUserIds,
+        repliedTo: input.repliedTo,
       })
     })
 })
@@ -1231,6 +1249,7 @@ async function storeBackfilledPage(
           discordMessageId: message.discordMessageId,
           embeds: message.embeds,
           mentionedDiscordUserIds: message.mentionedDiscordUserIds,
+          repliedTo: message.repliedTo,
         })
 
         if (stored.outcome !== 'recorded') continue

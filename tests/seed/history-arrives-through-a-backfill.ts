@@ -47,14 +47,27 @@ async function historyArrivesThroughABackfill({
     discordCreatedAt: clock.at(4),
     reactorsDiscordRefusedToList: true,
   })
+  const answeredTheWelcome = feed.draftHistory({
+    answering: { channel, message: welcome },
+    author: priya,
+    content: 'Good riddance to that group chat.',
+    discordCreatedAt: clock.at(4.5),
+  })
 
   const walked = await feed.backfillChannel({
     channel,
-    history: [welcome, handbookNote, keptForLater, reactedToOutOfSight],
+    history: [
+      welcome,
+      handbookNote,
+      keptForLater,
+      reactedToOutOfSight,
+      answeredTheWelcome,
+    ],
   })
 
   return {
     ...walked,
+    answeredInHistory: { answered: welcome, message: answeredTheWelcome },
     reactionsUnread: { channel, message: reactedToOutOfSight },
     bookmarkedInDiscord: {
       message: keptForLater,
