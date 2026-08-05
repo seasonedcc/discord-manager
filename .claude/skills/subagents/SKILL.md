@@ -74,6 +74,12 @@ Measured in this repo (issues #68/#69, 2026-08, opus/xhigh build and remediation
 - **Remediation lane on an existing branch**, confirming the fixes-not-branch-size curve at its small end: 3 fixes (a boundary test, a doc-list entry, a copy sentence) with a live-proof redo landed at **9%**; 4 fixes — a TDD'd Unicode-matching change, mutation-proofed ordering tests, a personal-data scrub across code and PR body, and a live-proof redo — at **13%**.
 - **Review fan-out** (3 sonnet finders + 1 verifier per finding over 620–800-line diffs): 6 agents per review, finders **9–13%**, verifiers **3–5%**.
 
+Measured in this repo (issue #77, 2026-08, opus/xhigh build and remediation lanes, sonnet/xhigh reviewers):
+
+- **Full-feature build lane, one agent** — a migration plus capture at both ingest seams (gateway and REST backfill), a new per-message field threaded through all four readers (two shared-query, one repeated-shape, one live-fetch transport), 16 unit tests, 3 E2E specs with harness plumbing, dev seed, docs, a live stdio proof, and draft-PR authorship (+1038/−20 over 30 files) — landed at **35%** (351k). Diff size under-predicts this shape: at a third of the reactions slice's added lines (+3129 → 35%) it hit the same ceiling, because cost tracks the count of distinct seams and read surfaces touched, not lines. Treat capture-plus-every-reader as at the single-lane ceiling at any diff size: split capture from exposure, or budget for the lane finishing right at the line.
+- **Remediation lane on an existing branch**: 3 review fixes (a test-double lever plus E2E spec, a seed-journey/spec pair, a type-alias inline) with mutation proofs, a PR-body correction, and a live-proof redo landed at **18%** — on the fixes-not-branch-size curve with the proof redo priced as roughly two extra fixes.
+- **Review fan-out** (3 sonnet finders + 1 verifier per finding over a ~1k-line diff, charter carrying a 10-item accepted-decisions list): finders **16–24%**, verifiers **4–8%**. A decision-rich charter pushes finders above the historical 9–20% band — every finder reads and probes the accepted-decisions list rather than skipping it, and that work is part of the fan-out's price.
+
 ## Measure a live or finished agent's context
 
 Transcripts record per-turn token usage. Extract just the numbers — never read the JSONL wholesale (it overflows the reader's own window). The last turn's `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` is that agent's current context occupancy:
