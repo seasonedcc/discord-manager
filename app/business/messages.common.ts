@@ -56,8 +56,6 @@ type ObservedAttachment = z.infer<typeof observedAttachmentSchema>
 
 type ObservedReplyReference = z.infer<typeof observedReplyReferenceSchema>
 
-type StoredReplyReference = z.infer<typeof storedReplyReferenceSchema>
-
 type ObservedReaction = {
   count: number
   emoji: string
@@ -238,7 +236,7 @@ function repliedTo({
   discordGuildId,
   discordMessageId,
   messageId,
-}: StoredReplyReference) {
+}: z.infer<typeof storedReplyReferenceSchema>) {
   return {
     discordMessageId,
     jumpUrl: `https://discord.com/channels/${discordGuildId}/${discordChannelId}/${discordMessageId}`,
