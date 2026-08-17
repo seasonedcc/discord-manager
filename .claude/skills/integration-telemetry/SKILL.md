@@ -84,6 +84,8 @@ Failure kinds come from the vendor's own documented error codes for the operatio
 
 Raw Discord text may be recorded on the failure row, because what the vendor said is a fact worth keeping. It never leaves the store: no tool result and no derived reading reads that column.
 
+Copy for a derived status must be true under every history that can produce the status, not just the youngest one. Latest-event-wins reads only the newest event, so a store that reaches a status late keeps everything earlier events ingested — a channel can enter a permission-denied state after months of stored history, and a summary claiming its messages are absent is false there while true on a fresh store. Before shipping a summary or next action, enumerate the histories that produce the status and cut any claim that fails one of them.
+
 ## Progress, activity, and honest denominators
 
 A progress reading needs a true denominator. A backfill has one — each channel's run records a synced count against a real total in `backfill_run_progress` as it walks — so it reports progress. A fan-out with a countable set of requests states counts instead, one filtered aggregate per reading:
