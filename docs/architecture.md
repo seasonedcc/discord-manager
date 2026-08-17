@@ -242,10 +242,11 @@ skip-reason enum; no shared framework, no shared enums:
 - `message_send_requests` / `...reply_targets` / `...retries` / `...deliveries` /
   `...failures` (with a `kind` of `rejected` or `unreachable`) / `...skips` — MCP sends.
 - `backfill_runs` / `backfill_run_progress` / `...completions` / `...failures` /
-  `...unread_reactions` — REST history backfills. Each channel's newest run gives a state,
-  and the reading rolls those states up worst-first into counts, the names of the channels
-  whose newest run failed, the names of those whose newest run stored messages Discord
-  would not list the reactors of, and how many channels no run has ever visited.
+  `...unread_reactions` / `...unavailabilities` — REST history backfills. Each channel's
+  newest run gives a state, and the reading rolls those states up worst-first into counts,
+  the names of the channels whose newest run failed, the names of those whose newest run
+  stored messages Discord would not list the reactors of, the names of those Discord
+  will not let the bot read at all, and how many channels no run has ever visited.
 - `gateway_connections` / `gateway_heartbeats` / `gateway_disconnections` — activity
   derivation reads `receiving | quiet | never` from the newest sign of life against a
   named silence-threshold constant, so a daemon that died without disconnecting goes
@@ -453,14 +454,19 @@ bot ever saw. `channel_archivings` / `channel_unarchivings` carry that signal:
   It runs before the sweep is enqueued. A failed fetch degrades to the old behavior — the
   connection is still recorded, the sweep still runs, and nothing is marked archived.
 - `listBackfillableChannels` skips a channel only when its latest archived-pair event is an
-  archiving **and** a `backfill_runs` row for that channel is newer than that archiving.
+  archiving **and** a **completed** `backfill_runs` row for that channel is newer than that
+  archiving.
 
 That last rule is what keeps the change lossless. A thread that archives — whether observed
-live or discovered by reconciliation after downtime — is swept exactly once more, which is
-what collects the messages posted just before it went quiet, and drops out of every later
-sweep. A revived thread re-enters the sweep and its gap is filled. A thread that was never
-archived is always swept. At a millisecond tie the thread is swept again, which costs one
-REST call and loses nothing.
+live or discovered by reconciliation after downtime — is swept until one sweep completes,
+which is what collects the messages posted just before it went quiet, and drops out of every
+later sweep. Only a completion spends the final sweep: an attempt that Discord denied, that
+stopped on an error, or that hit the page limit still owes it, so the thread is re-attempted
+on the next reconnect exactly like a live channel — a denial heals to `unavailable` (or to
+`completed` once an admin grants access), and a long thread keeps advancing a page-limit
+stop instead of stranding its history behind a spent sweep. A revived thread re-enters the
+sweep and its gap is filled. A thread that was never archived is always swept. At a
+millisecond tie the thread is swept again, which costs one REST call and loses nothing.
 
 ### Mentions mean what Discord means
 
@@ -587,6 +593,22 @@ plain data, and written in the same transaction as the revision they belong to.
   work that finished. A newest run carrying a completion **and** an unread-reactions row
   reads `reactionsUnread` instead, with its own copy and its own
   `reactionsUnreadChannelNames`, ranked below `running` and above `completed`.
+- **A permission denial is an outcome of its own, not a failure either.**
+  `makeChannelHistoryFetcher` maps a `DiscordAPIError` carrying `Missing Access` (50001) or
+  `Missing Permissions` (50013) — from either the channel lookup or the message page — into
+  `ChannelHistoryUnavailableError`, and `runChannelBackfill` answers it with a single
+  `backfill_run_unavailabilities` row and no rethrow. Both codes are permanent
+  authorization boundaries whose remedy is the same sentence, so one kind covers them and
+  everything else still reaches `backfill_run_failures` untouched. A newest run carrying
+  that row reads `unavailable`, with its own copy and its own `unavailableChannelNames`,
+  ranked below `reactionsUnread` and above `completed` — every actionable state outranks
+  it, and a store that cannot see a channel never claims to be fully caught up.
+- **No retry, but no exclusion either.** Not rethrowing keeps the scheduler from burning
+  five attempts on a permission that cannot change inside its backoff, and the copy says so:
+  nothing to fix unless the owner wants those channels, in which case a server admin — who
+  may not be the owner — grants View Channel and Read Message History. Denied channels stay
+  in `listBackfillableChannels`, so the next gateway connect re-attempts each one exactly
+  once, and a permission granted later heals the reading with no bookkeeping to undo.
 - Embeds cross into the business layer **structured** and are rendered once, on the way in,
   by `renderEmbed` in `app/business/messages.common.ts` — author, title with its link,
   description, each field as `name: value`, image, thumbnail, footer, timestamp, empty

@@ -195,7 +195,7 @@ const seedDemonstrations: Record<
 > = {
   ingestion_status: {
     demonstrates:
-      'a bot receiving from Discord right now, with every channel already backfilled',
+      'a bot receiving from Discord right now, with every channel it may read already backfilled and one Discord denies it named as unavailable',
     prove: async (context) => {
       const { ingestion } = await fromSuccess(readIngestionStatus)({}, context)
 
@@ -214,13 +214,27 @@ const seedDemonstrations: Record<
         )
       }
 
-      if (ingestion.backfill.status !== 'completed') {
+      if (ingestion.backfill.status !== 'unavailable') {
         throw new Error(
-          `the seeded store makes the backfill read as "${ingestion.backfill.status}", so the demo promises work no daemon will ever finish against a demo store`
+          `the seeded store makes the backfill read as "${ingestion.backfill.status}", so the demo never shows a channel Discord denies standing apart from a backfill that broke`
         )
       }
 
-      return `gateway ${ingestion.gateway.activity}, backfill ${ingestion.backfill.status} across ${ingestion.backfill.channels.completed} channels`
+      if (ingestion.backfill.unavailableChannelNames.length !== 1) {
+        throw new Error(
+          `the seeded store names ${ingestion.backfill.unavailableChannelNames.length} channels as unavailable, so the demo cannot show one denied channel among readable ones`
+        )
+      }
+
+      if (ingestion.backfill.channels.completed === 0) {
+        throw new Error(
+          'the seeded store finishes no backfill, so the demo shows a denied channel with nothing to contrast it against'
+        )
+      }
+
+      const [denied] = ingestion.backfill.unavailableChannelNames
+
+      return `gateway ${ingestion.gateway.activity}, backfill ${ingestion.backfill.status} with ${ingestion.backfill.channels.completed} channels finished and #${denied} denied`
     },
   },
   channels_list: {

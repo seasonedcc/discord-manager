@@ -154,6 +154,19 @@ function channelBackfillStates(guildId: string) {
         )
         .then('failed')
         .when(
+          eb.exists(
+            eb
+              .selectFrom('backfillRunUnavailabilities')
+              .select('backfillRunUnavailabilities.id')
+              .whereRef(
+                'backfillRunUnavailabilities.backfillRunId',
+                '=',
+                'newestRuns.id'
+              )
+          )
+        )
+        .then('unavailable')
+        .when(
           eb.and([
             eb.exists(
               eb
@@ -217,6 +230,7 @@ function worstChannelState({
     reactionsUnread: number
     running: number
     stalled: number
+    unavailable: number
   }
   neverRanChannelCount: number
 }): BackfillStatus {
@@ -224,6 +238,7 @@ function worstChannelState({
   if (channels.stalled > 0) return 'stalled'
   if (channels.running > 0 || neverRanChannelCount > 0) return 'running'
   if (channels.reactionsUnread > 0) return 'reactionsUnread'
+  if (channels.unavailable > 0) return 'unavailable'
   if (channels.completed > 0) return 'completed'
 
   return 'never'
@@ -256,6 +271,7 @@ const readIngestionStatus = applySchema(
     reactionsUnread: channelsIn('reactionsUnread').length,
     running: channelsIn('running').length,
     stalled: channelsIn('stalled').length,
+    unavailable: channelsIn('unavailable').length,
   }
   const neverRanChannelCount = channelsIn('neverRan').length
   const status = worstChannelState({ channels, neverRanChannelCount })
@@ -276,6 +292,9 @@ const readIngestionStatus = applySchema(
         neverRanChannelCount,
         failedChannelNames: channelsIn('failed').map(({ name }) => name),
         reactionsUnreadChannelNames: channelsIn('reactionsUnread').map(
+          ({ name }) => name
+        ),
+        unavailableChannelNames: channelsIn('unavailable').map(
           ({ name }) => name
         ),
         fetchedMessageCount: states.reduce(

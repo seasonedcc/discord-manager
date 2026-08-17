@@ -16,6 +16,7 @@ type IngestionStatus = {
         reactionsUnread: number
         running: number
         stalled: number
+        unavailable: number
       }
       failedChannelNames: string[]
       fetchedMessageCount: number
@@ -26,6 +27,7 @@ type IngestionStatus = {
       status: string
       storedMessageCount: number
       summary: string
+      unavailableChannelNames: string[]
     }
     gateway: {
       activity: string
@@ -40,7 +42,7 @@ type IngestionStatus = {
 }
 
 test('ingestion status owns up to the channels no backfill has visited', async () => {
-  const { archiving, backfill, clock } = fixtures()
+  const { archiving, backfill, clock, outOfReach } = fixtures()
   const [finalSweep] = archiving.finalSweep.runs
   const session = await openMcpSession()
 
@@ -72,6 +74,7 @@ test('ingestion status owns up to the channels no backfill has visited', async (
     reactionsUnread: 1,
     running: 0,
     stalled: 0,
+    unavailable: 1,
   })
   const { channels } = await session.call<ChannelList>('channels_list')
   const visited = Object.values(ingestion.backfill.channels).reduce(
@@ -87,6 +90,9 @@ test('ingestion status owns up to the channels no backfill has visited', async (
   assert.deepEqual(ingestion.backfill.failedChannelNames, [])
   assert.deepEqual(ingestion.backfill.reactionsUnreadChannelNames, [
     backfill.reactionsUnread.channel.name,
+  ])
+  assert.deepEqual(ingestion.backfill.unavailableChannelNames, [
+    outOfReach.channel.name,
   ])
   assert.equal(
     ingestion.backfill.fetchedMessageCount,

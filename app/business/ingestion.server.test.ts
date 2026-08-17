@@ -10,6 +10,7 @@ import {
 } from '~/test/fixtures'
 import { db, describe, expect, it, vi } from '~/test/prelude'
 import type { BackfilledMessage, FetchChannelHistory } from './ingestion.common'
+import { ChannelHistoryUnavailableError } from './ingestion.common'
 import {
   backfillChannel,
   backfillIngestedChannels,
@@ -2041,27 +2042,34 @@ describe('recordMessageReactionClearing', () => {
 })
 
 async function backfillTelemetryOf(backfillRunId: string) {
-  const [completions, failures, progress] = await Promise.all([
-    db()
-      .selectFrom('backfillRunCompletions')
-      .selectAll()
-      .where('backfillRunId', '=', backfillRunId)
-      .execute(),
-    db()
-      .selectFrom('backfillRunFailures')
-      .selectAll()
-      .where('backfillRunId', '=', backfillRunId)
-      .execute(),
-    db()
-      .selectFrom('backfillRunProgress')
-      .selectAll()
-      .where('backfillRunId', '=', backfillRunId)
-      .orderBy('createdAt', 'asc')
-      .orderBy('id', 'asc')
-      .execute(),
-  ])
+  const [completions, failures, progress, unavailabilities] = await Promise.all(
+    [
+      db()
+        .selectFrom('backfillRunCompletions')
+        .selectAll()
+        .where('backfillRunId', '=', backfillRunId)
+        .execute(),
+      db()
+        .selectFrom('backfillRunFailures')
+        .selectAll()
+        .where('backfillRunId', '=', backfillRunId)
+        .execute(),
+      db()
+        .selectFrom('backfillRunProgress')
+        .selectAll()
+        .where('backfillRunId', '=', backfillRunId)
+        .orderBy('createdAt', 'asc')
+        .orderBy('id', 'asc')
+        .execute(),
+      db()
+        .selectFrom('backfillRunUnavailabilities')
+        .selectAll()
+        .where('backfillRunId', '=', backfillRunId)
+        .execute(),
+    ]
+  )
 
-  return { completions, failures, progress }
+  return { completions, failures, progress, unavailabilities }
 }
 
 describe('runChannelBackfill', () => {
@@ -2574,6 +2582,47 @@ describe('runChannelBackfill', () => {
     expect(telemetry.completions).toHaveLength(0)
   })
 
+  it('records a channel Discord will not let it read as unavailable rather than failed', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const fetchChannelHistory: FetchChannelHistory = async () => {
+      throw new ChannelHistoryUnavailableError('Missing Access')
+    }
+
+    const result = await fromSuccess(runChannelBackfill)(
+      { channelId: channel.id, fetchChannelHistory },
+      ownerContextFor(guild)
+    )
+
+    expect(result.outcome).toBe('channel_history_unavailable')
+
+    const telemetry = await backfillTelemetryOf(result.backfillRunId)
+
+    expect(telemetry.unavailabilities).toHaveLength(1)
+    expect(telemetry.failures).toHaveLength(0)
+    expect(telemetry.completions).toHaveLength(0)
+  })
+
+  it('keeps a channel Discord will not let it read away from the scheduler', async () => {
+    const guild = await configuredGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const fetchChannelHistory: FetchChannelHistory = async () => {
+      throw new ChannelHistoryUnavailableError('Missing Access')
+    }
+
+    await expect(
+      backfillChannel.run({ channelId: channel.id, fetchChannelHistory })
+    ).resolves.toBeUndefined()
+
+    const runs = await db()
+      .selectFrom('backfillRuns')
+      .select('id')
+      .where('channelId', '=', channel.id)
+      .execute()
+
+    expect(runs).toHaveLength(1)
+  })
+
   it('records a failure, not a completion, when it stops at the page limit', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
@@ -2668,6 +2717,60 @@ function recordBackfillRunFor(channelId: string, createdAt: string) {
     .execute()
 }
 
+async function recordCompletedBackfillRunFor(
+  channelId: string,
+  createdAt: string
+) {
+  const runId = newId()
+  await db()
+    .insertInto('backfillRuns')
+    .values({ channelId, createdAt, id: runId })
+    .execute()
+  await db()
+    .insertInto('backfillRunCompletions')
+    .values({
+      backfillRunId: runId,
+      fetchedMessageCount: 0,
+      id: newId(),
+      storedMessageCount: 0,
+    })
+    .execute()
+}
+
+async function recordFailedBackfillRunFor(
+  channelId: string,
+  createdAt: string
+) {
+  const runId = newId()
+  await db()
+    .insertInto('backfillRuns')
+    .values({ channelId, createdAt, id: runId })
+    .execute()
+  await db()
+    .insertInto('backfillRunFailures')
+    .values({
+      backfillRunId: runId,
+      errorMessage: 'Discord answered 500',
+      id: newId(),
+    })
+    .execute()
+}
+
+async function recordDeniedBackfillRunFor(
+  channelId: string,
+  createdAt: string
+) {
+  const runId = newId()
+  await db()
+    .insertInto('backfillRuns')
+    .values({ channelId, createdAt, id: runId })
+    .execute()
+  await db()
+    .insertInto('backfillRunUnavailabilities')
+    .values({ backfillRunId: runId, id: newId() })
+    .execute()
+}
+
 async function anInstantAfterArchiving(channel: { id: string }) {
   const archiving = await db()
     .selectFrom('channelArchivings')
@@ -2727,7 +2830,10 @@ describe('listBackfillableChannels', () => {
 
     expect(owedTheFinalSweep.map((channel) => channel.id)).toEqual([thread.id])
 
-    await recordBackfillRunFor(thread.id, await anInstantAfterArchiving(thread))
+    await recordCompletedBackfillRunFor(
+      thread.id,
+      await anInstantAfterArchiving(thread)
+    )
 
     const afterTheFinalSweep = await fromSuccess(listBackfillableChannels)(
       {},
@@ -2735,6 +2841,44 @@ describe('listBackfillableChannels', () => {
     )
 
     expect(afterTheFinalSweep.map((channel) => channel.id)).toEqual([])
+  })
+
+  it('still owes the final sweep when the post-archiving backfill stopped on an error', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+    await recordFailedBackfillRunFor(
+      thread.id,
+      await anInstantAfterArchiving(thread)
+    )
+
+    const channels = await fromSuccess(listBackfillableChannels)({}, context)
+
+    expect(channels.map((channel) => channel.id)).toEqual([thread.id])
+  })
+
+  it('still owes the final sweep when Discord denied the post-archiving backfill', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await fromSuccess(recordChannelArchiving)(
+      { discordChannelId: thread.discordChannelId },
+      context
+    )
+    await recordDeniedBackfillRunFor(
+      thread.id,
+      await anInstantAfterArchiving(thread)
+    )
+
+    const channels = await fromSuccess(listBackfillableChannels)({}, context)
+
+    expect(channels.map((channel) => channel.id)).toEqual([thread.id])
   })
 
   it('still owes the final sweep when the only backfill ran before the archiving', async () => {
@@ -2762,7 +2906,10 @@ describe('listBackfillableChannels', () => {
       { discordChannelId: thread.discordChannelId },
       context
     )
-    await recordBackfillRunFor(thread.id, await anInstantAfterArchiving(thread))
+    await recordCompletedBackfillRunFor(
+      thread.id,
+      await anInstantAfterArchiving(thread)
+    )
     await fromSuccess(recordChannelUnarchiving)(
       { discordChannelId: thread.discordChannelId },
       context

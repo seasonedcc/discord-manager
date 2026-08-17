@@ -5,6 +5,7 @@ import { aThreadArchivesWhileTheBotIsAway } from './a-thread-archives-while-the-
 import { aWorkdayOfConversation } from './a-workday-of-conversation'
 import { anAlertArrivesAsAnEmbed } from './an-alert-arrives-as-an-embed'
 import { readClock } from './clock'
+import { discordKeepsAChannelOutOfTheBotsReach } from './discord-keeps-a-channel-out-of-the-bots-reach'
 import { feed } from './feed'
 import { historyArrivesThroughABackfill } from './history-arrives-through-a-backfill'
 import { theBotPostsAndSomebodyAnswers } from './the-bot-posts-and-somebody-answers'
@@ -43,6 +44,7 @@ async function feedEveryJourney() {
     members,
     owner,
   })
+  const outOfReach = await discordKeepsAChannelOutOfTheBotsReach()
   const messages = await aWorkdayOfConversation({
     channels,
     clock,
@@ -90,6 +92,7 @@ async function feedEveryJourney() {
     channels: {
       ...channels,
       hotfixThread: archiving.hotfixThread,
+      leadership: outOfReach.channel,
       lobby,
       releaseThread,
       retiredStandup,
@@ -98,6 +101,7 @@ async function feedEveryJourney() {
     guild,
     members,
     messages,
+    outOfReach,
     owner,
     reactions,
   }

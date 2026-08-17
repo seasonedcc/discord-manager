@@ -141,10 +141,12 @@ describe('readIngestionStatus', () => {
         reactionsUnread: 0,
         running: 0,
         stalled: 0,
+        unavailable: 0,
       },
       failedChannelNames: [],
       neverRanChannelCount: 0,
       reactionsUnreadChannelNames: [],
+      unavailableChannelNames: [],
       fetchedMessageCount: 250,
       storedMessageCount: 90,
       lastRunStartedAt: run.createdAt,
@@ -225,7 +227,7 @@ describe('readIngestionStatus', () => {
       .values({
         id: newId(),
         backfillRunId: run.id,
-        errorMessage: 'Missing Access',
+        errorMessage: 'Discord answered 500',
       })
       .execute()
 
@@ -301,7 +303,7 @@ describe('readIngestionStatus', () => {
       .values({
         id: newId(),
         backfillRunId: failedRun.id,
-        errorMessage: 'Missing Access',
+        errorMessage: 'Discord answered 500',
       })
       .execute()
     await db()
@@ -323,6 +325,156 @@ describe('readIngestionStatus', () => {
       status: 'failed',
       channels: { completed: 1, failed: 1, running: 0, stalled: 0 },
       ...backfillStatusCopy.failed,
+    })
+  })
+
+  it('names the channels Discord will not let the bot read', async () => {
+    const guild = await createGuild()
+    const denied = await createChannel({
+      guildId: guild.id,
+      name: 'leadership',
+    })
+    const finished = await createChannel({ guildId: guild.id })
+    const deniedRun = await startBackfillRun(denied.id)
+    const completedRun = await startBackfillRun(finished.id)
+
+    await db()
+      .insertInto('backfillRunUnavailabilities')
+      .values({ id: newId(), backfillRunId: deniedRun.id })
+      .execute()
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: completedRun.id,
+        fetchedMessageCount: 8,
+        storedMessageCount: 8,
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'unavailable',
+      channels: {
+        completed: 1,
+        failed: 0,
+        reactionsUnread: 0,
+        running: 0,
+        stalled: 0,
+        unavailable: 1,
+      },
+      unavailableChannelNames: ['leadership'],
+      ...backfillStatusCopy.unavailable,
+    })
+  })
+
+  it('reads a channel Discord let the bot back into as backfilled', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const deniedRun = await startBackfillRun(channel.id, minutesAgo(120))
+    const allowedRun = await startBackfillRun(channel.id, minutesAgo(1))
+
+    await db()
+      .insertInto('backfillRunUnavailabilities')
+      .values({ id: newId(), backfillRunId: deniedRun.id })
+      .execute()
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: allowedRun.id,
+        fetchedMessageCount: 5,
+        storedMessageCount: 5,
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'completed',
+      channels: { completed: 1, unavailable: 0 },
+      unavailableChannelNames: [],
+    })
+  })
+
+  it('still speaks for the failed channel when another one is unavailable', async () => {
+    const guild = await createGuild()
+    const failing = await createChannel({ guildId: guild.id })
+    const denied = await createChannel({ guildId: guild.id })
+    const failedRun = await startBackfillRun(failing.id)
+    const deniedRun = await startBackfillRun(denied.id)
+
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        id: newId(),
+        backfillRunId: failedRun.id,
+        errorMessage: 'Discord answered 500',
+      })
+      .execute()
+    await db()
+      .insertInto('backfillRunUnavailabilities')
+      .values({ id: newId(), backfillRunId: deniedRun.id })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'failed',
+      channels: { failed: 1, unavailable: 1 },
+      ...backfillStatusCopy.failed,
+    })
+  })
+
+  it('still speaks for the channel whose reactions went unread when another one is unavailable', async () => {
+    const guild = await createGuild()
+    const partial = await createChannel({ guildId: guild.id })
+    const denied = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: partial.id })
+    const partialRun = await startBackfillRun(partial.id)
+    const deniedRun = await startBackfillRun(denied.id)
+
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: partialRun.id,
+        fetchedMessageCount: 2,
+        storedMessageCount: 2,
+      })
+      .execute()
+    await db()
+      .insertInto('backfillRunUnreadReactions')
+      .values({
+        id: newId(),
+        backfillRunId: partialRun.id,
+        messageId: message.id,
+      })
+      .execute()
+    await db()
+      .insertInto('backfillRunUnavailabilities')
+      .values({ id: newId(), backfillRunId: deniedRun.id })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'reactionsUnread',
+      channels: { reactionsUnread: 1, unavailable: 1 },
+      ...backfillStatusCopy.reactionsUnread,
     })
   })
 
@@ -381,7 +533,7 @@ describe('readIngestionStatus', () => {
       .values({
         id: newId(),
         backfillRunId: failedRun.id,
-        errorMessage: 'Missing Access',
+        errorMessage: 'Discord answered 500',
       })
       .execute()
     await db()
@@ -441,6 +593,32 @@ describe('readIngestionStatus', () => {
     expect(JSON.stringify(status)).not.toContain('errorMessage')
   })
 
+  it('never repeats what Discord said about a channel it now reads as unavailable', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const failedRun = await startBackfillRun(channel.id, minutesAgo(120))
+    const deniedRun = await startBackfillRun(channel.id, minutesAgo(1))
+    const errorMessage = `discord-refused-${randomUUID()}`
+
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({ id: newId(), backfillRunId: failedRun.id, errorMessage })
+      .execute()
+    await db()
+      .insertInto('backfillRunUnavailabilities')
+      .values({ id: newId(), backfillRunId: deniedRun.id })
+      .execute()
+
+    const status = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(status.ingestion.backfill.status).toBe('unavailable')
+    expect(JSON.stringify(status)).not.toContain(errorMessage)
+    expect(JSON.stringify(status)).not.toContain('errorMessage')
+  })
+
   it('reads only the newest backfill run of each channel', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
@@ -452,7 +630,7 @@ describe('readIngestionStatus', () => {
       .values({
         id: newId(),
         backfillRunId: abandoned.id,
-        errorMessage: 'Missing Access',
+        errorMessage: 'Discord answered 500',
       })
       .execute()
     await db()
@@ -516,10 +694,12 @@ describe('readIngestionStatus', () => {
         reactionsUnread: 0,
         running: 0,
         stalled: 0,
+        unavailable: 0,
       },
       failedChannelNames: [],
       neverRanChannelCount: 0,
       reactionsUnreadChannelNames: [],
+      unavailableChannelNames: [],
       fetchedMessageCount: 0,
       storedMessageCount: 0,
       lastRunStartedAt: null,

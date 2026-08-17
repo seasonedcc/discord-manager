@@ -6,10 +6,18 @@ import type {
   MessageReaction,
   PartialMessage,
 } from 'discord.js'
-import { Events, MessageFlags, MessageType, ReactionType } from 'discord.js'
+import {
+  DiscordAPIError,
+  Events,
+  MessageFlags,
+  MessageType,
+  RESTJSONErrorCodes,
+  ReactionType,
+} from 'discord.js'
 import type { z } from 'zod'
 import { ownerContext } from '~/business/auth.server'
 import {
+  ChannelHistoryUnavailableError,
   type FetchChannelHistory,
   gatewayHeartbeatIntervalMinutes,
 } from '~/business/ingestion.common'
@@ -341,16 +349,41 @@ function startGatewayHeartbeat(gatewayLinkIsUp: () => boolean) {
   return () => clearInterval(timer)
 }
 
-function makeChannelHistoryFetcher(client: Client): FetchChannelHistory {
-  return async ({ afterDiscordMessageId, discordChannelId, limit }) => {
+async function readHistoryPage(
+  client: Client,
+  {
+    afterDiscordMessageId,
+    discordChannelId,
+    limit,
+  }: Parameters<FetchChannelHistory>[0]
+) {
+  try {
     const channel = await client.channels.fetch(discordChannelId)
 
     if (!channel?.isTextBased()) return []
 
-    const messages = await channel.messages.fetch({
+    const page = await channel.messages.fetch({
       after: afterDiscordMessageId,
       limit,
     })
+
+    return [...page.values()]
+  } catch (error) {
+    if (
+      error instanceof DiscordAPIError &&
+      (error.code === RESTJSONErrorCodes.MissingAccess ||
+        error.code === RESTJSONErrorCodes.MissingPermissions)
+    ) {
+      throw new ChannelHistoryUnavailableError(error.message)
+    }
+
+    throw error
+  }
+}
+
+function makeChannelHistoryFetcher(client: Client): FetchChannelHistory {
+  return async (request) => {
+    const messages = await readHistoryPage(client, request)
 
     return await Promise.all(
       messages.map(async (message) => ({

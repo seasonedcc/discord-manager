@@ -12,6 +12,7 @@ import {
   listBookmarkReasons,
 } from '~/business/bookmarks.server'
 import type { FetchChannelHistory } from '~/business/ingestion.common'
+import { ChannelHistoryUnavailableError } from '~/business/ingestion.common'
 import {
   listBackfillableChannels,
   type listBackfillableChannelsSchema,
@@ -286,6 +287,12 @@ const engineering = await observeChannel({
   position: 1,
   topic: 'Where the product gets built',
 })
+const leadership = await observeChannel({
+  category: 'Company',
+  name: 'leadership',
+  position: 2,
+  topic: 'Where the leads settle things between themselves',
+})
 
 await postMessage({
   author: maya,
@@ -453,6 +460,23 @@ await fromSuccess(recordChannelArchiving)(
 
 const discordHasNothingNewerThanTheStore: FetchChannelHistory = async () => []
 
+const discordDeniesTheBotThisChannel: FetchChannelHistory = async () => {
+  throw new ChannelHistoryUnavailableError('Missing Access')
+}
+
+const storedChannelId = async (discordChannelId: string) => {
+  const channel = await db()
+    .selectFrom('channels')
+    .select('id')
+    .where('discordChannelId', '=', discordChannelId)
+    .executeTakeFirstOrThrow()
+
+  return channel.id
+}
+
+const engineeringChannelId = await storedChannelId(engineering.discordChannelId)
+const leadershipChannelId = await storedChannelId(leadership.discordChannelId)
+
 const backfillableChannels = await fromSuccess(listBackfillableChannels)(
   {} satisfies z.input<typeof listBackfillableChannelsSchema>,
   context
@@ -462,17 +486,14 @@ for (const channel of backfillableChannels) {
   await fromSuccess(runChannelBackfill)(
     {
       channelId: channel.id,
-      fetchChannelHistory: discordHasNothingNewerThanTheStore,
+      fetchChannelHistory:
+        channel.id === leadershipChannelId
+          ? discordDeniesTheBotThisChannel
+          : discordHasNothingNewerThanTheStore,
     } satisfies z.input<typeof runChannelBackfillSchema>,
     context
   )
 }
-
-const engineeringChannel = await db()
-  .selectFrom('channels')
-  .select('id')
-  .where('discordChannelId', '=', engineering.discordChannelId)
-  .executeTakeFirstOrThrow()
 
 const refusedSend = await fromSuccess(
   sendMessage(async () => {
@@ -480,7 +501,7 @@ const refusedSend = await fromSuccess(
   })
 )(
   {
-    channelId: engineeringChannel.id,
+    channelId: engineeringChannelId,
     content: 'Reminder: the deploy checklist is in the handbook now.',
   } satisfies z.input<typeof sendMessageSchema>,
   context
@@ -523,5 +544,5 @@ await fromSuccess(
 await db().destroy()
 
 console.log(
-  `Seeded a development server: two channels, an archived thread, ten messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you that you answered with a 👍 rather than words, one reply that pinged you without naming you and one whose sender switched the ping off, both saying which message they answer, one post from your own bot that two people answered — a reply that pinged it and a question that named it, both waiting in mentions_list alongside your own — reactions on two messages including a custom one and one a teammate took back, two bookmarks — one captured with the 🔖 reaction that still shows on the message and still sitting in Inbox, one filed under Answer later — one send Discord refused, one live fetch of that alert already recorded, and a finished history backfill on every channel, so ingestion_status reads as a bot that is connected and caught up. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
+  `Seeded a development server: three channels, an archived thread, ten messages — one of them an alert that says everything in an embed and carries a screenshot — one mention of you that you answered with a 👍 rather than words, one reply that pinged you without naming you and one whose sender switched the ping off, both saying which message they answer, one post from your own bot that two people answered — a reply that pinged it and a question that named it, both waiting in mentions_list alongside your own — reactions on two messages including a custom one and one a teammate took back, two bookmarks — one captured with the 🔖 reaction that still shows on the message and still sitting in Inbox, one filed under Answer later — one send Discord refused, one live fetch of that alert already recorded, and a finished history backfill on every channel the bot is allowed to read — #leadership is one Discord denies it, so ingestion_status reads as a bot that is connected and caught up, naming that channel as unavailable rather than failed. Start the MCP server with pnpm run mcp, ask your assistant to catch up on #engineering, and read messages_send_status for request ${refusedSend.send.requestId} to see the guarded retry it offers. Leave messages_fetch out of the tour: it goes to Discord live, so it only answers against a real server with real credentials.`
 )

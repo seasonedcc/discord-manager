@@ -5,6 +5,7 @@ import type {
   BackfilledMessage,
   FetchChannelHistory,
 } from '~/business/ingestion.common'
+import { ChannelHistoryUnavailableError } from '~/business/ingestion.common'
 import {
   listBackfillableChannels,
   reconcileThreadArchivings,
@@ -424,13 +425,19 @@ function draftHistory({
 
 async function backfillChannel({
   channel,
+  discordDeniesAccess = false,
   history,
 }: {
   channel: SeededChannel
+  discordDeniesAccess?: boolean
   history: BackfilledMessage[]
 }) {
   let servedPages = 0
   const fetchChannelHistory: FetchChannelHistory = async () => {
+    if (discordDeniesAccess) {
+      throw new ChannelHistoryUnavailableError('Missing Access')
+    }
+
     servedPages += 1
 
     return servedPages === 1 ? history : []

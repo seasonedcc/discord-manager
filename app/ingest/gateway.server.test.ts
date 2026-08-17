@@ -2,15 +2,18 @@ import { randomUUID } from 'node:crypto'
 import {
   type Client,
   Collection,
+  DiscordAPIError,
   Events,
   type Message,
   MessageFlags,
   MessageReferenceType,
   MessageType,
+  RESTJSONErrorCodes,
   ReactionType,
 } from 'discord.js'
 import { ownerContext } from '~/business/auth.server'
 import {
+  ChannelHistoryUnavailableError,
   gatewayHeartbeatIntervalMinutes,
   gatewaySilenceThresholdMinutes,
 } from '~/business/ingestion.common'
@@ -1813,6 +1816,85 @@ describe('makeChannelHistoryFetcher', () => {
       },
     } as unknown as Client
   }
+
+  function discordAnswers(code: number, message: string) {
+    return new DiscordAPIError(
+      { code, message },
+      code,
+      403,
+      'GET',
+      'https://discord.com/api/v10/channels/1/messages',
+      {}
+    )
+  }
+
+  function clientRefusingToOpenTheChannel(refusal: Error) {
+    return {
+      channels: {
+        fetch: async () => {
+          throw refusal
+        },
+      },
+    } as unknown as Client
+  }
+
+  function clientRefusingToHandOverTheHistory(refusal: Error) {
+    return {
+      channels: {
+        fetch: async () => ({
+          isTextBased: () => true,
+          messages: {
+            fetch: async () => {
+              throw refusal
+            },
+          },
+        }),
+      },
+    } as unknown as Client
+  }
+
+  const walkTheHistory = (client: Client) =>
+    makeChannelHistoryFetcher(client)({
+      afterDiscordMessageId: '0',
+      discordChannelId: randomUUID(),
+      limit: 100,
+    })
+
+  it('reads a channel Discord will not open as history it cannot have', async () => {
+    const refusal = discordAnswers(
+      RESTJSONErrorCodes.MissingAccess,
+      'Missing Access'
+    )
+
+    await expect(
+      walkTheHistory(clientRefusingToOpenTheChannel(refusal))
+    ).rejects.toBeInstanceOf(ChannelHistoryUnavailableError)
+  })
+
+  it('reads history Discord will not hand over as history it cannot have', async () => {
+    const refusal = discordAnswers(
+      RESTJSONErrorCodes.MissingPermissions,
+      'Missing Permissions'
+    )
+
+    await expect(
+      walkTheHistory(clientRefusingToHandOverTheHistory(refusal))
+    ).rejects.toBeInstanceOf(ChannelHistoryUnavailableError)
+  })
+
+  it('leaves an error that is not a permission boundary exactly as Discord threw it', async () => {
+    const outage = discordAnswers(
+      RESTJSONErrorCodes.UnknownChannel,
+      'Unknown Channel'
+    )
+
+    await expect(
+      walkTheHistory(clientRefusingToHandOverTheHistory(outage))
+    ).rejects.toBe(outage)
+    await expect(
+      walkTheHistory(clientRefusingToOpenTheChannel(outage))
+    ).rejects.toBe(outage)
+  })
 
   it('keeps every message Discord handed over when it refuses to list one of their reactors', async () => {
     const reactor = randomUUID()

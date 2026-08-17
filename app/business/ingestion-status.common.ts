@@ -8,6 +8,7 @@ type BackfillStatus =
   | 'reactionsUnread'
   | 'running'
   | 'stalled'
+  | 'unavailable'
 
 type IngestionGuidance = {
   summary: string
@@ -22,9 +23,9 @@ const backfillStatusCopy = {
   },
   failed: {
     summary:
-      'A channel backfill stopped on an error, so part of the history is missing.',
+      'A channel backfill stopped before it reached the newest messages, so part of the history is missing.',
     nextAction:
-      'Give the bot Read Message History in the channels listed under failedChannelNames, then restart the ingest daemon with pnpm run ingest.',
+      'Restart the ingest daemon with pnpm run ingest — it picks each channel listed under failedChannelNames up from the last message it stored, and when a backfill keeps giving up on an error it prints what stopped it.',
   },
   never: {
     summary: 'No channel history has been backfilled in this server yet.',
@@ -47,6 +48,12 @@ const backfillStatusCopy = {
       'A channel backfill stopped without finishing and without failing.',
     nextAction:
       'Restart the ingest daemon with pnpm run ingest to pick that history up again.',
+  },
+  unavailable: {
+    summary:
+      'Every channel the bot is allowed to read finished pulling its history. Discord denies it the channels listed under unavailableChannelNames, so no new history arrives from them — whatever was ingested before a denial stays in the store. That is a permission somebody set, not a backfill that went wrong.',
+    nextAction:
+      'Nothing to fix unless you want those channels flowing again — a server admin has to give the bot View Channel and Read Message History there, and the ingest daemon tries them again the next time it connects.',
   },
 } satisfies Record<BackfillStatus, IngestionGuidance>
 

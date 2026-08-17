@@ -38,6 +38,8 @@ type IngestionSkipReason =
   | 'owner_is_not_reacting_with_the_bookmark_emoji'
   | 'reactor_is_not_the_owner'
 
+class ChannelHistoryUnavailableError extends Error {}
+
 const bookmarkReactionEmoji = '🔖'
 
 const backfillPageSize = 100
@@ -88,6 +90,7 @@ function skipped(reason: IngestionSkipReason) {
 }
 
 export {
+  ChannelHistoryUnavailableError,
   backfillPageLimit,
   backfillPageSize,
   backfillStallThresholdMinutes,
