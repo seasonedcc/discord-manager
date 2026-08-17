@@ -156,6 +156,8 @@ The `id desc` tie-break is mandatory: SQLite's `strftime` clock has millisecond 
 
 **Indexes**: `(parentId, createdAt desc)` is the shape a latest-wins or existence derivation wants, but wanting the shape is not a reason to create the index. An index ships with the reader it serves and with the plan proving that reader chooses it (see *Performance: derive first, then escalate*). A table created before any query reads it ships with no index at all; the index arrives in the change that adds the query.
 
+**A derivation change meets every deployed store, not just fresh ones.** Events are immortal, so rows written under yesterday's rules sit in every store the new derivation will read. When a change re-rules what recorded events mean — which rows a sweep consumes, what a failure row implies about a channel — prove the new derivation against state shaped by the old rules with a test that seeds the legacy shape directly, not only state the new code writes. The oldest rows are exactly the ones a fresh-store proof can never meet, and exactly where a re-ruling strands a store in a state nothing will ever revisit.
+
 ## One writer, no ordering machinery
 
 The database runs in WAL mode and two processes share the file: the ingest daemon and the MCP server. The daemon is the **only** gateway writer, and MCP writes are transactional, so events cannot interleave in a way any derivation reads wrongly. There are no advisory locks, no shared lock families, and no monotonic sequence to assign — do not introduce any.
