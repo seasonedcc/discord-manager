@@ -139,76 +139,52 @@ function digestMessagesSince({
   guildId: string
   ownerDiscordUserId: string
 }) {
-  const rankedRevisions = db()
-    .selectFrom('messageRevisions')
-    .select((eb) => [
-      'messageId',
-      'content',
-      'id as revisionId',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('messageId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestRevisions')
+  const latestMessageRevisionId = sql<string>`(
+    select ordered_message_revisions.id
+    from message_revisions as ordered_message_revisions
+    where ordered_message_revisions.message_id = messages.id
+    order by ordered_message_revisions.created_at desc,
+      ordered_message_revisions.id desc
+    limit 1
+  )`
 
-  const rankedChannelDetails = db()
-    .selectFrom('channelDetailRevisions')
-    .select((eb) => [
-      'channelId',
-      'name',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestChannelDetails')
+  const latestChannelDetailId = sql<string>`(
+    select ordered_channel_details.id
+    from channel_detail_revisions as ordered_channel_details
+    where ordered_channel_details.channel_id = channels.id
+    order by ordered_channel_details.created_at desc,
+      ordered_channel_details.id desc
+    limit 1
+  )`
 
-  const rankedMemberDetails = db()
-    .selectFrom('memberDetailRevisions')
-    .select((eb) => [
-      'memberId',
-      'displayName',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('memberId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestMemberDetails')
+  const latestMemberDetailId = sql<string>`(
+    select ordered_member_details.id
+    from member_detail_revisions as ordered_member_details
+    where ordered_member_details.member_id = messages.author_member_id
+    order by ordered_member_details.created_at desc,
+      ordered_member_details.id desc
+    limit 1
+  )`
 
   return db()
     .selectFrom('messages')
     .innerJoin('channels', 'channels.id', 'messages.channelId')
     .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .innerJoin(rankedRevisions, 'latestRevisions.messageId', 'messages.id')
-    .innerJoin(
-      rankedChannelDetails,
-      'latestChannelDetails.channelId',
-      'channels.id'
+    .innerJoin('messageRevisions as latestRevisions', (join) =>
+      join
+        .onRef('latestRevisions.messageId', '=', 'messages.id')
+        .on('latestRevisions.id', '=', latestMessageRevisionId)
     )
-    .innerJoin(
-      rankedMemberDetails,
-      'latestMemberDetails.memberId',
-      'messages.authorMemberId'
+    .innerJoin('channelDetailRevisions as latestChannelDetails', (join) =>
+      join
+        .onRef('latestChannelDetails.channelId', '=', 'channels.id')
+        .on('latestChannelDetails.id', '=', latestChannelDetailId)
     )
-    .where('latestRevisions.rowNumber', '=', 1)
-    .where('latestChannelDetails.rowNumber', '=', 1)
-    .where('latestMemberDetails.rowNumber', '=', 1)
+    .innerJoin('memberDetailRevisions as latestMemberDetails', (join) =>
+      join
+        .onRef('latestMemberDetails.memberId', '=', 'messages.authorMemberId')
+        .on('latestMemberDetails.id', '=', latestMemberDetailId)
+    )
     .where('guilds.discordGuildId', '=', guildId)
     .where('messages.discordCreatedAt', '>=', since)
     .where(({ not, exists, selectFrom }) =>
@@ -236,7 +212,7 @@ function digestMessagesSince({
         .whereRef(
           'messageRevisionEmbeds.messageRevisionId',
           '=',
-          'latestRevisions.revisionId'
+          'latestRevisions.id'
         )
         .as('embeds'),
       eb
@@ -245,7 +221,7 @@ function digestMessagesSince({
         .whereRef(
           'messageRevisionAttachments.messageRevisionId',
           '=',
-          'latestRevisions.revisionId'
+          'latestRevisions.id'
         )
         .as('attachments'),
       standingReactionsOfTheMessage(ownerDiscordUserId).as('reactions'),
@@ -362,7 +338,7 @@ const listMentions = applySchema(
                 .whereRef(
                   'messageRevisionUserMentions.messageRevisionId',
                   '=',
-                  'latestRevisions.revisionId'
+                  'latestRevisions.id'
                 )
                 .where(
                   'messageRevisionUserMentions.mentionedDiscordUserId',

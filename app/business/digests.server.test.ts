@@ -91,6 +91,99 @@ describe('catchUpSince', () => {
     ])
   })
 
+  it('breaks same-instant detail ties with the newest event id', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const member = await createMember()
+    const message = await createMessage({
+      channelId: channel.id,
+      authorMemberId: member.id,
+      discordCreatedAt: '2099-02-03T00:00:00.000Z',
+    })
+    const sameInstant = '2099-02-03T00:00:01.000Z'
+
+    const orderedIds = () => [newId(), newId()].sort()
+    const [earlierRevisionId, laterRevisionId] = orderedIds()
+    const [earlierChannelDetailId, laterChannelDetailId] = orderedIds()
+    const [earlierMemberDetailId, laterMemberDetailId] = orderedIds()
+
+    await db()
+      .transaction()
+      .execute(async (trx) => {
+        await trx
+          .insertInto('messageRevisions')
+          .values([
+            {
+              id: earlierRevisionId,
+              messageId: message.id,
+              content: 'earlier wording',
+              createdAt: sameInstant,
+            },
+            {
+              id: laterRevisionId,
+              messageId: message.id,
+              content: 'latest wording',
+              createdAt: sameInstant,
+            },
+          ])
+          .execute()
+
+        await trx
+          .insertInto('channelDetailRevisions')
+          .values([
+            {
+              id: earlierChannelDetailId,
+              channelId: channel.id,
+              name: 'earlier-channel-name',
+              isThread: 0,
+              createdAt: sameInstant,
+            },
+            {
+              id: laterChannelDetailId,
+              channelId: channel.id,
+              name: 'latest-channel-name',
+              isThread: 0,
+              createdAt: sameInstant,
+            },
+          ])
+          .execute()
+
+        await trx
+          .insertInto('memberDetailRevisions')
+          .values([
+            {
+              id: earlierMemberDetailId,
+              memberId: member.id,
+              username: 'earlier-username',
+              displayName: 'Earlier Name',
+              createdAt: sameInstant,
+            },
+            {
+              id: laterMemberDetailId,
+              memberId: member.id,
+              username: 'latest-username',
+              displayName: 'Latest Name',
+              createdAt: sameInstant,
+            },
+          ])
+          .execute()
+      })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-02-03T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(digest.messages).toEqual([
+      expect.objectContaining({
+        messageId: message.id,
+        content: 'latest wording',
+        channelName: 'latest-channel-name',
+        authorDisplayName: 'Latest Name',
+      }),
+    ])
+  })
+
   it('reads what an alert message says in its embeds and attachments', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
