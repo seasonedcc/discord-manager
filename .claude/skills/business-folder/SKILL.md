@@ -91,6 +91,8 @@ When two files need the same utility, in order of preference:
 2. **Keep a private copy** in each file if the utility is small and trivial
 3. **Extract to a new file** only if the utility is substantial and shared by three or more files
 
+Option 2 is not available to user-facing copy: an error message or copy map two domains must speak verbatim lives once, in the `.common.ts` of the domain that owns the concept, and every consumer imports it — `messageLinkTarget` and its three refusals in `messages.common.ts`, spoken identically by `bookmarks_add` and `messages_fetch`, are the standing example. Forked copies of the same sentence drift apart, and drift in what the owner reads is a product bug however small the utility is.
+
 Option 3 is not available to Kysely query fragments — a `latestBotIdentityOf`, a ranked-latest-revision subquery. The parity test reads every exported function in `app/business/*.server.ts` as an owner-facing surface, so exporting a fragment from a shared file would demand a `parity-exemptions.ts` entry that is false by the `mcp-server` skill's own standard: a query fragment is not a machine surface. A fragment therefore stays a verbatim private copy in each domain file however many files carry it — sanctioned duplication, not a smell to fix or a finding to report.
 
 ## When to merge vs split
