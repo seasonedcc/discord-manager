@@ -57,6 +57,11 @@ describe('the input fields registered tools expose', () => {
       fields,
       'This guard read an empty field surface, so it would pass however the schemas were written. Registered tools take their input schemas from app/business/*.common.ts — teach this test the shape that replaced z.object()'
     ).toContain('messages_send.content')
+
+    expect(
+      fields,
+      "A .refine()-wrapped schema fell out of this guard's sight: Zod's .refine() has stopped answering as the z.ZodObject it wraps, so every refined tool schema now escapes the wrong-value judgement above. Teach this test to reach the fields inside the refinement before trusting it again"
+    ).toContain('threads_create.channelId')
   })
 
   it("answers a wrong value in the owner's words, never Zod's", () => {
