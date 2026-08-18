@@ -1,4 +1,48 @@
+import { InputError } from 'composable-functions'
 import { z } from 'zod'
+
+const discordMessageLinkPattern =
+  /^https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/([^/]+)\/([^/]+)\/([^/]+)$/
+const discordSnowflakePattern = /^\d{17,20}$/
+
+function messageLinkTarget({
+  guildId,
+  messageLink,
+}: {
+  guildId: string
+  messageLink: string
+}) {
+  const link = messageLink.match(discordMessageLinkPattern)
+
+  if (!link) {
+    throw new InputError(
+      'That is not a Discord message link. Right-click the message in Discord, choose Copy Message Link, and pass that — it looks like https://discord.com/channels/<server>/<channel>/<message>.',
+      ['messageLink']
+    )
+  }
+
+  const [, discordGuildId, discordChannelId, discordMessageId] = link
+
+  if (
+    ![discordGuildId, discordChannelId, discordMessageId].every((id) =>
+      discordSnowflakePattern.test(id)
+    )
+  ) {
+    throw new InputError(
+      'That message link carries something other than Discord ids. Copy it again from Discord without editing the numbers.',
+      ['messageLink']
+    )
+  }
+
+  if (discordGuildId !== guildId) {
+    throw new InputError(
+      'That link points at a different Discord server than this deployment manages. Pick a message from the server this deployment manages.',
+      ['messageLink']
+    )
+  }
+
+  return { discordChannelId, discordGuildId, discordMessageId }
+}
 
 const observedEmbedSchema = z.object({
   authorName: z.string().optional(),
@@ -138,12 +182,26 @@ function messageFetchGuidance(outcome: MessageFetchOutcome) {
 const messageIdMessage =
   'Pass a `messageId` from messages_catch_up, mentions_list or bookmarks_list, not the Discord message snowflake'
 
+const messageLinkMessage =
+  'Paste the link Discord copies with Copy Message Link, such as https://discord.com/channels/<server>/<channel>/<message>'
+
+const oneLocatorMessage =
+  'Pass either `messageId` from messages_catch_up, mentions_list or bookmarks_list, or `messageLink` copied from Discord with Copy Message Link — one of the two, never both'
+
 const fetchMessageSchema = z.object({
   messageId: z
     .string({ error: messageIdMessage })
     .min(1, messageIdMessage)
+    .optional()
     .describe(
-      'The `messageId` from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake.'
+      'The `messageId` from messages_catch_up, mentions_list or bookmarks_list — not the Discord message snowflake. Leave it out when you pass `messageLink`.'
+    ),
+  messageLink: z
+    .string({ error: messageLinkMessage })
+    .min(1, messageLinkMessage)
+    .optional()
+    .describe(
+      'A Discord message link, from Copy Message Link in Discord: https://discord.com/channels/<server>/<channel>/<message>. Links from canary.discord.com, ptb.discord.com and discordapp.com work too. Pass a link the owner gave you straight through — no lookup first — as long as the bot has already ingested the message it names. Leave it out when you pass `messageId`.'
     ),
 })
 
@@ -269,11 +327,14 @@ export {
   messageFetchGuidance,
   messageFetchRetrievalCopy,
   messageFetchSkipCopy,
+  messageLinkMessage,
+  messageLinkTarget,
   messageReactionsSchema,
   observedAttachmentSchema,
   observedEmbedSchema,
   observedEmojiSchema,
   observedReplyReferenceSchema,
+  oneLocatorMessage,
   renderEmbed,
   renderEmoji,
   repliedTo,

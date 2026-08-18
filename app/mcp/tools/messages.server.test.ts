@@ -60,6 +60,32 @@ describe('messages_fetch', () => {
     expect(skips[0].reason).toBe('message_deleted')
   })
 
+  it('finds the message a Discord link points at', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    await db()
+      .insertInto('messageDeletions')
+      .values({ id: newId(), messageId: message.id })
+      .execute()
+
+    const { isError, payload } = await callAsOwner(
+      'messages_fetch',
+      {
+        messageLink: `https://discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
+      },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(isError).toBe(false)
+    expect(payload.message).toMatchObject({
+      channelId: channel.id,
+      messageId: message.id,
+      status: 'skipped',
+    })
+  })
+
   it('refuses a context that cannot read messages', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })

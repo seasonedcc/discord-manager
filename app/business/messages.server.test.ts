@@ -8,6 +8,7 @@ import {
   messageFetchFailureCopy,
   messageFetchRetrievalCopy,
   messageFetchSkipCopy,
+  oneLocatorMessage,
 } from '~/business/messages.common'
 import { countMessages, fetchMessage } from '~/business/messages.server'
 import { db } from '~/db/db.server'
@@ -72,6 +73,28 @@ async function fetchGround() {
   const message = await createMessage({ channelId: channel.id })
 
   return { channel, context, guild, message }
+}
+
+function messageLinkOf({
+  discordGuildId,
+  discordChannelId,
+  discordMessageId,
+}: {
+  discordGuildId: string
+  discordChannelId: string
+  discordMessageId: string
+}) {
+  return `https://discord.com/channels/${discordGuildId}/${discordChannelId}/${discordMessageId}`
+}
+
+function inputErrorOf(result: { errors: Error[] }) {
+  const [error] = result.errors
+
+  if (!(error instanceof InputError)) {
+    throw new Error('expected an input error')
+  }
+
+  return error
 }
 
 function telemetryOf(messageId: string) {
@@ -386,12 +409,9 @@ describe('fetchMessage', () => {
       context
     )
 
-    const [error] = result.errors
+    const error = inputErrorOf(result)
 
     expect(result.success).toBe(false)
-    if (!(error instanceof InputError)) {
-      throw new Error('expected an input error')
-    }
     expect(error.message).toBe(
       'No message with that id has been ingested. Catch up on a channel to pick one.'
     )
@@ -409,15 +429,189 @@ describe('fetchMessage', () => {
       context
     )
 
-    const [error] = result.errors
+    const error = inputErrorOf(result)
 
     expect(result.success).toBe(false)
-    if (!(error instanceof InputError)) {
-      throw new Error('expected an input error')
-    }
     expect(error.path).toEqual(['messageId'])
     expect(requests).toEqual([])
     expect(await telemetryOf(stranger.id).requests()).toHaveLength(0)
+  })
+
+  it('answers a Discord message link exactly as it answers the stored message id', async () => {
+    const { channel, context, guild, message } = await fetchGround()
+    const { requests, transport } = answeringTransport({
+      content: 'the wording it carries now',
+    })
+
+    const byId = await fromSuccess(fetchMessage(transport))(
+      { messageId: message.id },
+      context
+    )
+    const byLink = await fromSuccess(fetchMessage(transport))(
+      {
+        messageLink: messageLinkOf({
+          discordGuildId: guild.discordGuildId,
+          discordChannelId: channel.discordChannelId,
+          discordMessageId: message.discordMessageId,
+        }),
+      },
+      context
+    )
+    const telemetry = telemetryOf(message.id)
+
+    expect({ ...byLink.message, fetchedAt: '' }).toEqual({
+      ...byId.message,
+      fetchedAt: '',
+    })
+    expect(retrieved(byLink.message).content).toBe('the wording it carries now')
+    expect(requests).toEqual([
+      {
+        discordChannelId: channel.discordChannelId,
+        discordMessageId: message.discordMessageId,
+      },
+      {
+        discordChannelId: channel.discordChannelId,
+        discordMessageId: message.discordMessageId,
+      },
+    ])
+    expect(await telemetry.requests()).toHaveLength(2)
+    expect(await telemetry.retrievals()).toHaveLength(2)
+  })
+
+  it('reads a link copied from the canary client', async () => {
+    const { channel, context, guild, message } = await fetchGround()
+    const { transport } = answeringTransport()
+
+    const answered = await fromSuccess(fetchMessage(transport))(
+      {
+        messageLink: `https://canary.discord.com/channels/${guild.discordGuildId}/${channel.discordChannelId}/${message.discordMessageId}`,
+      },
+      context
+    )
+
+    expect(answered.message.messageId).toBe(message.id)
+    expect(answered.message.status).toBe('retrieved')
+  })
+
+  it('refuses anything that is not a Discord message link', async () => {
+    const { context } = await fetchGround()
+    const { requests, transport } = answeringTransport()
+
+    const result = await fetchMessage(transport)(
+      { messageLink: 'https://example.com/channels/1/2/3' },
+      context
+    )
+
+    const error = inputErrorOf(result)
+
+    expect(result.success).toBe(false)
+    expect(error.message).toBe(
+      'That is not a Discord message link. Right-click the message in Discord, choose Copy Message Link, and pass that — it looks like https://discord.com/channels/<server>/<channel>/<message>.'
+    )
+    expect(error.path).toEqual(['messageLink'])
+    expect(requests).toEqual([])
+  })
+
+  it('tells a link with the right shape but the wrong ids apart', async () => {
+    const { context } = await fetchGround()
+    const { transport } = answeringTransport()
+
+    const result = await fetchMessage(transport)(
+      { messageLink: 'https://discord.com/channels/guild/channel/message' },
+      context
+    )
+
+    const error = inputErrorOf(result)
+
+    expect(result.success).toBe(false)
+    expect(error.message).toBe(
+      'That message link carries something other than Discord ids. Copy it again from Discord without editing the numbers.'
+    )
+    expect(error.path).toEqual(['messageLink'])
+  })
+
+  it('refuses a link that points at another Discord server', async () => {
+    const { channel, context, message } = await fetchGround()
+    const { requests, transport } = answeringTransport()
+
+    const result = await fetchMessage(transport)(
+      {
+        messageLink: messageLinkOf({
+          discordGuildId: snowflake(),
+          discordChannelId: channel.discordChannelId,
+          discordMessageId: message.discordMessageId,
+        }),
+      },
+      context
+    )
+
+    const error = inputErrorOf(result)
+
+    expect(result.success).toBe(false)
+    expect(error.message).toBe(
+      'That link points at a different Discord server than this deployment manages. Pick a message from the server this deployment manages.'
+    )
+    expect(error.path).toEqual(['messageLink'])
+    expect(requests).toEqual([])
+    expect(await telemetryOf(message.id).requests()).toHaveLength(0)
+  })
+
+  it('refuses a link to a message the bot never ingested', async () => {
+    const { channel, context, guild } = await fetchGround()
+    const { requests, transport } = answeringTransport()
+
+    const result = await fetchMessage(transport)(
+      {
+        messageLink: messageLinkOf({
+          discordGuildId: guild.discordGuildId,
+          discordChannelId: channel.discordChannelId,
+          discordMessageId: snowflake(),
+        }),
+      },
+      context
+    )
+
+    const error = inputErrorOf(result)
+
+    expect(result.success).toBe(false)
+    expect(error.message).toBe(
+      'That message has not been ingested, so it cannot be read live. Let the bot catch up on that channel, then fetch the link again.'
+    )
+    expect(error.path).toEqual(['messageLink'])
+    expect(requests).toEqual([])
+  })
+
+  it('refuses a request naming both a message id and a message link', async () => {
+    const { channel, context, guild, message } = await fetchGround()
+    const { requests, transport } = answeringTransport()
+
+    const result = await fetchMessage(transport)(
+      {
+        messageId: message.id,
+        messageLink: messageLinkOf({
+          discordGuildId: guild.discordGuildId,
+          discordChannelId: channel.discordChannelId,
+          discordMessageId: message.discordMessageId,
+        }),
+      },
+      context
+    )
+
+    expect(result.success).toBe(false)
+    expect(inputErrorOf(result).message).toBe(oneLocatorMessage)
+    expect(requests).toEqual([])
+    expect(await telemetryOf(message.id).requests()).toHaveLength(0)
+  })
+
+  it('refuses a request naming neither a message id nor a message link', async () => {
+    const { context } = await fetchGround()
+    const { requests, transport } = answeringTransport()
+
+    const result = await fetchMessage(transport)({}, context)
+
+    expect(result.success).toBe(false)
+    expect(inputErrorOf(result).message).toBe(oneLocatorMessage)
+    expect(requests).toEqual([])
   })
 
   it('says which message a reply answers from what Discord has now, even when the store never captured it', async () => {
@@ -905,13 +1099,9 @@ describe('countMessages', () => {
     const { context } = await countGround()
 
     const result = await countMessages({ channelId: randomUUID() }, context)
-    const [error] = result.errors
 
     expect(result.success).toBe(false)
-    if (!(error instanceof InputError)) {
-      throw new Error('expected an input error')
-    }
-    expect(error.path).toEqual(['channelId'])
+    expect(inputErrorOf(result).path).toEqual(['channelId'])
   })
 
   it('refuses a channel in another server', async () => {
@@ -919,13 +1109,9 @@ describe('countMessages', () => {
     const elsewhere = await createChannel()
 
     const result = await countMessages({ channelId: elsewhere.id }, context)
-    const [error] = result.errors
 
     expect(result.success).toBe(false)
-    if (!(error instanceof InputError)) {
-      throw new Error('expected an input error')
-    }
-    expect(error.path).toEqual(['channelId'])
+    expect(inputErrorOf(result).path).toEqual(['channelId'])
   })
 
   it('refuses a window that ends before it starts', async () => {

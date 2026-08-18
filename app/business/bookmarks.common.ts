@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { messageLinkMessage } from '~/business/messages.common'
 
 const bookmarkListLimit = 100
 
@@ -19,9 +20,6 @@ const bookmarkLimitMessage = `Ask for a whole number of bookmarks, from 1 to ${b
 
 const includeSnoozedMessage =
   'Pass true to include snoozed bookmarks; pass false or leave it out to keep them hidden'
-
-const messageLinkMessage =
-  'Paste the link Discord copies with Copy Message Link, such as https://discord.com/channels/<server>/<channel>/<message>'
 
 const reasonDescriptionMessage =
   'Describe when this reason applies, in a sentence — it is what an assistant reads to sort a bookmark'

@@ -17,15 +17,12 @@ import {
 import {
   messageAttachmentsSchema,
   messageEmbedsSchema,
+  messageLinkTarget,
   messageReactionsSchema,
   storedRepliedTo,
 } from '~/business/messages.common'
 import { db } from '~/db/db.server'
 import { newId } from '~/framework/db.server'
-
-const discordMessageLinkPattern =
-  /^https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/([^/]+)\/([^/]+)\/([^/]+)$/
-const discordSnowflakePattern = /^\d{17,20}$/
 
 const bookmarksContextSchema = ownerContextSchema.extend({
   canManageBookmarks: z.literal(true),
@@ -538,37 +535,13 @@ const addBookmarkByLink = applySchema(
   addBookmarkByLinkSchema,
   bookmarksContextSchema
 )(async ({ messageLink, reasonId }, context) => {
-  const link = messageLink.match(discordMessageLinkPattern)
-
-  if (!link) {
-    throw new InputError(
-      'That is not a Discord message link. Right-click the message in Discord, choose Copy Message Link, and pass that — it looks like https://discord.com/channels/<server>/<channel>/<message>.',
-      ['messageLink']
-    )
-  }
-
-  const [, linkGuildId, linkChannelId, linkMessageId] = link
-
-  if (
-    ![linkGuildId, linkChannelId, linkMessageId].every((id) =>
-      discordSnowflakePattern.test(id)
-    )
-  ) {
-    throw new InputError(
-      'That message link carries something other than Discord ids. Copy it again from Discord without editing the numbers.',
-      ['messageLink']
-    )
-  }
-
-  if (linkGuildId !== context.owner.guildId) {
-    throw new InputError(
-      'That link points at a different Discord server than this deployment manages. Pick a message from the server this deployment manages.',
-      ['messageLink']
-    )
-  }
+  const linked = messageLinkTarget({
+    guildId: context.owner.guildId,
+    messageLink,
+  })
 
   const message = await messagesInGuild(context.owner.guildId)
-    .where('messages.discordMessageId', '=', linkMessageId)
+    .where('messages.discordMessageId', '=', linked.discordMessageId)
     .executeTakeFirst()
 
   if (!message) {

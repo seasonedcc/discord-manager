@@ -11,6 +11,8 @@ import {
   countMessagesSchema,
   fetchMessageSchema,
   messageFetchGuidance,
+  messageLinkTarget,
+  oneLocatorMessage,
   renderEmbed,
   repliedTo,
   storedRepliedTo,
@@ -75,43 +77,54 @@ async function locateTheMessageRepliedTo(
   return repliedTo({ ...reference, messageId: ingested?.id ?? null })
 }
 
-function fetchMessage(transport: MessageFetchTransport) {
-  return applySchema(
-    fetchMessageSchema,
-    messagesContextSchema
-  )(async ({ messageId }, context) => {
-    const found = await db()
-      .selectFrom('messages')
-      .innerJoin('channels', 'channels.id', 'messages.channelId')
-      .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+function ingestedMessagesIn(guildId: string) {
+  return db()
+    .selectFrom('messages')
+    .innerJoin('channels', 'channels.id', 'messages.channelId')
+    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+    .where('guilds.discordGuildId', '=', guildId)
+    .select((eb) => [
+      'messages.id as messageId',
+      'messages.channelId',
+      'messages.discordMessageId',
+      'channels.discordChannelId',
+      'guilds.discordGuildId',
+      eb
+        .exists(
+          eb
+            .selectFrom('messageDeletions')
+            .select('messageDeletions.id')
+            .whereRef('messageDeletions.messageId', '=', 'messages.id')
+        )
+        .$castTo<number>()
+        .as('deleted'),
+      eb
+        .selectFrom('messageReplyReferences')
+        .leftJoin(
+          'messages as repliedToMessages',
+          'repliedToMessages.discordMessageId',
+          'messageReplyReferences.repliedToDiscordMessageId'
+        )
+        .select(replyReferenceAsJson)
+        .whereRef('messageReplyReferences.messageId', '=', 'messages.id')
+        .as('replyReference'),
+    ])
+}
+
+async function locateTheMessageAskedFor(
+  {
+    messageId,
+    messageLink,
+  }: { messageId: string | undefined; messageLink: string | undefined },
+  guildId: string
+) {
+  if (messageId !== undefined && messageLink !== undefined) {
+    throw new InputError(oneLocatorMessage)
+  }
+
+  if (messageId !== undefined) {
+    const found = await ingestedMessagesIn(guildId)
       .where('messages.id', '=', messageId)
-      .where('guilds.discordGuildId', '=', context.owner.guildId)
-      .select((eb) => [
-        'messages.id as messageId',
-        'messages.channelId',
-        'messages.discordMessageId',
-        'channels.discordChannelId',
-        'guilds.discordGuildId',
-        eb
-          .exists(
-            eb
-              .selectFrom('messageDeletions')
-              .select('messageDeletions.id')
-              .whereRef('messageDeletions.messageId', '=', 'messages.id')
-          )
-          .$castTo<number>()
-          .as('deleted'),
-        eb
-          .selectFrom('messageReplyReferences')
-          .leftJoin(
-            'messages as repliedToMessages',
-            'repliedToMessages.discordMessageId',
-            'messageReplyReferences.repliedToDiscordMessageId'
-          )
-          .select(replyReferenceAsJson)
-          .whereRef('messageReplyReferences.messageId', '=', 'messages.id')
-          .as('replyReference'),
-      ])
       .executeTakeFirst()
 
     if (!found) {
@@ -120,6 +133,38 @@ function fetchMessage(transport: MessageFetchTransport) {
         ['messageId']
       )
     }
+
+    return found
+  }
+
+  if (messageLink !== undefined) {
+    const linked = messageLinkTarget({ guildId, messageLink })
+    const found = await ingestedMessagesIn(guildId)
+      .where('messages.discordMessageId', '=', linked.discordMessageId)
+      .executeTakeFirst()
+
+    if (!found) {
+      throw new InputError(
+        'That message has not been ingested, so it cannot be read live. Let the bot catch up on that channel, then fetch the link again.',
+        ['messageLink']
+      )
+    }
+
+    return found
+  }
+
+  throw new InputError(oneLocatorMessage)
+}
+
+function fetchMessage(transport: MessageFetchTransport) {
+  return applySchema(
+    fetchMessageSchema,
+    messagesContextSchema
+  )(async ({ messageId, messageLink }, context) => {
+    const found = await locateTheMessageAskedFor(
+      { messageId, messageLink },
+      context.owner.guildId
+    )
 
     const { deleted, discordGuildId, replyReference, ...message } = found
     const located = {

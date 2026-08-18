@@ -387,7 +387,8 @@ optional waitSeconds), `messages_catch_up` (since + optional channel), `mentions
 `bookmarks_list` (optional limit, snoozed, reason filter), `bookmarks_add` (by message
 link + reason), `bookmarks_resolve`, `bookmarks_snooze`, `bookmarks_set_reason`,
 `bookmark_reasons_list`, `bookmark_reasons_add`, `bookmark_reasons_edit`,
-`bookmark_reasons_retire`, `messages_fetch` (by stored message id), `messages_send`
+`bookmark_reasons_retire`, `messages_fetch` (by stored message id or by a Discord message
+link, exactly one of the two), `messages_send`
 (channel, content, optional reply, optional retry of an earlier request),
 `messages_send_status` (by request id), `threads_create` (a name plus either a channel
 or a message to anchor on, never both), `ingestion_status`.
@@ -617,6 +618,16 @@ Discord's REST API — and its tool description and the README both steer routin
 back to `messages_catch_up`, `mentions_list` and `bookmarks_list`, which answer from the
 store without touching the network.
 
+- Both locators reach the same fetch. A stored `messageId` and a copied Discord message
+  link resolve to one ingested message row before anything is recorded, so telemetry,
+  statuses and copy are identical on either path — `messages.discord_message_id` is unique
+  store-wide, which is what lets the link's message snowflake be the key. The link's three
+  gates and their exact wording live in `messageLinkTarget` in `messages.common.ts`, shared
+  verbatim with `bookmarks_add`; the link's channel snowflake is validated and then unused,
+  because the message snowflake alone identifies the row. A link to a message the bot never
+  ingested is refused rather than fetched blind, because every fetch request row hangs off a
+  stored message and there would be nothing to record the outcome against. Naming both
+  locators, or neither, is refused before any query runs.
 - It is a transport-injected factory, exactly like `sendMessage`: the MCP tool file owns
   the REST client and translates `DiscordAPIError` into the domain's own error types, so
   the business layer stays vendor-free. The transport is duplicated rather than shared
