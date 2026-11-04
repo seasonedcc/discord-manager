@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Write and run Vitest unit tests against a real throwaway SQLite database and end-to-end specs that drive the real MCP server over stdio. Use when writing or fixing a test, running test:unit, test:e2e, or test:seed-coverage, practising TDD, mutation-proving an assertion, adding fixtures, editing the E2E seed or its fake gateway feed, writing a seed demonstration, or working on the tool coverage gate or the dev-seed coverage gate.
+description: Write and run Vitest unit tests against a real throwaway SQLite database and end-to-end specs that drive the real MCP server over stdio. Use when writing or fixing a test, running test:unit, test:e2e, or test:seed-coverage, practising TDD, mutation-proving an assertion, adding fixtures, editing the E2E seed or its fake gateway feed, writing a seed demonstration, guarding a reader's query plan with expectEveryPlan, or working on the tool coverage gate or the dev-seed coverage gate.
 ---
 
 # Testing
@@ -42,6 +42,8 @@ A green suite proves nothing about a specific test until that test has been seen
 4. Restore the backup, verify it landed (diff or checksum against the original), and confirm green.
 
 False-green smells worth checking whenever a test passes suspiciously easily: the expected value coincides with the old buggy behavior, so the test passes either way; the code path is stubbed above the change under test; an error assertion satisfied by a different error firing first.
+
+A guard that fails when a forbidden shape appears is mutation-proved against several distinct shapes of the regression, not only the one that motivated it: the same mistake under an alias, in a different plan branch, worded differently, or run inside a transaction. A deny-list or an exact-string matcher passes every shape it did not anticipate, so prefer allow-lists and structural checks.
 
 A branch no harness input can reach is worse than unproven — it is untestable, and deleting its guard leaves the whole suite green. When new logic gates on a payload shape the fake feed or the Discord double cannot yet express — a forward-shaped reference, a payload with a field withheld — extending the double's levers is part of the change that adds the logic, in the same PR. And when the same observation logic lives at more than one seam — the gateway's discord.js payload and a transport's raw REST payload — each copy gets its own mutation proof: a proof against one seam says nothing about its sibling.
 
@@ -149,6 +151,16 @@ This is scoped to timer behavior. A test that waits on real work — a database 
 ### Boundary derivations
 
 Every derivation with a window boundary — a silence window, a catch-up cutoff, a digest window — gets a test asserting behavior on both exact sides of the boundary: one instant just inside, one just outside. A bucketed assertion (within ±N minutes) cannot catch an off-by-one on the boundary itself, which is where these derivations break.
+
+### Plan guards
+
+Every reader that derives latest state is held by `expectEveryPlan` (`app/test/query-plans.ts`) in a plan-guard file of its own — `ls app/business/*-plans.server.test.ts` lists them — because the busy synthetic server its `beforeAll` builds (`createBusyGuild` and its siblings in `app/test/fixtures.ts`) needs a store no ordinary test shares. A reader that gains or changes a lookup extends its guard in the same change. The assertion plans every statement the read runs, inside a transaction or not, both with statistics never gathered (as every deployed store plans) and after `analyze`, and takes three lists:
+
+- `latestStateTables` — every table the readers look up the latest row of or probe with `exists`; a lookup reading one of them may not sort.
+- `scanning` — the explicit allow-list of tables a plan may read whole, such as the guild row or the population a reader walks; any other scan fails, aliased or not.
+- `reaches` — the exact plan step of every index the readers rely on.
+
+Never assert on wall-clock time: a plan is deterministic and a stopwatch is not. `app/test/query-plans.test.ts` pins the assertion's own rules.
 
 ## End-to-end specs
 
