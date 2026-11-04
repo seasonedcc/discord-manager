@@ -210,11 +210,7 @@ function digestMessagesSince({
       'messages.discordCreatedAt',
       'messages.channelId',
       'channels.discordChannelId',
-      eb
-        .selectFrom('guilds')
-        .select('guilds.discordGuildId')
-        .whereRef('guilds.id', '=', 'channels.guildId')
-        .as('discordGuildId'),
+      eb.val(guildId).as('discordGuildId'),
       'latestChannelDetails.name as channelName',
       'latestMemberDetails.displayName as authorDisplayName',
       'latestRevisions.content',
