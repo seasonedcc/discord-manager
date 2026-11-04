@@ -33,7 +33,7 @@ A skip pre-refuses a call only on facts the store can prove under Discord rules 
 
 ## Status is derived in SQL, never stored
 
-Union the outcome tables into one `requestId, createdAt, id, outcome` shape, rank with `row_number() over (partition by request_id order by created_at desc, id desc)` and keep rank 1 — the `id desc` tie-break stops a repeated read from flipping between two answers — then `coalesce` that outcome with a `case` over the request's own age:
+Read a request's latest outcome with one scalar subquery: union the outcome tables into one `outcome, createdAt, id` shape, each arm correlated to the request, and order the compound itself `created_at desc, id desc` with `limit 1` — the `id desc` tie-break stops a repeated read from flipping between two answers, and the ordering inside the union lets SQLite merge the arms' index seeks instead of sorting (`latestOutcomeOf` in `app/business/sending.server.ts`; load `database-design` for the pair shape). Then `coalesce` that outcome with a `case` over the request's own age:
 
 ```sql
 coalesce(

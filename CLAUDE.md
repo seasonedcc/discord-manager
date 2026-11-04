@@ -10,7 +10,7 @@ SQLite forces exactly five sanctioned divergences, and no others:
 
 - **Ids** are monotonic UUIDv7 values from `newId()` in application code — there is no `gen_random_uuid()`, and a random id would turn the latest-event-wins `id desc` tie-break into a coin flip whenever two events share a millisecond. Insert helpers own this; migrations declare `text` primary keys. The guarantee is **per process**: the daemon and the MCP server each issue ids in their own order, so two processes writing to one reversible pair in the same millisecond stay unordered. That is accepted — see single-writer WAL below — and no ordering machinery exists to fix it.
 - **Timestamps** are ISO-8601 UTC `text` columns; `createdAt` defaults to `strftime('%Y-%m-%dT%H:%M:%fZ','now')`, so lexicographic order equals chronological order.
-- **Latest-event-wins** uses `row_number() over (partition by parentId order by createdAt desc, id desc)` filtered to `1` instead of `distinct on`. The `id desc` tie-break stays mandatory.
+- **Latest-event-wins** looks up each parent's latest row with a correlated scalar subquery ordered `created_at desc, id desc` with `limit 1`, served by a `(parent, createdAt desc, id desc)` index, instead of `distinct on` — never by ranking a whole event table with `row_number()` (*Reading latest state* in `docs/architecture.md`). The `id desc` tie-break stays mandatory.
 - **Booleans** are `integer` 0/1 at the schema level; Zod coerces at the boundary.
 - **Single-writer WAL** replaces Postgres advisory locks: the ingest daemon is the only gateway writer and MCP writes are transactional, so there is no cross-process ordering machinery.
 

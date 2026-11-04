@@ -21,15 +21,15 @@ Use the schema builder for anything Kysely expresses natively. Reserve `sql` tem
 
 Instead of:
 ```typescript
-await sql`create index message_revisions_message_id_created_at on message_revisions (message_id, created_at desc)`.execute(db)
+await sql`create index message_revisions_message_id_created_at_id_index on message_revisions (message_id, created_at desc, id desc)`.execute(db)
 ```
 
 Do:
 ```typescript
 await db.schema
-  .createIndex('messageRevisionsMessageIdCreatedAt')
+  .createIndex('messageRevisionsMessageIdCreatedAtIdIndex')
   .on('messageRevisions')
-  .columns(['messageId', 'createdAt desc'])
+  .columns(['messageId', 'createdAt desc', 'id desc'])
   .execute()
 ```
 
@@ -41,7 +41,6 @@ Use `sql` template literals for:
 
 - **Function calls in defaults**: ``col.defaultTo(sql`strftime('%Y-%m-%dT%H:%M:%fZ','now')`)``
 - **Check constraints**: ``.addCheckConstraint('bookmarkAdditionsSource', sql`source in ('reaction','mcp')`)``
-- **Window functions**: ``sql<number>`row_number() over (partition by message_id order by created_at desc, id desc)` ``
 - **Pragmas**: WAL mode and foreign-key enforcement are set once in `app/framework/db.server.ts`, never in a migration
 - **Complex expressions**: filtered aggregates, raw subqueries inside a CTE
 
@@ -50,7 +49,7 @@ Use `sql` template literals for:
 The plugin transforms identifiers in builder calls from camelCase to snake_case. Raw SQL bypasses it entirely.
 
 - Builder methods take **camelCase**: `createTable('messageRevisions')` produces `create table message_revisions`
-- Raw SQL is written in **snake_case**: ``sql`partition by message_id` `` stays as written
+- Raw SQL is written in **snake_case**: ``sql`message_reaction_additions.message_id = messages.id` `` stays as written
 
 The trap that bites most: a query builder joining a table under a camelCase alias has that alias rewritten too, so a raw `sql` fragment in the same query must reference the alias in snake_case or the reference silently fails to resolve.
 
@@ -279,16 +278,8 @@ eb('createdAt', '<', sql<string>`strftime('%Y-%m-%dT%H:%M:%fZ','now','-15 minute
 
 Timestamps are `string` columns, counts are `number`, booleans are `number` (0/1).
 
-### Use `.with()` to name a subquery referenced more than once
+### Write a latest-state lookup as a function of the outer query
 
-A ranked-events CTE is referenced by the derivation and often by a second join in the same query. Name it once with `.with()` rather than repeating the window function:
-
-```typescript
-db()
-  .with('latestRevision', (qb) => rankedRevisions(qb))
-  .selectFrom('messages')
-  .innerJoin('latestRevision', 'latestRevision.messageId', 'messages.id')
-  .where('latestRevision.rank', '=', 1)
-```
+A lookup is a correlated subquery: a function that takes the outer query's `ExpressionBuilder`, references the parent with `whereRef`, and orders `createdAt desc, id desc` with `limit(1)` — `latestRevisionOf` in `app/business/digests.server.ts`. A query that reads the lookup in several places calls the function again, and each call is one index seek per row. A lookup named with `.with()` plans as a `CO-ROUTINE` or `MATERIALIZE` that the plan guards hold to the same rule as any other lookup: it may not sort.
 
 Load `database-design` for the derivation patterns themselves.
