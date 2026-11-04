@@ -1,6 +1,6 @@
 import { sql } from 'kysely'
-import { createMessage } from './fixtures'
-import { db, describe, expect, it } from './prelude'
+import { createBusyGuild, createMessage } from './fixtures'
+import { beforeAll, db, describe, expect, it } from './prelude'
 import { expectEveryPlan } from './query-plans'
 
 const latestStateTables = ['message_revisions']
@@ -11,6 +11,12 @@ const latestRevisionStep =
 const embedsAsJsonArray = sql<string>`json_group_array(
   message_revision_embeds.content order by message_revision_embeds.position
 )`.as('embeds')
+
+let busyGuild: Awaited<ReturnType<typeof createBusyGuild>>
+
+beforeAll(async () => {
+  busyGuild = await createBusyGuild({ channelCount: 4, messageCount: 2000 })
+})
 
 describe('expectEveryPlan', () => {
   it('fails a read that runs no statement', async () => {
@@ -42,15 +48,13 @@ describe('expectEveryPlan', () => {
   })
 
   it('fails a lookup run as a statement of its own that sorts', async () => {
-    const message = await createMessage()
-
     await expect(
       expectEveryPlan(
         () =>
           db()
             .selectFrom('messageRevisions')
             .select('messageRevisions.id')
-            .where('messageRevisions.messageId', '=', message.id)
+            .where('messageRevisions.messageId', '=', busyGuild.messageIds[0])
             .orderBy('messageRevisions.id', 'desc')
             .limit(1)
             .executeTakeFirst(),
@@ -68,7 +72,7 @@ describe('expectEveryPlan', () => {
   })
 
   it('fails a lookup named with .with() that sorts', async () => {
-    const message = await createMessage()
+    const [messageId] = busyGuild.messageIds
 
     await expect(
       expectEveryPlan(
@@ -78,14 +82,14 @@ describe('expectEveryPlan', () => {
               cte
                 .selectFrom('messageRevisions')
                 .select('messageRevisions.content')
-                .where('messageRevisions.messageId', '=', message.id)
+                .where('messageRevisions.messageId', '=', messageId)
                 .orderBy('messageRevisions.id', 'desc')
                 .limit(1)
             )
             .selectFrom('messages')
             .innerJoin('latestRevision', (join) => join.onTrue())
             .select(['messages.id', 'latestRevision.content'])
-            .where('messages.id', '=', message.id)
+            .where('messages.id', '=', messageId)
             .execute(),
         { latestStateTables, scanning: [], reaches: [] }
       )
@@ -183,8 +187,6 @@ describe('expectEveryPlan', () => {
   })
 
   it('lets a reader sort the rows it lists', async () => {
-    const message = await createMessage()
-
     await expectEveryPlan(
       () =>
         db()
@@ -205,7 +207,7 @@ describe('expectEveryPlan', () => {
             )
           )
           .select(['messages.id', 'latestRevisions.content'])
-          .where('messages.channelId', '=', message.channelId)
+          .where('messages.channelId', '=', busyGuild.channelIds[0])
           .orderBy('latestRevisions.content')
           .execute(),
       {
