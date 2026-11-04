@@ -1,5 +1,10 @@
 import { InputError, applySchema } from 'composable-functions'
-import { type SqlBool, sql } from 'kysely'
+import {
+  type Expression,
+  type ExpressionBuilder,
+  type SqlBool,
+  sql,
+} from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -21,6 +26,7 @@ import {
   storedRepliedTo,
 } from '~/business/messages.common'
 import { db } from '~/db/db.server'
+import type { DB } from '~/db/types'
 import { newId } from '~/framework/db.server'
 
 const discordMessageLinkPattern =
@@ -144,94 +150,123 @@ function standingReactionsOfTheMessage(ownerDiscordUserId: string) {
     .select(reactionsAsJsonArray)
 }
 
-function latestBookmarkEvents() {
+function latestBookmarkEventOf(messageId: Expression<string>) {
   const bookmarkEvents = db()
     .selectFrom('bookmarkAdditions')
-    .select([
-      'id',
-      'messageId',
-      'source',
-      'createdAt',
-      sql<number>`1`.as('bookmarked'),
-    ])
+    .select(['bookmarkAdditions.id', 'bookmarkAdditions.createdAt'])
+    .where('bookmarkAdditions.messageId', '=', messageId)
     .unionAll(
       db()
         .selectFrom('bookmarkRemovals')
-        .select([
-          'id',
-          'messageId',
-          'source',
-          'createdAt',
-          sql<number>`0`.as('bookmarked'),
-        ])
+        .select(['bookmarkRemovals.id', 'bookmarkRemovals.createdAt'])
+        .where('bookmarkRemovals.messageId', '=', messageId)
     )
 
   return db()
     .selectFrom(bookmarkEvents.as('bookmarkEvents'))
-    .select((eb) => [
-      'messageId',
-      'source',
-      'bookmarked',
-      'createdAt',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('messageId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestBookmarkEvents')
+    .select('bookmarkEvents.id')
+    .orderBy('bookmarkEvents.createdAt', 'desc')
+    .orderBy('bookmarkEvents.id', 'desc')
+    .limit(1)
 }
 
-function latestReasonDetails() {
+function latestReasonDetailsOf(reasonId: Expression<string>) {
   return db()
     .selectFrom('bookmarkReasonDetailRevisions')
-    .select((eb) => [
-      'reasonId',
-      'name',
-      'description',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('reasonId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestReasonDetails')
+    .select('bookmarkReasonDetailRevisions.id')
+    .where('bookmarkReasonDetailRevisions.reasonId', '=', reasonId)
+    .orderBy('bookmarkReasonDetailRevisions.createdAt', 'desc')
+    .orderBy('bookmarkReasonDetailRevisions.id', 'desc')
+    .limit(1)
 }
 
-function latestReasonAssignments() {
-  return db()
+function latestReasonAssignmentOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
     .selectFrom('bookmarkReasonAssignments')
-    .select((eb) => [
-      'messageId',
-      'reasonId',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('messageId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestReasonAssignments')
+    .select('bookmarkReasonAssignments.id')
+    .whereRef('bookmarkReasonAssignments.messageId', '=', 'messages.id')
+    .orderBy('bookmarkReasonAssignments.createdAt', 'desc')
+    .orderBy('bookmarkReasonAssignments.id', 'desc')
+    .limit(1)
+}
+
+function latestSnoozeOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
+    .selectFrom('bookmarkSnoozes')
+    .select('bookmarkSnoozes.id')
+    .whereRef('bookmarkSnoozes.messageId', '=', 'messages.id')
+    .orderBy('bookmarkSnoozes.createdAt', 'desc')
+    .orderBy('bookmarkSnoozes.id', 'desc')
+    .limit(1)
+}
+
+function latestRevisionOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
+    .selectFrom('messageRevisions')
+    .select('messageRevisions.id')
+    .whereRef('messageRevisions.messageId', '=', 'messages.id')
+    .orderBy('messageRevisions.createdAt', 'desc')
+    .orderBy('messageRevisions.id', 'desc')
+    .limit(1)
+}
+
+function latestChannelDetailsOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
+    .selectFrom('channelDetailRevisions')
+    .select('channelDetailRevisions.id')
+    .whereRef('channelDetailRevisions.channelId', '=', 'messages.channelId')
+    .orderBy('channelDetailRevisions.createdAt', 'desc')
+    .orderBy('channelDetailRevisions.id', 'desc')
+    .limit(1)
+}
+
+function latestAuthorDetailsOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
+    .selectFrom('memberDetailRevisions')
+    .select('memberDetailRevisions.id')
+    .whereRef('memberDetailRevisions.memberId', '=', 'messages.authorMemberId')
+    .orderBy('memberDetailRevisions.createdAt', 'desc')
+    .orderBy('memberDetailRevisions.id', 'desc')
+    .limit(1)
+}
+
+function standingBookmarks() {
+  return db()
+    .selectFrom('bookmarkAdditions as standingBookmarks')
+    .where((eb) =>
+      eb(
+        'standingBookmarks.id',
+        '=',
+        latestBookmarkEventOf(eb.ref('standingBookmarks.messageId'))
+      )
+    )
+}
+
+function standingBookmarksIn(guildId: string) {
+  return standingBookmarks()
+    .innerJoin('messages', 'messages.id', 'standingBookmarks.messageId')
+    .innerJoin('channels', 'channels.id', 'messages.channelId')
+    .where(({ exists, selectFrom }) =>
+      exists(
+        selectFrom('guilds')
+          .select('guilds.id')
+          .whereRef('guilds.id', '=', 'channels.guildId')
+          .where('guilds.discordGuildId', '=', guildId)
+      )
+    )
 }
 
 function reasonsWithCurrentDetails() {
   return db()
     .selectFrom('bookmarkReasons')
-    .innerJoin(latestReasonDetails(), (join) =>
-      join
-        .onRef('latestReasonDetails.reasonId', '=', 'bookmarkReasons.id')
-        .on('latestReasonDetails.rowNumber', '=', 1)
+    .innerJoin('bookmarkReasonDetailRevisions as latestReasonDetails', (join) =>
+      join.on((eb) =>
+        eb(
+          'latestReasonDetails.id',
+          '=',
+          latestReasonDetailsOf(eb.ref('bookmarkReasons.id'))
+        )
+      )
     )
 }
 
@@ -338,12 +373,10 @@ function messagesInGuild(guildId: string) {
     .select(['messages.id', 'messages.discordMessageId'])
 }
 
-async function readBookmarkState(messageId: string) {
-  return await db()
-    .selectFrom(latestBookmarkEvents())
-    .select(['bookmarked', 'source', 'createdAt'])
-    .where('rowNumber', '=', 1)
-    .where('messageId', '=', messageId)
+async function readStandingBookmark(messageId: string) {
+  return await standingBookmarks()
+    .select(['standingBookmarks.source', 'standingBookmarks.createdAt'])
+    .where('standingBookmarks.messageId', '=', messageId)
     .executeTakeFirst()
 }
 
@@ -460,23 +493,18 @@ const listBookmarkReasons = applySchema(
       'bookmarkReasons.id as reasonId',
       'latestReasonDetails.name',
       'latestReasonDetails.description',
-      eb
-        .selectFrom('messages')
-        .innerJoin('channels', 'channels.id', 'messages.channelId')
-        .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-        .innerJoin(
-          latestBookmarkEvents(),
-          'latestBookmarkEvents.messageId',
-          'messages.id'
+      standingBookmarksIn(context.owner.guildId)
+        .leftJoin(
+          'bookmarkReasonAssignments as latestReasonAssignments',
+          (join) =>
+            join.on((inner) =>
+              inner(
+                'latestReasonAssignments.id',
+                '=',
+                latestReasonAssignmentOf(inner)
+              )
+            )
         )
-        .leftJoin(latestReasonAssignments(), (join) =>
-          join
-            .onRef('latestReasonAssignments.messageId', '=', 'messages.id')
-            .on('latestReasonAssignments.rowNumber', '=', 1)
-        )
-        .where('latestBookmarkEvents.rowNumber', '=', 1)
-        .where('latestBookmarkEvents.bookmarked', '=', 1)
-        .where('guilds.discordGuildId', '=', context.owner.guildId)
         .where((inner) =>
           inner(
             inner.fn.coalesce(
@@ -484,7 +512,7 @@ const listBookmarkReasons = applySchema(
               inner.val(inboxBookmarkReasonId)
             ),
             '=',
-            inner.ref('bookmarkReasons.id')
+            eb.ref('bookmarkReasons.id')
           )
         )
         .select((inner) => inner.fn.countAll<number>().as('bookmarkCount'))
@@ -507,9 +535,7 @@ const setBookmarkReason = applySchema(
 
   if (!message) throw unknownMessageError()
 
-  const state = await readBookmarkState(message.id)
-
-  if (state?.bookmarked !== 1) {
+  if (!(await readStandingBookmark(message.id))) {
     throw new InputError(
       'That message is not bookmarked, so there is nothing to sort',
       ['messageId']
@@ -580,9 +606,9 @@ const addBookmarkByLink = applySchema(
 
   const reason = await requireAssignableReason(reasonId)
 
-  const state = await readBookmarkState(message.id)
+  const standingBookmark = await readStandingBookmark(message.id)
 
-  if (state?.bookmarked === 1) {
+  if (standingBookmark) {
     await db()
       .insertInto('bookmarkReasonAssignments')
       .values({ id: newId(), messageId: message.id, reasonId })
@@ -591,8 +617,8 @@ const addBookmarkByLink = applySchema(
     return {
       bookmark: {
         messageId: message.id,
-        source: state.source,
-        bookmarkedAt: state.createdAt,
+        source: standingBookmark.source,
+        bookmarkedAt: standingBookmark.createdAt,
         reasonId,
         reasonName: reason.name,
       },
@@ -633,140 +659,56 @@ const listBookmarks = applySchema(
 )(async ({ includeSnoozed, limit, reasonId }, context) => {
   if (reasonId && !(await readReason(reasonId))) throw unknownReasonError()
 
-  const rankedRevisions = db()
-    .selectFrom('messageRevisions')
-    .select((eb) => [
-      'messageId',
-      'content',
-      'id as revisionId',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('messageId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestRevisions')
-
-  const rankedChannelDetails = db()
-    .selectFrom('channelDetailRevisions')
-    .select((eb) => [
-      'channelId',
-      'name',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestChannelDetails')
-
-  const rankedMemberDetails = db()
-    .selectFrom('memberDetailRevisions')
-    .select((eb) => [
-      'memberId',
-      'displayName',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('memberId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestMemberDetails')
-
-  const rankedSnoozes = db()
-    .selectFrom('bookmarkSnoozes')
-    .select((eb) => [
-      'messageId',
-      'until',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('messageId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('rankedSnoozes')
-
-  const activeSnoozes = db()
-    .selectFrom(rankedSnoozes)
-    .select(['messageId', 'until'])
-    .where('rowNumber', '=', 1)
-    .where('until', '>', nowInstant)
-    .as('activeSnoozes')
-
-  const query = db()
-    .selectFrom('messages')
-    .innerJoin(
-      latestBookmarkEvents(),
-      'latestBookmarkEvents.messageId',
-      'messages.id'
+  const query = standingBookmarksIn(context.owner.guildId)
+    .leftJoin('bookmarkReasonAssignments as latestReasonAssignments', (join) =>
+      join.on((eb) =>
+        eb('latestReasonAssignments.id', '=', latestReasonAssignmentOf(eb))
+      )
     )
-    .innerJoin('channels', 'channels.id', 'messages.channelId')
-    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .innerJoin(rankedRevisions, 'latestRevisions.messageId', 'messages.id')
-    .innerJoin(
-      rankedChannelDetails,
-      'latestChannelDetails.channelId',
-      'channels.id'
+    .innerJoin('messageRevisions as latestRevisions', (join) =>
+      join.on((eb) => eb('latestRevisions.id', '=', latestRevisionOf(eb)))
     )
-    .innerJoin(
-      rankedMemberDetails,
-      'latestMemberDetails.memberId',
-      'messages.authorMemberId'
+    .innerJoin('channelDetailRevisions as latestChannelDetails', (join) =>
+      join.on((eb) =>
+        eb('latestChannelDetails.id', '=', latestChannelDetailsOf(eb))
+      )
     )
-    .leftJoin(activeSnoozes, 'activeSnoozes.messageId', 'messages.id')
-    .leftJoin(latestReasonAssignments(), (join) =>
+    .innerJoin('memberDetailRevisions as latestMemberDetails', (join) =>
+      join.on((eb) =>
+        eb('latestMemberDetails.id', '=', latestAuthorDetailsOf(eb))
+      )
+    )
+    .leftJoin('bookmarkSnoozes as activeSnoozes', (join) =>
       join
-        .onRef('latestReasonAssignments.messageId', '=', 'messages.id')
-        .on('latestReasonAssignments.rowNumber', '=', 1)
+        .on((eb) => eb('activeSnoozes.id', '=', latestSnoozeOf(eb)))
+        .on('activeSnoozes.until', '>', nowInstant)
     )
-    .innerJoin(latestReasonDetails(), (join) =>
-      join
-        .on('latestReasonDetails.rowNumber', '=', 1)
-        .on((eb) =>
-          eb(
-            'latestReasonDetails.reasonId',
-            '=',
+    .innerJoin('bookmarkReasonDetailRevisions as latestReasonDetails', (join) =>
+      join.on((eb) =>
+        eb(
+          'latestReasonDetails.id',
+          '=',
+          latestReasonDetailsOf(
             eb.fn.coalesce(
               'latestReasonAssignments.reasonId',
               eb.val(inboxBookmarkReasonId)
             )
           )
         )
+      )
     )
-    .where('latestBookmarkEvents.rowNumber', '=', 1)
-    .where('latestBookmarkEvents.bookmarked', '=', 1)
-    .where('latestRevisions.rowNumber', '=', 1)
-    .where('latestChannelDetails.rowNumber', '=', 1)
-    .where('latestMemberDetails.rowNumber', '=', 1)
-    .where('guilds.discordGuildId', '=', context.owner.guildId)
     .select((eb) => [
       'messages.id as messageId',
       'messages.discordMessageId',
       'messages.discordCreatedAt',
       'messages.channelId',
       'channels.discordChannelId',
-      'guilds.discordGuildId',
+      eb.val(context.owner.guildId).as('discordGuildId'),
       'latestChannelDetails.name as channelName',
       'latestMemberDetails.displayName as authorDisplayName',
       'latestRevisions.content',
-      'latestBookmarkEvents.createdAt as bookmarkedAt',
-      'latestBookmarkEvents.source',
+      'standingBookmarks.createdAt as bookmarkedAt',
+      'standingBookmarks.source',
       'latestReasonDetails.reasonId',
       'latestReasonDetails.name as reasonName',
       'activeSnoozes.until as snoozedUntil',
@@ -776,7 +718,7 @@ const listBookmarks = applySchema(
         .whereRef(
           'messageRevisionEmbeds.messageRevisionId',
           '=',
-          'latestRevisions.revisionId'
+          'latestRevisions.id'
         )
         .as('embeds'),
       eb
@@ -785,7 +727,7 @@ const listBookmarks = applySchema(
         .whereRef(
           'messageRevisionAttachments.messageRevisionId',
           '=',
-          'latestRevisions.revisionId'
+          'latestRevisions.id'
         )
         .as('attachments'),
       standingReactionsOfTheMessage(context.owner.discordUserId).as(
@@ -811,13 +753,13 @@ const listBookmarks = applySchema(
         .$castTo<number>()
         .as('deletedUpstream'),
     ])
-    .orderBy('latestBookmarkEvents.createdAt', 'desc')
+    .orderBy('standingBookmarks.createdAt', 'desc')
     .orderBy(sql`cast(messages.discord_message_id as integer)`, 'desc')
     .limit(limit + 1)
 
   const awake = includeSnoozed
     ? query
-    : query.where('activeSnoozes.messageId', 'is', null)
+    : query.where('activeSnoozes.id', 'is', null)
 
   const rows = await (reasonId
     ? awake.where('latestReasonDetails.reasonId', '=', reasonId)
@@ -864,9 +806,7 @@ const resolveBookmark = applySchema(
 
   if (!message) throw unknownMessageError()
 
-  const state = await readBookmarkState(message.id)
-
-  if (state?.bookmarked !== 1) {
+  if (!(await readStandingBookmark(message.id))) {
     throw new InputError(
       'That message is not bookmarked, so there is nothing to resolve',
       ['messageId']
@@ -907,9 +847,7 @@ const snoozeBookmark = applySchema(
 
   if (!message) throw unknownMessageError()
 
-  const state = await readBookmarkState(message.id)
-
-  if (state?.bookmarked !== 1) {
+  if (!(await readStandingBookmark(message.id))) {
     throw new InputError(
       'That message is not bookmarked, so there is nothing to snooze',
       ['messageId']

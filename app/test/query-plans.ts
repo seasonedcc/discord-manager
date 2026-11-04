@@ -80,6 +80,22 @@ function wholeTableSteps(steps: string[], tables: string[]) {
   )
 }
 
+function scansBeyond(steps: string[], allowed: string[]) {
+  const derivedTables = steps.flatMap(
+    (step) => /^(?:CO-ROUTINE|MATERIALIZE) (\S+)/.exec(step)?.slice(1) ?? []
+  )
+
+  return steps.filter((step) => {
+    const scanned = /^SCAN (\S+)/.exec(step)?.[1]
+
+    return (
+      scanned !== undefined &&
+      step !== 'SCAN CONSTANT ROW' &&
+      ![...derivedTables, ...allowed].includes(scanned)
+    )
+  })
+}
+
 function lookupsSortingTheirTieBreak(branches: string[][], tables: string[]) {
   return branches.filter(
     (steps) =>
@@ -90,4 +106,4 @@ function lookupsSortingTheirTieBreak(branches: string[][], tables: string[]) {
   )
 }
 
-export { lookupsSortingTheirTieBreak, plansOf, wholeTableSteps }
+export { lookupsSortingTheirTieBreak, plansOf, scansBeyond, wholeTableSteps }
