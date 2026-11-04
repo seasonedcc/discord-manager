@@ -249,17 +249,17 @@ depend on the data) and after `analyze`, to one assertion, `expectEveryPlan` in
   At run time SQLite skips that scan unless a violation is outstanding, so it costs
   nothing on a store whose constraints hold.
 - **No lookup that sorts.** Each guard lists the tables its readers look up the latest
-  event of, and the tables they probe once per row with `exists`, such as a channel's
-  removals or a backfill run's completion. A subquery, a `with` table or any other derived
-  table (`CO-ROUTINE`, `MATERIALIZE`) that reads one of them may not sort, whatever it
-  sorts by. Each temporary b-tree is charged to the nearest of these above it, or else to
-  the statement, and that one's reads are followed through derived tables down to, but not
-  into, nested subqueries: the union a lookup sorts over a reversible pair, or over a
-  send's three outcome tables, stays in view, and an aggregate's own sort is not blamed on
-  a lookup nested inside it. A statement that reads nothing outside its subqueries but
-  listed tables and the guild row is itself a lookup and may not sort either; a reader's
-  own `order by`, over the rows it lists, may. A table is recognized by the index it is
-  read through, so an alias does not hide it.
+  event of, and the event tables they probe once per row with `exists`, such as a
+  message's deletion, a channel's removals or a backfill run's completion. A subquery, a
+  `with` table or any other derived table (`CO-ROUTINE`, `MATERIALIZE`) that reads one of
+  them may not sort, whatever it sorts by. Each temporary b-tree is charged to the nearest
+  of these above it, or else to the statement, and that one's reads are followed through
+  derived tables down to, but not into, nested subqueries: the union a lookup sorts over a
+  reversible pair, or over a send's three outcome tables, stays in view, and an
+  aggregate's own sort is not blamed on a lookup nested inside it. A statement that reads
+  nothing outside its subqueries but listed tables and the guild row is itself a lookup
+  and may not sort either; a reader's own `order by`, over the rows it lists, may. A table
+  is recognized by the index it is read through, so an alias does not hide it.
 - **Every index reached by name**: the window index and each lookup's index, in the readers
   that use them. A step reads the same in whichever statement plans it, and the
   foreign-key check above, searching an indexed child, prints exactly the seek a lookup on
@@ -273,7 +273,11 @@ and the daemon's channel snapshot and its archive and backfill sweeps.
 The per-message reaction set does sort, on purpose, and no guard lists its tables. It is
 not a latest-event lookup but a standing set: each message's few reaction additions and
 removals are ranked per emoji and reactor and grouped by emoji in temporary b-trees, a
-cost bounded by one message's reactions.
+cost bounded by one message's reactions. A revision's embeds and attachments sort too: each
+is gathered into one list in its order in the message, a cost bounded by that revision's
+own. So no guard lists `message_revision_embeds` either, although `countMessages` probes it
+with `exists` when it matches text; listed, it would fail every reader that shows a message
+on that list's sort.
 
 ### Schema (initial)
 

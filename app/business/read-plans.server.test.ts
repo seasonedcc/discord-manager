@@ -7,6 +7,8 @@ import { expectEveryPlan } from '~/test/query-plans'
 
 const latestStateTables = [
   'message_revisions',
+  'message_revision_user_mentions',
+  'message_deletions',
   'channel_detail_revisions',
   'member_detail_revisions',
   'gateway_identifications',
