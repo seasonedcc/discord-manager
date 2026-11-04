@@ -7,12 +7,8 @@ import {
   listBookmarks,
 } from '~/business/bookmarks.server'
 import { createBusyBookmarks, createBusyGuild } from '~/test/fixtures'
-import { beforeAll, describe, expect, it } from '~/test/prelude'
-import {
-  lookupsSortingTheirTieBreak,
-  plansOf,
-  scansBeyond,
-} from '~/test/query-plans'
+import { beforeAll, describe, it } from '~/test/prelude'
+import { expectEveryPlan } from '~/test/query-plans'
 
 const latestStateTables = [
   'message_revisions',
@@ -56,32 +52,6 @@ beforeAll(async () => {
   busyBookmarks = await createBusyBookmarks(busyGuild)
 })
 
-async function expectEveryPlan(
-  read: () => Promise<unknown>,
-  { reaches, scanning = [] }: { reaches: string[]; scanning?: string[] }
-) {
-  for (const { statistics, branches } of await plansOf(read)) {
-    const steps = branches.flat()
-
-    expect(
-      steps.filter((step) => step.includes('AUTOMATIC')),
-      `statistics ${statistics}`
-    ).toEqual([])
-    expect(
-      scansBeyond(steps, ['guilds', ...scanning]),
-      `statistics ${statistics}`
-    ).toEqual([])
-    expect(
-      lookupsSortingTheirTieBreak(branches, latestStateTables),
-      `statistics ${statistics}`
-    ).toEqual([])
-
-    for (const step of reaches) {
-      expect(steps, `statistics ${statistics}`).toContain(step)
-    }
-  }
-}
-
 describe('listBookmarks', () => {
   it('walks the standing bookmarks, looking up each one’s latest state, whatever the filters', async () => {
     const [busyReasonId] = busyBookmarks.reasonIds
@@ -97,6 +67,8 @@ describe('listBookmarks', () => {
       await expectEveryPlan(
         () => fromSuccess(listBookmarks)(input, busyGuild.context),
         {
+          latestStateTables,
+          scanning: ['guilds', 'standing_bookmarks'],
           reaches: [
             ...latestBookmarkEventSteps,
             bookmarkedMessageStep,
@@ -105,7 +77,6 @@ describe('listBookmarks', () => {
             latestSnoozeStep,
             ...messageLookupSteps,
           ],
-          scanning: ['standing_bookmarks'],
         }
       )
     }
@@ -117,13 +88,14 @@ describe('listBookmarkReasons', () => {
     await expectEveryPlan(
       () => fromSuccess(listBookmarkReasons)({}, busyGuild.context),
       {
+        latestStateTables,
+        scanning: ['bookmark_reasons', 'guilds', 'standing_bookmarks'],
         reaches: [
           ...latestBookmarkEventSteps,
           bookmarkedMessageStep,
           latestReasonAssignmentStep,
           latestReasonDetailsStep,
         ],
-        scanning: ['standing_bookmarks', 'bookmark_reasons'],
       }
     )
   })
@@ -145,6 +117,8 @@ describe('addBookmarkByLink', () => {
           busyGuild.context
         ),
       {
+        latestStateTables,
+        scanning: ['guilds'],
         reaches: [...latestBookmarkEventSteps, latestReasonDetailsStep],
       }
     )
@@ -163,7 +137,11 @@ describe('editBookmarkReason', () => {
           },
           busyGuild.context
         ),
-      { reaches: [latestReasonDetailsStep], scanning: ['bookmark_reasons'] }
+      {
+        latestStateTables,
+        scanning: ['bookmark_reasons'],
+        reaches: [latestReasonDetailsStep],
+      }
     )
   })
 })

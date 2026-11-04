@@ -3,7 +3,9 @@ import * as path from 'node:path'
 import Database from 'better-sqlite3'
 import { type CompiledQuery, sql } from 'kysely'
 import { env } from '~/framework/env.server'
-import { db, vi } from './prelude'
+import { db, expect, vi } from './prelude'
+
+type PlanStep = { id: number; parent: number; detail: string; table?: string }
 
 async function statementsRunBy(read: () => Promise<unknown>) {
   const executeQuery = vi.spyOn(db().getExecutor(), 'executeQuery')
@@ -31,15 +33,30 @@ async function copyWithStatistics() {
   return copy
 }
 
-function branchesOf(store: Database.Database, statement: CompiledQuery) {
+function planOf(store: Database.Database, statement: CompiledQuery) {
+  const tablesByIndex = new Map(
+    (
+      store
+        .prepare(
+          `select name, tbl_name as "table" from sqlite_schema where type = 'index'`
+        )
+        .all() as { name: string; table: string }[]
+    ).map(({ name, table }) => [name, table])
+  )
   const steps = store
     .prepare(`explain query plan ${statement.sql}`)
-    .all(...statement.parameters) as { parent: number; detail: string }[]
-  const parents = [...new Set(steps.map(({ parent }) => parent))]
+    .all(...statement.parameters) as PlanStep[]
 
-  return parents.map((parent) =>
-    steps.filter((step) => step.parent === parent).map(({ detail }) => detail)
-  )
+  return steps.map((step) => {
+    const tableRead =
+      /^(?:SEARCH|SCAN) (\S+)(?:.* USING (?:COVERING )?INDEX (\S+))?/.exec(
+        step.detail
+      )
+
+    return tableRead
+      ? { ...step, table: tablesByIndex.get(tableRead[2]) ?? tableRead[1] }
+      : step
+  })
 }
 
 async function plansOf(read: () => Promise<unknown>) {
@@ -53,15 +70,13 @@ async function plansOf(read: () => Promise<unknown>) {
     return [
       {
         statistics: 'never gathered',
-        branches: statements.flatMap((statement) =>
-          branchesOf(withoutStatistics, statement)
+        plans: statements.map((statement) =>
+          planOf(withoutStatistics, statement)
         ),
       },
       {
         statistics: 'gathered',
-        branches: statements.flatMap((statement) =>
-          branchesOf(withStatistics, statement)
-        ),
+        plans: statements.map((statement) => planOf(withStatistics, statement)),
       },
     ]
   } finally {
@@ -70,40 +85,75 @@ async function plansOf(read: () => Promise<unknown>) {
   }
 }
 
-function wholeTableSteps(steps: string[], tables: string[]) {
-  return steps.filter(
-    (step) =>
-      step.includes('AUTOMATIC') ||
-      tables.some(
-        (table) => step.startsWith(`SCAN ${table} `) || step === `SCAN ${table}`
-      )
+function wholeTableReadsBeyond(plan: PlanStep[], allowedScans: string[]) {
+  const derivedTables = plan.flatMap(
+    ({ detail }) =>
+      /^(?:CO-ROUTINE|MATERIALIZE) (\S+)/.exec(detail)?.slice(1) ?? []
   )
+
+  return plan
+    .filter(({ detail }) => {
+      const scanned = /^SCAN (\S+)/.exec(detail)?.[1]
+
+      return (
+        detail.includes('AUTOMATIC') ||
+        (scanned !== undefined &&
+          detail !== 'SCAN CONSTANT ROW' &&
+          ![...derivedTables, ...allowedScans].includes(scanned))
+      )
+    })
+    .map(({ detail }) => detail)
 }
 
-function scansBeyond(steps: string[], allowed: string[]) {
-  const derivedTables = steps.flatMap(
-    (step) => /^(?:CO-ROUTINE|MATERIALIZE) (\S+)/.exec(step)?.slice(1) ?? []
-  )
+function lookupsThatSort(plan: PlanStep[], latestStateTables: string[]) {
+  const subtreeOf = (root: PlanStep): PlanStep[] => [
+    root,
+    ...plan.filter(({ parent }) => parent === root.id).flatMap(subtreeOf),
+  ]
 
-  return steps.filter((step) => {
-    const scanned = /^SCAN (\S+)/.exec(step)?.[1]
-
-    return (
-      scanned !== undefined &&
-      step !== 'SCAN CONSTANT ROW' &&
-      ![...derivedTables, ...allowed].includes(scanned)
+  return plan
+    .filter(({ detail }) =>
+      /^(?:CORRELATED )?(?:SCALAR|LIST) SUBQUERY/.test(detail)
     )
-  })
+    .map(subtreeOf)
+    .filter(
+      (lookup) =>
+        lookup.some(({ detail }) => detail.startsWith('USE TEMP B-TREE')) &&
+        lookup.some(
+          ({ table }) =>
+            table !== undefined && latestStateTables.includes(table)
+        )
+    )
+    .map((lookup) => lookup.map(({ detail }) => detail))
 }
 
-function lookupsSortingTheirTieBreak(branches: string[][], tables: string[]) {
-  return branches.filter(
-    (steps) =>
-      steps.includes('USE TEMP B-TREE FOR LAST TERM OF ORDER BY') &&
-      steps.some((step) =>
-        tables.some((table) => step.startsWith(`SEARCH ${table} `))
-      )
-  )
+async function expectEveryPlan(
+  read: () => Promise<unknown>,
+  {
+    latestStateTables,
+    scanning,
+    reaches,
+  }: { latestStateTables: string[]; scanning: string[]; reaches: string[] }
+) {
+  for (const { statistics, plans } of await plansOf(read)) {
+    const message = `statistics ${statistics}`
+
+    expect(
+      plans.flatMap((plan) => wholeTableReadsBeyond(plan, scanning)),
+      message
+    ).toEqual([])
+    expect(
+      plans.flatMap((plan) => lookupsThatSort(plan, latestStateTables)),
+      message
+    ).toEqual([])
+
+    for (const step of reaches) {
+      expect(
+        plans.flat().map(({ detail }) => detail),
+        message
+      ).toContain(step)
+    }
+  }
 }
 
-export { lookupsSortingTheirTieBreak, plansOf, scansBeyond, wholeTableSteps }
+export { expectEveryPlan }

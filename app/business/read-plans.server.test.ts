@@ -2,12 +2,8 @@ import { fromSuccess } from 'composable-functions'
 import { catchUpSince, listMentions } from '~/business/digests.server'
 import { countMessages } from '~/business/messages.server'
 import { createBusyGuild } from '~/test/fixtures'
-import { beforeAll, describe, expect, it } from '~/test/prelude'
-import {
-  lookupsSortingTheirTieBreak,
-  plansOf,
-  wholeTableSteps,
-} from '~/test/query-plans'
+import { beforeAll, describe, it } from '~/test/prelude'
+import { expectEveryPlan } from '~/test/query-plans'
 
 const latestStateTables = [
   'message_revisions',
@@ -44,39 +40,16 @@ beforeAll(async () => {
   ).toISOString()
 })
 
-async function expectEveryPlan(
-  read: () => Promise<unknown>,
-  { reaches, scanning = [] }: { reaches: string[]; scanning?: string[] }
-) {
-  for (const { statistics, branches } of await plansOf(read)) {
-    const steps = branches.flat()
-
-    expect(
-      wholeTableSteps(
-        steps,
-        ['messages', ...latestStateTables].filter(
-          (table) => !scanning.includes(table)
-        )
-      ),
-      `statistics ${statistics}`
-    ).toEqual([])
-    expect(
-      lookupsSortingTheirTieBreak(branches, latestStateTables),
-      `statistics ${statistics}`
-    ).toEqual([])
-
-    for (const step of reaches) {
-      expect(steps, `statistics ${statistics}`).toContain(step)
-    }
-  }
-}
-
 describe('catchUpSince', () => {
   it('walks a server-wide window through the messages index, looking up each message’s latest state', async () => {
     for (const since of [lastDay, busyGuild.firstMessageAt]) {
       await expectEveryPlan(
         () => fromSuccess(catchUpSince)({ since }, busyGuild.context),
-        { reaches: [serverWideWindowStep, ...digestLookupSteps] }
+        {
+          latestStateTables,
+          scanning: ['guilds'],
+          reaches: [serverWideWindowStep, ...digestLookupSteps],
+        }
       )
     }
   })
@@ -91,7 +64,11 @@ describe('catchUpSince', () => {
           },
           busyGuild.context
         ),
-      { reaches: [channelWindowStep, ...digestLookupSteps] }
+      {
+        latestStateTables,
+        scanning: ['guilds'],
+        reaches: [channelWindowStep, ...digestLookupSteps],
+      }
     )
   })
 })
@@ -102,6 +79,8 @@ describe('listMentions', () => {
       await expectEveryPlan(
         () => fromSuccess(listMentions)({ since }, busyGuild.context),
         {
+          latestStateTables,
+          scanning: ['guilds'],
           reaches: [
             serverWideWindowStep,
             ...digestLookupSteps,
@@ -121,7 +100,11 @@ describe('countMessages', () => {
           { since: lastDay, groupBy: 'day' },
           busyGuild.context
         ),
-      { reaches: [serverWideWindowStep] }
+      {
+        latestStateTables,
+        scanning: ['guilds'],
+        reaches: [serverWideWindowStep],
+      }
     )
   })
 
@@ -132,7 +115,11 @@ describe('countMessages', () => {
           { contentContains: 'message 1', since: lastDay, groupBy: 'day' },
           busyGuild.context
         ),
-      { reaches: [serverWideWindowStep, latestRevisionStep] }
+      {
+        latestStateTables,
+        scanning: ['guilds'],
+        reaches: [serverWideWindowStep, latestRevisionStep],
+      }
     )
   })
 
@@ -143,7 +130,11 @@ describe('countMessages', () => {
           { contentContains: 'message 1' },
           busyGuild.context
         ),
-      { reaches: [latestRevisionStep], scanning: ['messages'] }
+      {
+        latestStateTables,
+        scanning: ['guilds', 'messages'],
+        reaches: [latestRevisionStep],
+      }
     )
   })
 })
