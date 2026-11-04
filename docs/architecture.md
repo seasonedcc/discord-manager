@@ -207,16 +207,23 @@ had one":
 ))
 ```
 
-The channel's topic, category and position pairs and its archive pair read this way, and
-so does a send's status, which unions the send's three outcome tables (deliveries,
-failures and skips) the same way. Where a reader needs one table's latest row besides — a
-send's latest delivery for its message id — it left-joins that row by id the same way the
-inner join above does, so a missing row stays a missing field rather than a missing parent.
+The channel's topic, category and position pairs and its archive pair read this way, both
+in `channels_list` and where the daemon compares a channel snapshot with the store. A
+send's status is not a pair, but it reads the same way, with one arm for each of the
+send's three outcome tables (deliveries, failures and skips). Where a reader needs one
+table's latest row besides — a send's latest delivery for its message id — it left-joins
+that row by id the same way the inner join above does, so a missing row stays a missing
+field rather than a missing parent.
 
-The bot identity a mentions read compares against reads `gateway_identifications` alone and
-finds the guild's id through a scalar subquery on `guilds`' unique key rather than joining
-`guilds`: joined, the planner can start from `guilds` once statistics exist and then sort
-that guild's every identification.
+A reader that needs only the instant of a table's newest row asks for `max(created_at)`:
+events that share that instant agree on it, so the tie-break has nothing to decide, and the
+table's `created_at` index answers with one seek. `ingestion_status` reads the newest
+gateway connection, disconnection and heartbeat this way.
+
+The bot identity that `mentions_list`, `members_list` and `activity_since` compare against
+is read from `gateway_identifications` alone, with the guild's id found through a scalar
+subquery on the unique key of `guilds`. Joining `guilds` would let the planner start from
+the guild row once statistics exist, and then sort every identification of that guild.
 
 `app/business/read-plans.server.test.ts`, `app/business/bookmark-read-plans.server.test.ts`
 and `app/business/latest-state-plans.server.test.ts` guard these shapes without timing
@@ -228,23 +235,39 @@ depend on the data) and after `analyze`, to one assertion, `expectEveryPlan` in
 
 - **No whole-table read beyond the guard's allow-list.** A plan scans nothing but what its
   guard names (the guild row, the population a reader walks, such as the standing
-  bookmarks or every message for an unwindowed count, and the reasons catalog) and the
-  derived tables it builds itself, and builds no automatic index. The guard names what
-  may be scanned rather than what may not, because SQLite reports an aliased table under
-  its alias: a full read of `bookmark_additions` joined as `standing_bookmarks` shows up as
-  `SCAN standing_bookmarks`, which a list of forbidden table names never matches.
+  bookmarks, every channel or member a list returns, every bookmark addition
+  `activity_since` weighs against its cutoff, or every message for an unwindowed count,
+  and the reasons catalog) and the derived tables it builds itself, and builds no
+  automatic index. The guard names what may be scanned rather than what may not, because
+  SQLite reports an aliased table under its alias: a full read of `bookmark_additions`
+  joined as `standing_bookmarks` shows up as `SCAN standing_bookmarks`, which a list of
+  forbidden table names never matches. Thread creation's guard also names the children of
+  `channels` and `thread_creation_requests` that have no index on their foreign key: an
+  insert with `returning` or `on conflict` into a parent table makes SQLite plan a scan of
+  each such child, in case the new row resolves an outstanding foreign-key violation. At
+  run time SQLite skips that scan unless a violation is outstanding, so it costs nothing on
+  a store whose constraints hold.
 - **No lookup that sorts.** Each guard lists the tables its readers look up the latest
-  event of. A subquery, a `with` table or any other derived table (`CO-ROUTINE`,
-  `MATERIALIZE`) that reads one of them may not sort, whatever it sorts by. Each temporary
-  b-tree is charged to the nearest of these above it, or else to the statement, and that
-  one's reads are followed through derived tables down to, but not into, nested
-  subqueries: the union a pair lookup sorts stays in view, and an aggregate's own sort is
-  not blamed on a lookup nested inside it. A statement that reads nothing outside its
-  subqueries but listed tables and the guild row is itself a lookup and may not sort
-  either; a reader's own `order by`, over the rows it lists, may. A table is recognized by
-  the index it is read through, so an alias does not hide it.
+  event of, and the tables they probe once per row with `exists`, such as a channel's
+  removals or a backfill run's completion. A subquery, a `with` table or any other derived
+  table (`CO-ROUTINE`, `MATERIALIZE`) that reads one of them may not sort, whatever it
+  sorts by. Each temporary b-tree is charged to the nearest of these above it, or else to
+  the statement, and that one's reads are followed through derived tables down to, but not
+  into, nested subqueries: the union a lookup sorts over a reversible pair, or over a
+  send's three outcome tables, stays in view, and an aggregate's own sort is not blamed on
+  a lookup nested inside it. A statement that reads nothing outside its subqueries but
+  listed tables and the guild row is itself a lookup and may not sort either; a reader's
+  own `order by`, over the rows it lists, may. A table is recognized by the index it is
+  read through, so an alias does not hide it.
 - **Every index reached by name**: the window index and each lookup's index, in the readers
-  that use them.
+  that use them. A step reads the same in whichever statement plans it, and the
+  foreign-key check above, searching an indexed child, prints exactly the seek a lookup on
+  that child prints. Thread creation's guard therefore also names the join to the parent
+  channel's one latest revision by id, a step only its lookup plans.
+
+`app/business/latest-state-plans.server.test.ts` holds `ingestion_status`, `channels_list`,
+`members_list`, `messages_send_status`, `activity_since`, thread creation's parent lookup,
+and the daemon's channel snapshot and its archive and backfill sweeps.
 
 The per-message reaction set does sort, on purpose, and no guard lists its tables. It is
 not a latest-event lookup but a standing set: each message's few reaction additions and
@@ -261,12 +284,12 @@ Events, each indexed by its parent — `(parentId, createdAt desc)` wherever lat
 reads them; `(parentId, createdAt desc, id desc)` where a per-row lookup reads the latest
 event, widened from the two-column index on `message_revisions`, `channel_detail_revisions`,
 `member_detail_revisions`, `backfill_runs`, both tables of every channel attribute pair
-and of the archive pair, a send's three outcome tables, `bookmark_additions`,
-`bookmark_removals`, `bookmark_snoozes`, `bookmark_reason_assignments` and
-`bookmark_reason_detail_revisions`, and new on `gateway_identifications`, which had none;
-and a
-unique key on the parent plus what tells its rows apart where a parent's rows are one set
-read whole (`message_revision_user_mentions`, `message_revision_embeds`,
+and of the archive pair, a send's three outcome tables and its retry link
+(`message_send_request_retries`), `bookmark_additions`, `bookmark_removals`,
+`bookmark_snoozes`, `bookmark_reason_assignments` and `bookmark_reason_detail_revisions`,
+and new on `gateway_identifications`, which had none; and a unique key on the parent plus
+what tells its rows apart where a parent's rows are one set read whole
+(`message_revision_user_mentions`, `message_revision_embeds`,
 `message_revision_attachments`):
 
 - `channel_detail_revisions` — full snapshot of what every channel always has: name and
