@@ -1,14 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import Database from 'better-sqlite3'
-import { type CompiledQuery, sql } from 'kysely'
+import { type CompiledQuery, DefaultQueryExecutor, sql } from 'kysely'
 import { env } from '~/framework/env.server'
 import { db, expect, vi } from './prelude'
 
 type PlanStep = { id: number; parent: number; detail: string; table?: string }
 
+const subquery = /^(?:CORRELATED )?(?:SCALAR|LIST) SUBQUERY/
+const derivedTable = /^(?:CO-ROUTINE|MATERIALIZE) (\S+)/
+const guildTable = 'guilds'
+
 async function statementsRunBy(read: () => Promise<unknown>) {
-  const executeQuery = vi.spyOn(db().getExecutor(), 'executeQuery')
+  const executeQuery = vi.spyOn(DefaultQueryExecutor.prototype, 'executeQuery')
 
   try {
     await read()
@@ -33,7 +37,7 @@ async function copyWithStatistics() {
   return copy
 }
 
-function planOf(store: Database.Database, statement: CompiledQuery) {
+function plannerOf(store: Database.Database) {
   const tablesByIndex = new Map(
     (
       store
@@ -43,24 +47,25 @@ function planOf(store: Database.Database, statement: CompiledQuery) {
         .all() as { name: string; table: string }[]
     ).map(({ name, table }) => [name, table])
   )
-  const steps = store
-    .prepare(`explain query plan ${statement.sql}`)
-    .all(...statement.parameters) as PlanStep[]
 
-  return steps.map((step) => {
-    const tableRead =
-      /^(?:SEARCH|SCAN) (\S+)(?:.* USING (?:COVERING )?INDEX (\S+))?/.exec(
-        step.detail
-      )
+  return (statement: CompiledQuery) =>
+    (
+      store
+        .prepare(`explain query plan ${statement.sql}`)
+        .all(...statement.parameters) as PlanStep[]
+    ).map((step) => {
+      const tableRead =
+        /^(?:SEARCH|SCAN) (?!CONSTANT ROW$)(\S+)(?:.* USING (?:COVERING )?INDEX (\S+))?/.exec(
+          step.detail
+        )
 
-    return tableRead
-      ? { ...step, table: tablesByIndex.get(tableRead[2]) ?? tableRead[1] }
-      : step
-  })
+      return tableRead
+        ? { ...step, table: tablesByIndex.get(tableRead[2]) ?? tableRead[1] }
+        : step
+    })
 }
 
-async function plansOf(read: () => Promise<unknown>) {
-  const statements = await statementsRunBy(read)
+async function plansOf(statements: CompiledQuery[]) {
   const withoutStatistics = new Database(env().databasePath, {
     readonly: true,
   })
@@ -70,13 +75,11 @@ async function plansOf(read: () => Promise<unknown>) {
     return [
       {
         statistics: 'never gathered',
-        plans: statements.map((statement) =>
-          planOf(withoutStatistics, statement)
-        ),
+        plans: statements.map(plannerOf(withoutStatistics)),
       },
       {
         statistics: 'gathered',
-        plans: statements.map((statement) => planOf(withStatistics, statement)),
+        plans: statements.map(plannerOf(withStatistics)),
       },
     ]
   } finally {
@@ -85,11 +88,12 @@ async function plansOf(read: () => Promise<unknown>) {
   }
 }
 
+function derivedTablesIn(plan: PlanStep[]) {
+  return plan.flatMap(({ detail }) => derivedTable.exec(detail)?.slice(1) ?? [])
+}
+
 function wholeTableReadsBeyond(plan: PlanStep[], allowedScans: string[]) {
-  const derivedTables = plan.flatMap(
-    ({ detail }) =>
-      /^(?:CO-ROUTINE|MATERIALIZE) (\S+)/.exec(detail)?.slice(1) ?? []
-  )
+  const derivedTables = derivedTablesIn(plan)
 
   return plan
     .filter(({ detail }) => {
@@ -106,25 +110,42 @@ function wholeTableReadsBeyond(plan: PlanStep[], allowedScans: string[]) {
 }
 
 function lookupsThatSort(plan: PlanStep[], latestStateTables: string[]) {
-  const subtreeOf = (root: PlanStep): PlanStep[] => [
-    root,
-    ...plan.filter(({ parent }) => parent === root.id).flatMap(subtreeOf),
-  ]
+  const derivedTables = derivedTablesIn(plan)
+  const isNestedSelect = ({ detail }: PlanStep) =>
+    subquery.test(detail) || derivedTable.test(detail)
+  const childrenOf = (id: number) => plan.filter(({ parent }) => parent === id)
+  const scopeOf = (id: number): PlanStep[] =>
+    childrenOf(id).flatMap((step) =>
+      subquery.test(step.detail) ? [] : [step, ...scopeOf(step.id)]
+    )
+  const sortsOf = (id: number): PlanStep[] =>
+    childrenOf(id).flatMap((step) => {
+      if (step.detail.startsWith('USE TEMP B-TREE')) return [step]
 
-  return plan
-    .filter(({ detail }) =>
-      /^(?:CORRELATED )?(?:SCALAR|LIST) SUBQUERY/.test(detail)
-    )
-    .map(subtreeOf)
-    .filter(
-      (lookup) =>
-        lookup.some(({ detail }) => detail.startsWith('USE TEMP B-TREE')) &&
-        lookup.some(
-          ({ table }) =>
-            table !== undefined && latestStateTables.includes(table)
-        )
-    )
-    .map((lookup) => lookup.map(({ detail }) => detail))
+      return isNestedSelect(step) ? [] : sortsOf(step.id)
+    })
+  const statement = { id: 0, detail: 'the statement itself' }
+
+  return [statement, ...plan.filter(isNestedSelect)]
+    .filter((root) => {
+      const tables = scopeOf(root.id).flatMap(({ table }) =>
+        table === undefined || derivedTables.includes(table) ? [] : [table]
+      )
+      const looksUp = tables.some((table) => latestStateTables.includes(table))
+      const onlyLooksUp = tables.every(
+        (table) => latestStateTables.includes(table) || table === guildTable
+      )
+
+      return (
+        looksUp &&
+        (root !== statement || onlyLooksUp) &&
+        sortsOf(root.id).length > 0
+      )
+    })
+    .map((root) => [
+      root.detail,
+      ...scopeOf(root.id).map(({ detail }) => detail),
+    ])
 }
 
 async function expectEveryPlan(
@@ -135,7 +156,11 @@ async function expectEveryPlan(
     reaches,
   }: { latestStateTables: string[]; scanning: string[]; reaches: string[] }
 ) {
-  for (const { statistics, plans } of await plansOf(read)) {
+  const statements = await statementsRunBy(read)
+
+  expect(statements, 'statements the read ran').not.toHaveLength(0)
+
+  for (const { statistics, plans } of await plansOf(statements)) {
     const message = `statistics ${statistics}`
 
     expect(
