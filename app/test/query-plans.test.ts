@@ -8,6 +8,10 @@ const latestStateTables = ['message_revisions']
 const latestRevisionStep =
   'SEARCH message_revisions USING COVERING INDEX message_revisions_message_id_created_at_id_index (message_id=?)'
 
+const embedsAsJsonArray = sql<string>`json_group_array(
+  message_revision_embeds.content order by message_revision_embeds.position
+)`.as('embeds')
+
 describe('expectEveryPlan', () => {
   it('fails a read that runs no statement', async () => {
     await expect(
@@ -107,11 +111,7 @@ describe('expectEveryPlan', () => {
             'messages.id',
             eb
               .selectFrom('messageRevisionEmbeds')
-              .select(
-                sql<string>`json_group_array(
-                  message_revision_embeds.content order by message_revision_embeds.position
-                )`.as('embeds')
-              )
+              .select(embedsAsJsonArray)
               .where(
                 'messageRevisionEmbeds.messageRevisionId',
                 '=',
@@ -124,6 +124,50 @@ describe('expectEveryPlan', () => {
                   .limit(1)
               )
               .as('embeds'),
+          ])
+          .where('messages.id', '=', message.id)
+          .execute(),
+      {
+        latestStateTables,
+        scanning: ['message_revision_embeds'],
+        reaches: [
+          'USE TEMP B-TREE FOR json_group_array(ORDER BY)',
+          latestRevisionStep,
+        ],
+      }
+    )
+  })
+
+  it('charges an aggregate’s sort to its own subquery, not to the lookup it is nested in', async () => {
+    const message = await createMessage({ embeds: ['first', 'second'] })
+
+    await expectEveryPlan(
+      () =>
+        db()
+          .selectFrom('messages')
+          .select((eb) => [
+            'messages.id',
+            eb
+              .selectFrom('messageRevisions')
+              .select('messageRevisions.id')
+              .whereRef('messageRevisions.messageId', '=', 'messages.id')
+              .where(
+                (inner) =>
+                  inner
+                    .selectFrom('messageRevisionEmbeds')
+                    .select(embedsAsJsonArray)
+                    .whereRef(
+                      'messageRevisionEmbeds.messageRevisionId',
+                      '=',
+                      'messageRevisions.id'
+                    ),
+                '!=',
+                '[]'
+              )
+              .orderBy('messageRevisions.createdAt', 'desc')
+              .orderBy('messageRevisions.id', 'desc')
+              .limit(1)
+              .as('latestRevisionWithEmbeds'),
           ])
           .where('messages.id', '=', message.id)
           .execute(),
