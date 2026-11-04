@@ -136,12 +136,47 @@ SQLite adaptations (the only sanctioned divergences, mirrored in CLAUDE.md):
   than fixed — there is no cross-process ordering machinery.
 - **Timestamps** are ISO-8601 UTC `text` columns: `createdAt` defaults to
   `strftime('%Y-%m-%dT%H:%M:%fZ','now')`. Lexicographic order equals chronological order.
-- **Latest-event-wins** uses a window function instead of `distinct on`:
-  `row_number() over (partition by parentId order by createdAt desc, id desc)` filtered to 1.
-  The `id desc` tie-break stays mandatory.
+- **Latest-event-wins** orders a parent's events `createdAt desc, id desc` and keeps the
+  first, instead of `distinct on`. A reader working over a set of rows looks that row up per
+  parent with a correlated `limit 1` subquery rather than ranking the whole event table with
+  `row_number()` — see *Reading latest state* below. The `id desc` tie-break stays mandatory.
 - **Booleans** are `integer` 0/1 at the schema level; Zod coerces at the boundary.
 - Single-writer WAL replaces Postgres advisory locks; the ingest daemon is the only
   gateway writer and MCP writes are transactional, so no cross-process ordering machinery.
+
+### Reading latest state
+
+A reader that needs the latest event of every row it returns joins that one row by id:
+
+```sql
+inner join message_revisions as latest_revisions on latest_revisions.id = (
+  select id from message_revisions where message_id = messages.id
+  order by created_at desc, id desc limit 1
+)
+```
+
+The lookup keeps inner-join semantics — a row with no event at all drops out, exactly as
+it would from a join against a ranking — and a `(parentId, createdAt desc, id desc)` index
+answers it with one seek, tie-break included. Ranking the whole event table with
+`row_number()` in a derived table and joining the ranking reads the same rows but costs a
+pass over every event on every call, and worse: SQLite indexes the ranking on its rank
+alone, believes `rank = 1` is selective, and drives the join from it, so a server-wide
+catch-up on a 235k-message store looped channels × messages — 422 million lookups, minutes
+per call whatever the window — and froze every other tool call meanwhile, because the one
+`better-sqlite3` connection runs on the event loop (#97).
+
+Server-wide windows read through `messages(discordCreatedAt desc)`. For the planner to
+take it, `messages` must drive the query: the configured guild is checked with a correlated
+`exists` against the message's channel rather than a constant filter on a joined `guilds`,
+which would let guilds → channels drive and sort every message in the window before the
+limit applies. Scanned in time order, a catch-up stops after its first 201 rows.
+
+`app/business/read-plans.server.test.ts` guards both shapes without timing anything: it
+captures the SQL each reader actually runs and asserts its `explain query plan` on a busy
+synthetic server — no automatic index, no scan of a latest-state table, no latest-state
+lookup sorting its tie-break, and the window index and each lookup's index reached by
+name — both as every deployed store plans it (the product never gathers statistics, so
+those plans do not depend on the data) and after `analyze`.
 
 ### Schema (initial)
 
@@ -150,8 +185,11 @@ unique), `members` (discordUserId unique), `messages` (channelId FK, authorMembe
 discordMessageId unique, discordCreatedAt).
 
 Events, each indexed by its parent — `(parentId, createdAt desc)` wherever latest-event-wins
-reads them, and a unique key on the parent plus what tells its rows apart where a parent's
-rows are one set read whole (`message_revision_user_mentions`, `message_revision_embeds`,
+reads them; `(parentId, createdAt desc, id desc)` where a per-row lookup reads the latest
+event, widened from the two-column index on `message_revisions`, `channel_detail_revisions`
+and `member_detail_revisions`, and new on `gateway_identifications`, which had none; and a
+unique key on the parent plus what tells its rows apart where a parent's rows are one set
+read whole (`message_revision_user_mentions`, `message_revision_embeds`,
 `message_revision_attachments`):
 
 - `channel_detail_revisions` — full snapshot of what every channel always has: name and
@@ -524,8 +562,8 @@ when the sender switched it off, a distinction `<@id>` text matching cannot see 
   so a catch-up reads it as an answer even though triage never claimed it.
 - `activity_since` applies the same ping test, and says so: `countActivity` derives
   `pingsTheOwnerOrTheBot` with the identical two arms, over its own correlated
-  latest-revision subquery rather than the digest's joined one. The two shapes cannot be
-  one function without a cross-import between business modules, so the derivation is
+  latest-revision subquery rather than the revision the digest joins. The two shapes cannot
+  be one function without a cross-import between business modules, so the derivation is
   duplicated on purpose and pinned by its own unit cases on both sides — a count whose ping
   rule disagreed with the list it tells the owner to read would be worse than the
   repetition.
@@ -620,7 +658,7 @@ plain data, and written in the same transaction as the revision they belong to.
   a defaulted empty list would strip a preview the message still shows. Creation has nothing
   to lose that way, which is why only the edit demands the words.
 - The readers (`digestMessagesSince`, `listBookmarks`) aggregate both sets in SQL —
-  `json_group_array` over a correlated subquery keyed on the ranked revision's id — so a
+  `json_group_array` over a correlated subquery keyed on the current revision's id — so a
   digest stays one query and shows only the current version's embeds, never a pre-edit one.
 - Nothing is fetched: an attachment is a filename, a size and Discord's own signed URL,
   which expires in about a day. The store names files; it does not archive them.

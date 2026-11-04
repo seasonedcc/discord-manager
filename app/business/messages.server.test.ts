@@ -662,6 +662,59 @@ describe('countMessages', () => {
     expect(current.oldestMatch).toBe(message.discordCreatedAt)
   })
 
+  it('matches the revision recorded last when two share an instant', async () => {
+    const { channel, context } = await countGround()
+    const needle = randomUUID()
+    const sameInstant = '2099-03-03T00:00:01.000Z'
+    const gainedTheText = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-03-01T00:00:00.000Z',
+    })
+    const lostTheText = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-03-02T00:00:00.000Z',
+    })
+
+    await db()
+      .insertInto('messageRevisions')
+      .values([
+        {
+          id: newId(),
+          messageId: gainedTheText.id,
+          content: 'not yet',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageId: gainedTheText.id,
+          content: `now carries ${needle}`,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageId: lostTheText.id,
+          content: `carried ${needle}`,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageId: lostTheText.id,
+          content: 'no longer',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const counted = await fromSuccess(countMessages)(
+      { channelId: channel.id, contentContains: needle },
+      context
+    )
+
+    expect(counted.total).toBe(1)
+    expect(counted.oldestMatch).toBe(gainedTheText.discordCreatedAt)
+    expect(counted.newestMatch).toBe(gainedTheText.discordCreatedAt)
+  })
+
   it('matches the text of an embed the message carries', async () => {
     const { channel, context } = await countGround()
     const needle = randomUUID()

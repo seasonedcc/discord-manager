@@ -91,6 +91,123 @@ describe('catchUpSince', () => {
     ])
   })
 
+  it('reads the revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-02-03T00:00:00.000Z',
+    })
+    const sameInstant = '2099-02-03T00:00:01.000Z'
+
+    await db()
+      .insertInto('messageRevisions')
+      .values([
+        {
+          id: newId(),
+          messageId: message.id,
+          content: 'recorded first',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageId: message.id,
+          content: 'recorded last',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-02-03T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(digest.messages.map(({ content }) => content)).toEqual([
+      'recorded last',
+    ])
+  })
+
+  it('names the channel by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-02-04T00:00:01.000Z'
+
+    await db()
+      .insertInto('channelDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed first',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed last',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await createMessage({
+      channelId: channel.id,
+      discordCreatedAt: '2099-02-04T00:00:00.000Z',
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-02-04T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(digest.messages.map(({ channelName }) => channelName)).toEqual([
+      'renamed last',
+    ])
+  })
+
+  it('names the author by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const member = await createMember()
+    const sameInstant = '2099-02-05T00:00:01.000Z'
+
+    await db()
+      .insertInto('memberDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          memberId: member.id,
+          username: 'ada',
+          displayName: 'Renamed first',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          memberId: member.id,
+          username: 'ada',
+          displayName: 'Renamed last',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await createMessage({
+      channelId: channel.id,
+      authorMemberId: member.id,
+      discordCreatedAt: '2099-02-05T00:00:00.000Z',
+    })
+
+    const digest = await fromSuccess(catchUpSince)(
+      { since: '2099-02-05T00:00:00.000Z' },
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(
+      digest.messages.map(({ authorDisplayName }) => authorDisplayName)
+    ).toEqual(['Renamed last'])
+  })
+
   it('reads what an alert message says in its embeds and attachments', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
