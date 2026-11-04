@@ -23,16 +23,15 @@ const ingestionStatusContextSchema = ownerContextSchema.extend({
 
 const backfillSilentSince = sql<string>`strftime('%Y-%m-%dT%H:%M:%fZ','now', ${`-${backfillStallThresholdMinutes} minutes`})`
 
-function newestEventAt(
+async function newestEventAt(
   table: 'gatewayConnections' | 'gatewayDisconnections' | 'gatewayHeartbeats'
 ) {
-  return db()
+  const { newestAt } = await db()
     .selectFrom(table)
-    .select('createdAt')
-    .orderBy('createdAt', 'desc')
-    .orderBy('id', 'desc')
-    .limit(1)
-    .executeTakeFirst()
+    .select((eb) => eb.fn.max<string | null>('createdAt').as('newestAt'))
+    .executeTakeFirstOrThrow()
+
+  return newestAt
 }
 
 function newestOf(instants: (string | null)[]) {
@@ -215,18 +214,16 @@ const readIngestionStatus = applySchema(
   readIngestionStatusSchema,
   ingestionStatusContextSchema
 )(async (_input, context) => {
-  const connection = await newestEventAt('gatewayConnections')
-  const disconnection = await newestEventAt('gatewayDisconnections')
-  const heartbeat = await newestEventAt('gatewayHeartbeats')
+  const lastConnectedAt = await newestEventAt('gatewayConnections')
+  const lastDisconnectedAt = await newestEventAt('gatewayDisconnections')
+  const lastHeartbeatAt = await newestEventAt('gatewayHeartbeats')
 
   const states = await channelBackfillStates(context.owner.guildId).execute()
   const channelsIn = (state: ChannelBackfillState) =>
     states.filter((channel) => channel.state === state)
 
   const observedAt = new Date().toISOString()
-  const lastConnectedAt = connection?.createdAt ?? null
-  const lastDisconnectedAt = disconnection?.createdAt ?? null
-  const lastAliveAt = newestOf([lastConnectedAt, heartbeat?.createdAt ?? null])
+  const lastAliveAt = newestOf([lastConnectedAt, lastHeartbeatAt])
   const activity = deriveGatewayActivity({
     lastAliveAt,
     lastDisconnectedAt,
