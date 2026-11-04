@@ -55,7 +55,7 @@ Record the exact test and file counts before starting. After the change, compute
 
 Unit tests live beside the code as `*.test.ts` and run under Vitest.
 
-`app/test/global-setup.ts` creates a throwaway SQLite database and migrates it before the suite, guarding that the target path carries the `_unit` suffix so a real store can never be pointed at. `app/test/prelude.ts` exports `describe`, `expect`, `it`, `vi`, and `db` — import from it rather than reaching for Vitest globals. `app/test/fixtures.ts` exports the factories (`createGuild`, `createChannel`, `createMessage`, `ownerContext`).
+`app/test/global-setup.ts` wipes `tests/.artifacts/unit-stores/` and migrates one store there before the suite, refusing to run unless the folder's name contains `unit` so a real store can never be pointed at or wiped. `app/test/file-setup.ts`, registered in `vitest.config.ts` as a setup file, then gives each test file its own copy of that store and points `DATABASE_PATH` at the copy. `app/test/prelude.ts` exports `describe`, `expect`, `it`, `vi`, and `db` — import from it rather than reaching for Vitest globals. `app/test/fixtures.ts` exports the factories (`createGuild`, `createChannel`, `createMessage`, `ownerContext`).
 
 ### Core principles
 
@@ -106,15 +106,14 @@ The schema is append-only and the tests follow the same doctrine.
 
 - **Never delete or update rows in a test.** No cleanup step, no truncate, no `afterEach` that erases anything.
 - Insert rows carrying random identifiers and query by those identifiers.
-- The database is never cleaned between tests, which is what lets test files run in parallel.
+- The store is never cleaned between tests, so each test runs against whatever rows the tests before it in the file left behind.
 
-### Parallel safety
+### Store sharing
 
-Many test files run concurrently against one shared database. Three patterns flake under that:
+Test files run in parallel, each against its own copy of the migrated store, so no file ever sees another file's rows — a test proving that a query ignores out-of-scope rows creates those rows itself. The tests inside one file share their copy and run in order. Two patterns break under that sharing:
 
-- Never assert on an unscoped aggregate — a `count(*)` without a filter tying it to rows this test created — over a table other files also write. Scope every count to the entity under test.
+- Never assert on an unscoped aggregate — a `count(*)` without a filter tying it to rows this test created — over a table other tests in the file also write: its value shifts whenever a test is added, reordered, or filtered out. Scope every count to the entity under test.
 - Needles for search and substring tests need real entropy: use `crypto.randomUUID()`, not a few hex characters that eventually collide with another fixture.
-- Shared lazily-initialized infrastructure is bootstrapped once in global setup, never on first use per file — concurrent first uses race the initialization.
 
 A hand-built context carries real ids from its own fixtures — the guild id of the guild the test created, never a placeholder string. Queries compare context ids against real columns, so a placeholder that passes today fails the moment the function under test gains another scoped join. Placeholder text is only safe in fields no query reads.
 
