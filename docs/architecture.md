@@ -171,12 +171,65 @@ take it, `messages` must drive the query: the configured guild is checked with a
 which would let guilds → channels drive and sort every message in the window before the
 limit applies. Scanned in time order, a catch-up stops after its first 201 rows.
 
-`app/business/read-plans.server.test.ts` guards both shapes without timing anything: it
-captures the SQL each reader actually runs and asserts its `explain query plan` on a busy
-synthetic server — no automatic index, no scan of a latest-state table, no latest-state
-lookup sorting its tie-break, and the window index and each lookup's index reached by
-name — both as every deployed store plans it (the product never gathers statistics, so
-those plans do not depend on the data) and after `analyze`.
+A reversible pair reads its latest event the same way, over both tables at once, with one
+scalar subquery whose arms are each correlated to the parent:
+
+```sql
+standing_bookmarks.id = (select id from (
+  select id, created_at from bookmark_additions where message_id = standing_bookmarks.message_id
+  union all
+  select id, created_at from bookmark_removals where message_id = standing_bookmarks.message_id
+  order by created_at desc, id desc limit 1
+))
+```
+
+The `order by` sits inside the compound select, so SQLite merges the two arms' index-ordered
+seeks and stops at the first row: a same-millisecond tie between an addition and a removal
+still goes to the event recorded last, and nothing is sorted. Written outside the union, the
+same `order by` sorts every one of the parent's events, because SQLite folds a union into
+the query around it only when that query returns every column it orders by, and a lookup
+returns the id alone. The bookmark readers are built on this pair. A **standing bookmark**
+is a `bookmark_additions` row that is its message's latest bookmark event; `bookmarks_list`
+and `bookmark_reasons_list` walk the additions, keep the standing ones, and reach each
+message by primary key, so they cost the bookmarks ever made rather than the messages ever
+stored.
+
+The bot identity a mentions read compares against reads `gateway_identifications` alone and
+finds the guild's id through a scalar subquery on `guilds`' unique key rather than joining
+`guilds`: joined, the planner can start from `guilds` once statistics exist and then sort
+that guild's every identification.
+
+`app/business/read-plans.server.test.ts` and `app/business/bookmark-read-plans.server.test.ts`
+guard these shapes without timing anything: each captures every statement its readers
+actually run on a busy synthetic server, inside a transaction or not, and holds each
+`explain query plan`, both as every deployed store plans it (the product never gathers
+statistics, so those plans do not depend on the data) and after `analyze`, to one
+assertion, `expectEveryPlan` in `app/test/query-plans.ts`:
+
+- **No whole-table read beyond the guard's allow-list.** A plan scans nothing but what its
+  guard names (the guild row, the population a reader walks, such as the standing
+  bookmarks or every message for an unwindowed count, and the reasons catalog) and the
+  derived tables it builds itself, and builds no automatic index. The guard names what
+  may be scanned rather than what may not, because SQLite reports an aliased table under
+  its alias: a full read of `bookmark_additions` joined as `standing_bookmarks` shows up as
+  `SCAN standing_bookmarks`, which a list of forbidden table names never matches.
+- **No lookup that sorts.** Each guard lists the tables its readers look up the latest
+  event of. A subquery, a `with` table or any other derived table (`CO-ROUTINE`,
+  `MATERIALIZE`) that reads one of them may not sort, whatever it sorts by. Each temporary
+  b-tree is charged to the nearest of these above it, or else to the statement, and that
+  one's reads are followed through derived tables down to, but not into, nested
+  subqueries: the union a pair lookup sorts stays in view, and an aggregate's own sort is
+  not blamed on a lookup nested inside it. A statement that reads nothing outside its
+  subqueries but listed tables and the guild row is itself a lookup and may not sort
+  either; a reader's own `order by`, over the rows it lists, may. A table is recognized by
+  the index it is read through, so an alias does not hide it.
+- **Every index reached by name**: the window index and each lookup's index, in the readers
+  that use them.
+
+The per-message reaction set does sort, on purpose, and no guard lists its tables. It is
+not a latest-event lookup but a standing set: each message's few reaction additions and
+removals are ranked per emoji and reactor and grouped by emoji in temporary b-trees, a
+cost bounded by one message's reactions.
 
 ### Schema (initial)
 
@@ -186,8 +239,10 @@ discordMessageId unique, discordCreatedAt).
 
 Events, each indexed by its parent — `(parentId, createdAt desc)` wherever latest-event-wins
 reads them; `(parentId, createdAt desc, id desc)` where a per-row lookup reads the latest
-event, widened from the two-column index on `message_revisions`, `channel_detail_revisions`
-and `member_detail_revisions`, and new on `gateway_identifications`, which had none; and a
+event, widened from the two-column index on `message_revisions`, `channel_detail_revisions`,
+`member_detail_revisions`, `bookmark_additions`, `bookmark_removals`, `bookmark_snoozes`,
+`bookmark_reason_assignments` and `bookmark_reason_detail_revisions`, and new on
+`gateway_identifications`, which had none; and a
 unique key on the parent plus what tells its rows apart where a parent's rows are one set
 read whole (`message_revision_user_mentions`, `message_revision_embeds`,
 `message_revision_attachments`):

@@ -313,9 +313,12 @@ const catchUpSince = applySchema(
 function latestBotIdentityOf(guildId: string) {
   return db()
     .selectFrom('gatewayIdentifications')
-    .innerJoin('guilds', 'guilds.id', 'gatewayIdentifications.guildId')
     .select('gatewayIdentifications.botDiscordUserId')
-    .where('guilds.discordGuildId', '=', guildId)
+    .where('gatewayIdentifications.guildId', '=', ({ selectFrom }) =>
+      selectFrom('guilds')
+        .select('guilds.id')
+        .where('guilds.discordGuildId', '=', guildId)
+    )
     .orderBy('gatewayIdentifications.createdAt', 'desc')
     .orderBy('gatewayIdentifications.id', 'desc')
     .limit(1)

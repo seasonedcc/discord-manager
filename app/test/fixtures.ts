@@ -509,6 +509,7 @@ async function createBusyGuild({
 
   return {
     channelIds: channels.map(({ id }) => id),
+    messageIds: messages.map(({ id }) => id),
     context: await ownerContext({
       guildId: guild.id,
       discordUserId: ownerDiscordUserId,
@@ -518,6 +519,106 @@ async function createBusyGuild({
       (messageCount - 1) * minutesBetweenBusyGuildMessages
     ),
   }
+}
+
+async function createBusyBookmarks({
+  messageIds,
+  reasonCount = 6,
+}: {
+  messageIds: string[]
+  reasonCount?: number
+}) {
+  const reasons = Array.from({ length: reasonCount }, () => ({ id: newId() }))
+  const reasonDetailRevisions = reasons.flatMap((reason, index) =>
+    [0, 1].map((take) => ({
+      id: newId(),
+      reasonId: reason.id,
+      name: `busy reason ${index}, take ${take}`,
+      description: `What busy reason ${index} is for`,
+      createdAt: busyGuildInstant(take * 1440),
+    }))
+  )
+
+  const bookmarked = messageIds
+    .map((messageId, index) => ({
+      messageId,
+      minutes: index * minutesBetweenBusyGuildMessages,
+    }))
+    .filter((_, index) => index % 20 === 0)
+  const bookmarkAdditions = bookmarked.flatMap(
+    ({ messageId, minutes }, index) => [
+      {
+        id: newId(),
+        messageId,
+        source: index % 2 === 0 ? 'reaction' : 'mcp',
+        createdAt: busyGuildInstant(minutes + 10),
+      },
+      ...(index % 9 === 0
+        ? [
+            {
+              id: newId(),
+              messageId,
+              source: 'mcp',
+              createdAt: busyGuildInstant(minutes + 30),
+            },
+          ]
+        : []),
+    ]
+  )
+  const bookmarkRemovals = bookmarked
+    .filter((_, index) => index % 3 === 0)
+    .map(({ messageId, minutes }, index) => ({
+      id: newId(),
+      messageId,
+      source: index % 2 === 0 ? 'reaction' : 'mcp',
+      createdAt: busyGuildInstant(minutes + 20),
+    }))
+  const bookmarkReasonAssignments = bookmarked
+    .filter((_, index) => index % 4 === 0)
+    .flatMap(({ messageId, minutes }, index) =>
+      [11, ...(index % 2 === 0 ? [12] : [])].map((offset) => ({
+        id: newId(),
+        messageId,
+        reasonId: reasons[(index + offset) % reasonCount].id,
+        createdAt: busyGuildInstant(minutes + offset),
+      }))
+    )
+  const bookmarkSnoozes = bookmarked
+    .filter((_, index) => index % 5 === 0)
+    .map(({ messageId, minutes }, index) => ({
+      id: newId(),
+      messageId,
+      until:
+        index % 2 === 0
+          ? '2020-01-01T00:00:00.000Z'
+          : '2999-01-01T00:00:00.000Z',
+      createdAt: busyGuildInstant(minutes + 13),
+    }))
+
+  await db()
+    .transaction()
+    .execute(async (trx) => {
+      await trx.insertInto('bookmarkReasons').values(reasons).execute()
+      await trx
+        .insertInto('bookmarkReasonDetailRevisions')
+        .values(reasonDetailRevisions)
+        .execute()
+      await trx
+        .insertInto('bookmarkAdditions')
+        .values(bookmarkAdditions)
+        .execute()
+      await trx
+        .insertInto('bookmarkRemovals')
+        .values(bookmarkRemovals)
+        .execute()
+      await trx
+        .insertInto('bookmarkReasonAssignments')
+        .values(bookmarkReasonAssignments)
+        .execute()
+      await trx.insertInto('bookmarkSnoozes').values(bookmarkSnoozes).execute()
+    })
+
+  return { reasonIds: reasons.map(({ id }) => id) }
 }
 
 async function ownerContext({
@@ -541,6 +642,7 @@ async function ownerContext({
 export {
   configuredGuild,
   createBookmarkedMessage,
+  createBusyBookmarks,
   createBusyGuild,
   createChannel,
   createGatewayIdentification,

@@ -1188,6 +1188,79 @@ describe('listMentions', () => {
     ])
   })
 
+  it('follows the bot identity recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const first = await createGatewayIdentification({
+      guildId: guild.id,
+      identifiedAt: '2099-12-08T00:00:00.000Z',
+    })
+    const last = await createGatewayIdentification({
+      guildId: guild.id,
+      identifiedAt: '2099-12-08T00:00:00.000Z',
+    })
+
+    await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      discordCreatedAt: '2099-12-09T00:00:00.000Z',
+      mentionedDiscordUserIds: [first.botDiscordUserId],
+    })
+    const answeredTheLastBot = await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      discordCreatedAt: '2099-12-09T00:01:00.000Z',
+      mentionedDiscordUserIds: [last.botDiscordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-09T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      answeredTheLastBot.id,
+    ])
+  })
+
+  it('ignores a bot identity another server recorded later', async () => {
+    const guild = await createGuild()
+    const otherGuild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const ourBot = await createGatewayIdentification({
+      guildId: guild.id,
+      identifiedAt: '2099-12-10T00:00:00.000Z',
+    })
+    const theirBot = await createGatewayIdentification({
+      guildId: otherGuild.id,
+      identifiedAt: '2099-12-10T01:00:00.000Z',
+    })
+
+    await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      discordCreatedAt: '2099-12-11T00:00:00.000Z',
+      mentionedDiscordUserIds: [theirBot.botDiscordUserId],
+    })
+    const answeredOurBot = await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      discordCreatedAt: '2099-12-11T00:01:00.000Z',
+      mentionedDiscordUserIds: [ourBot.botDiscordUserId],
+    })
+
+    const mentions = await fromSuccess(listMentions)(
+      { since: '2099-12-11T00:00:00.000Z' },
+      context
+    )
+
+    expect(mentions.messages.map(({ messageId }) => messageId)).toEqual([
+      answeredOurBot.id,
+    ])
+  })
+
   it('says which message a ping answers when the sender left the ping on', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })

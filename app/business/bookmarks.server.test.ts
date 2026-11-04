@@ -47,6 +47,25 @@ async function createReason(
   return reason
 }
 
+async function recordBookmarkEventsAtOneInstant(
+  messageId: string,
+  events: ('addition' | 'removal')[]
+) {
+  for (const event of events) {
+    await db()
+      .insertInto(
+        event === 'addition' ? 'bookmarkAdditions' : 'bookmarkRemovals'
+      )
+      .values({
+        id: newId(),
+        messageId,
+        source: 'mcp',
+        createdAt: '2099-03-01T00:00:00.000Z',
+      })
+      .execute()
+  }
+}
+
 function messageLink({
   discordGuildId,
   discordChannelId,
@@ -466,6 +485,39 @@ describe('resolveBookmark', () => {
     expect(result.errors[0].message).toBe(
       'That message is not bookmarked, so there is nothing to resolve'
     )
+  })
+
+  it('reads the bookmark event recorded last when an addition and a removal share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const resolvedLast = await createMessage({ channelId: channel.id })
+    const bookmarkedLast = await createMessage({ channelId: channel.id })
+
+    await recordBookmarkEventsAtOneInstant(resolvedLast.id, [
+      'addition',
+      'removal',
+    ])
+    await recordBookmarkEventsAtOneInstant(bookmarkedLast.id, [
+      'removal',
+      'addition',
+    ])
+
+    const alreadyResolved = await resolveBookmark(
+      { messageId: resolvedLast.id },
+      context
+    )
+    const resolved = await resolveBookmark(
+      { messageId: bookmarkedLast.id },
+      context
+    )
+
+    expect(alreadyResolved.success).toBe(false)
+    if (alreadyResolved.success) throw new Error('expected a failure')
+    expect(alreadyResolved.errors[0].message).toBe(
+      'That message is not bookmarked, so there is nothing to resolve'
+    )
+    expect(resolved.success).toBe(true)
   })
 
   it('fails when the message belongs to another Discord server', async () => {
@@ -922,6 +974,209 @@ describe('listBookmarks', () => {
     expect(bookmarks[0].bookmarkedAt).toBe('2099-01-03T00:00:00.000Z')
   })
 
+  it('drops a bookmark whose removal was recorded last at the same instant as its addition', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    await recordBookmarkEventsAtOneInstant(message.id, ['addition', 'removal'])
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmarks).toHaveLength(0)
+  })
+
+  it('keeps a bookmark whose addition was recorded last at the same instant as its removal', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+
+    await recordBookmarkEventsAtOneInstant(message.id, ['removal', 'addition'])
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmarks.map(({ messageId }) => messageId)).toEqual([message.id])
+  })
+
+  it('reads the source of the addition recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createMessage({ channelId: channel.id })
+    const sameInstant = '2099-03-02T00:00:00.000Z'
+
+    await db()
+      .insertInto('bookmarkAdditions')
+      .values([
+        {
+          id: newId(),
+          messageId: message.id,
+          source: 'reaction',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageId: message.id,
+          source: 'mcp',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmarks.map(({ source }) => source)).toEqual(['mcp'])
+  })
+
+  it('reads the revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createBookmarkedMessage({ channelId: channel.id })
+    const sameInstant = '2099-03-03T00:00:00.000Z'
+
+    await db()
+      .insertInto('messageRevisions')
+      .values([
+        {
+          id: newId(),
+          messageId: message.id,
+          content: 'recorded first',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageId: message.id,
+          content: 'recorded last',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmarks.map(({ content }) => content)).toEqual(['recorded last'])
+  })
+
+  it('names the channel by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-04T00:00:00.000Z'
+
+    await db()
+      .insertInto('channelDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed first',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed last',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await createBookmarkedMessage({ channelId: channel.id })
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmarks.map(({ channelName }) => channelName)).toEqual([
+      'renamed last',
+    ])
+  })
+
+  it('names the author by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const member = await createMember()
+    const sameInstant = '2099-03-05T00:00:00.000Z'
+
+    await db()
+      .insertInto('memberDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          memberId: member.id,
+          username: 'ada',
+          displayName: 'Renamed first',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          memberId: member.id,
+          username: 'ada',
+          displayName: 'Renamed last',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await createBookmarkedMessage({
+      channelId: channel.id,
+      authorMemberId: member.id,
+    })
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmarks.map(({ authorDisplayName }) => authorDisplayName)).toEqual(
+      ['Renamed last']
+    )
+  })
+
+  it('follows the snooze recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createBookmarkedMessage({ channelId: channel.id })
+    const sameInstant = '2020-03-06T00:00:00.000Z'
+
+    await db()
+      .insertInto('bookmarkSnoozes')
+      .values([
+        {
+          id: newId(),
+          messageId: message.id,
+          until: '2999-01-01T00:00:00.000Z',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageId: message.id,
+          until: '2020-03-07T00:00:00.000Z',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { bookmarks } = await fromSuccess(listBookmarks)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(bookmarks.map(({ messageId }) => messageId)).toEqual([message.id])
+    expect(bookmarks[0].snoozedUntil).toBe(null)
+  })
+
   it('hides a snoozed bookmark until it is asked for', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
@@ -1082,6 +1337,76 @@ describe('listBookmarks', () => {
 
     expect(bookmarks[0].reasonId).toBe(second.reasonId)
     expect(bookmarks[0].reasonName).toBe(second.name)
+  })
+
+  it('reads the reason assigned last when two assignments share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createBookmarkedMessage({ channelId: channel.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const first = await createReason(context)
+    const last = await createReason(context)
+    const sameInstant = '2099-03-08T00:00:00.000Z'
+
+    await db()
+      .insertInto('bookmarkReasonAssignments')
+      .values([
+        {
+          id: newId(),
+          messageId: message.id,
+          reasonId: first.reasonId,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageId: message.id,
+          reasonId: last.reasonId,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { bookmarks } = await fromSuccess(listBookmarks)({}, context)
+
+    expect(bookmarks.map(({ reasonId }) => reasonId)).toEqual([last.reasonId])
+  })
+
+  it('names the reason by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const message = await createBookmarkedMessage({ channelId: channel.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const reason = await createReason(context)
+    const renamedLast = `renamed-last-${randomUUID()}`
+    const sameInstant = '2099-03-09T00:00:00.000Z'
+
+    await fromSuccess(setBookmarkReason)(
+      { messageId: message.id, reasonId: reason.reasonId },
+      context
+    )
+    await db()
+      .insertInto('bookmarkReasonDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          reasonId: reason.reasonId,
+          name: `renamed-first-${randomUUID()}`,
+          description: 'Renamed first.',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          reasonId: reason.reasonId,
+          name: renamedLast,
+          description: 'Renamed last.',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { bookmarks } = await fromSuccess(listBookmarks)({}, context)
+
+    expect(bookmarks.map(({ reasonName }) => reasonName)).toEqual([renamedLast])
   })
 
   it('keeps showing the last known name of a retired reason', async () => {
@@ -1250,6 +1575,50 @@ describe('addBookmarkReason', () => {
       `An active bookmark reason is already called "${name}". Pick another name, or edit that reason.`
     )
     expect(error.path).toEqual(['name'])
+  })
+
+  it('checks names against the detail revision recorded last when two share an instant', async () => {
+    const context = await ownerContext()
+    const reason = await createReason(context)
+    const renamedFirst = `renamed-first-${randomUUID()}`
+    const renamedLast = `renamed-last-${randomUUID()}`
+    const sameInstant = '2099-03-11T00:00:00.000Z'
+
+    await db()
+      .insertInto('bookmarkReasonDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          reasonId: reason.reasonId,
+          name: renamedFirst,
+          description: 'Renamed first.',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          reasonId: reason.reasonId,
+          name: renamedLast,
+          description: 'Renamed last.',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const freed = await addBookmarkReason(
+      { name: renamedFirst, description: 'Takes the freed name.' },
+      context
+    )
+    const clash = await addBookmarkReason(
+      { name: renamedLast, description: 'Wants the current name.' },
+      context
+    )
+
+    expect(freed.success).toBe(true)
+    expect(clash.success).toBe(false)
+    if (clash.success) throw new Error('expected a failure')
+    expect(clash.errors[0].message).toBe(
+      `An active bookmark reason is already called "${renamedLast}". Pick another name, or edit that reason.`
+    )
   })
 
   it('frees the name of a reason once it is retired', async () => {
@@ -1556,6 +1925,80 @@ describe('listBookmarkReasons', () => {
       reasons.find(({ reasonId }) => reasonId === reason.reasonId)
         ?.bookmarkCount
     ).toBe(0)
+  })
+
+  it('counts each bookmark by its event recorded last when an addition and a removal share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const resolvedLast = {
+      message: await createMessage({ channelId: channel.id }),
+      reason: await createReason(context),
+    }
+    const bookmarkedLast = {
+      message: await createMessage({ channelId: channel.id }),
+      reason: await createReason(context),
+    }
+
+    await recordBookmarkEventsAtOneInstant(resolvedLast.message.id, [
+      'addition',
+      'removal',
+    ])
+    await recordBookmarkEventsAtOneInstant(bookmarkedLast.message.id, [
+      'removal',
+      'addition',
+    ])
+    await db()
+      .insertInto('bookmarkReasonAssignments')
+      .values(
+        [resolvedLast, bookmarkedLast].map(({ message, reason }) => ({
+          id: newId(),
+          messageId: message.id,
+          reasonId: reason.reasonId,
+        }))
+      )
+      .execute()
+
+    const { reasons } = await fromSuccess(listBookmarkReasons)({}, context)
+    const countOf = ({ reason }: typeof resolvedLast) =>
+      reasons.find(({ reasonId }) => reasonId === reason.reasonId)
+        ?.bookmarkCount
+
+    expect(countOf(resolvedLast)).toBe(0)
+    expect(countOf(bookmarkedLast)).toBe(1)
+  })
+
+  it('names a reason by the detail revision recorded last when two share an instant', async () => {
+    const context = await ownerContext()
+    const reason = await createReason(context)
+    const renamedLast = `renamed-last-${randomUUID()}`
+    const sameInstant = '2099-03-10T00:00:00.000Z'
+
+    await db()
+      .insertInto('bookmarkReasonDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          reasonId: reason.reasonId,
+          name: `renamed-first-${randomUUID()}`,
+          description: 'Renamed first.',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          reasonId: reason.reasonId,
+          name: renamedLast,
+          description: 'Renamed last.',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { reasons } = await fromSuccess(listBookmarkReasons)({}, context)
+
+    expect(
+      reasons.find(({ reasonId }) => reasonId === reason.reasonId)?.name
+    ).toBe(renamedLast)
   })
 
   it('refuses a context that cannot manage bookmarks', async () => {
