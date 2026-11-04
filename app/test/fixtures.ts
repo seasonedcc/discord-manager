@@ -55,6 +55,12 @@ type MessageReactionAttributes = {
   reactedAt?: string
 }
 
+type BusyGuildAttributes = {
+  channelCount?: number
+  memberCount?: number
+  messageCount?: number
+}
+
 type OwnerContextAttributes = {
   guildId?: string
   discordUserId?: string
@@ -349,6 +355,174 @@ async function createMessageReactionRemoval({
     .executeTakeFirstOrThrow()
 }
 
+const busyGuildOpenedAt = Date.UTC(2031, 0, 1)
+const minutesBetweenBusyGuildMessages = 37
+
+function busyGuildInstant(minutes: number) {
+  return new Date(busyGuildOpenedAt + minutes * 60_000).toISOString()
+}
+
+function inBatches<Row>(rows: Row[], size = 1000) {
+  return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) =>
+    rows.slice(index * size, (index + 1) * size)
+  )
+}
+
+async function createBusyGuild({
+  channelCount = 120,
+  memberCount = 12,
+  messageCount = 24_000,
+}: BusyGuildAttributes = {}) {
+  const guild = await createGuild()
+  const ownerDiscordUserId = snowflake()
+
+  const channels = Array.from({ length: channelCount }, () => ({
+    id: newId(),
+    guildId: guild.id,
+    discordChannelId: snowflake(),
+  }))
+  const channelDetailRevisions = channels.flatMap((channel, index) => [
+    {
+      id: newId(),
+      channelId: channel.id,
+      name: `channel-${index}`,
+      isThread: 0,
+      createdAt: busyGuildInstant(-1440),
+    },
+    ...(index % 10 === 0
+      ? [
+          {
+            id: newId(),
+            channelId: channel.id,
+            name: `renamed-channel-${index}`,
+            isThread: 0,
+            createdAt: busyGuildInstant(index * 60),
+          },
+        ]
+      : []),
+  ])
+
+  const members = Array.from({ length: memberCount }, () => ({
+    id: newId(),
+    discordUserId: snowflake(),
+  }))
+  const memberDetailRevisions = members.flatMap((member, index) =>
+    [0, 1, 2].map((take) => ({
+      id: newId(),
+      memberId: member.id,
+      username: `member-${index}`,
+      displayName: `Member ${index}, take ${take}`,
+      createdAt: busyGuildInstant(take * 100_000 - 1440),
+    }))
+  )
+
+  const messages = Array.from({ length: messageCount }, (_, index) => ({
+    id: newId(),
+    channelId: channels[(index * 7919) % channelCount].id,
+    authorMemberId: members[index % memberCount].id,
+    discordMessageId: snowflake(),
+    discordCreatedAt: busyGuildInstant(index * minutesBetweenBusyGuildMessages),
+  }))
+  const messageRevisions = messages.flatMap((message, index) => {
+    const content =
+      index % 50 === 0
+        ? `<@${ownerDiscordUserId}> message ${index}`
+        : `message ${index}`
+
+    return [
+      {
+        id: newId(),
+        messageId: message.id,
+        content,
+        createdAt: message.discordCreatedAt,
+      },
+      ...(index % 25 === 0
+        ? [
+            {
+              id: newId(),
+              messageId: message.id,
+              content: `${content}, edited`,
+              createdAt: busyGuildInstant(
+                index * minutesBetweenBusyGuildMessages + 5
+              ),
+            },
+          ]
+        : []),
+    ]
+  })
+  const messageRevisionUserMentions = messageRevisions
+    .filter(({ content }) => content.startsWith(`<@${ownerDiscordUserId}>`))
+    .map((revision) => ({
+      id: newId(),
+      messageRevisionId: revision.id,
+      mentionedDiscordUserId: ownerDiscordUserId,
+    }))
+  const messageDeletions = messages
+    .filter((_, index) => index % 97 === 0)
+    .map((message) => ({ id: newId(), messageId: message.id }))
+  const botDiscordUserId = snowflake()
+  const gatewayIdentifications = Array.from(
+    { length: Math.ceil(messageCount / 80) },
+    (_, index) => ({
+      id: newId(),
+      guildId: guild.id,
+      botDiscordUserId,
+      createdAt: busyGuildInstant(index * 80 * minutesBetweenBusyGuildMessages),
+    })
+  )
+
+  await db()
+    .transaction()
+    .execute(async (trx) => {
+      await trx.insertInto('channels').values(channels).execute()
+      await trx
+        .insertInto('channelDetailRevisions')
+        .values(channelDetailRevisions)
+        .execute()
+      await trx.insertInto('members').values(members).execute()
+      await trx
+        .insertInto('memberDetailRevisions')
+        .values(memberDetailRevisions)
+        .execute()
+
+      for (const batch of inBatches(messages)) {
+        await trx.insertInto('messages').values(batch).execute()
+      }
+
+      for (const batch of inBatches(messageRevisions)) {
+        await trx.insertInto('messageRevisions').values(batch).execute()
+      }
+
+      await trx
+        .insertInto('messageRevisionUserMentions')
+        .values(messageRevisionUserMentions)
+        .execute()
+      await trx
+        .insertInto('messageDeletions')
+        .values(messageDeletions)
+        .execute()
+      await trx
+        .insertInto('gatewayIdentifications')
+        .values(gatewayIdentifications)
+        .execute()
+    })
+
+  return {
+    channelIds: channels.map(({ id }) => id),
+    context: {
+      owner: {
+        discordUserId: ownerDiscordUserId,
+        guildId: guild.discordGuildId,
+      },
+      ...ownerCaps(),
+    },
+    firstMessageAt: busyGuildInstant(0),
+    lastMessageAt: busyGuildInstant(
+      (messageCount - 1) * minutesBetweenBusyGuildMessages
+    ),
+  }
+}
+
 async function ownerContext({
   guildId,
   discordUserId = snowflake(),
@@ -370,6 +544,7 @@ async function ownerContext({
 export {
   configuredGuild,
   createBookmarkedMessage,
+  createBusyGuild,
   createChannel,
   createGatewayIdentification,
   createGuild,
