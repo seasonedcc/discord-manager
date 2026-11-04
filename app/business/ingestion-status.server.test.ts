@@ -289,6 +289,46 @@ describe('readIngestionStatus', () => {
     })
   })
 
+  it('judges a stall by the newest progress row, not the first one the run recorded', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const run = await startBackfillRun(
+      channel.id,
+      minutesAgo(backfillStallThresholdMinutes * 4)
+    )
+
+    await db()
+      .insertInto('backfillRunProgress')
+      .values([
+        {
+          id: newId(),
+          backfillRunId: run.id,
+          fetchedMessageCount: 300,
+          storedMessageCount: 300,
+          createdAt: minutesAgo(backfillStallThresholdMinutes * 3),
+        },
+        {
+          id: newId(),
+          backfillRunId: run.id,
+          fetchedMessageCount: 700,
+          storedMessageCount: 700,
+          createdAt: new Date().toISOString(),
+        },
+      ])
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'running',
+      channels: { completed: 0, failed: 0, running: 1, stalled: 0 },
+      ...backfillStatusCopy.running,
+    })
+  })
+
   it('speaks for the worst channel when one backfill failed', async () => {
     const guild = await createGuild()
     const failing = await createChannel({ guildId: guild.id })

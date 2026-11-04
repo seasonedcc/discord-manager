@@ -2958,6 +2958,17 @@ function recordBackfillRunFor(channelId: string, createdAt: string) {
     .execute()
 }
 
+function recordArchiveEventFor(
+  channelId: string,
+  event: 'channelArchivings' | 'channelUnarchivings',
+  createdAt: string
+) {
+  return db()
+    .insertInto(event)
+    .values({ channelId, createdAt, id: newId() })
+    .execute()
+}
+
 async function anInstantAfterArchiving(channel: { id: string }) {
   const archiving = await db()
     .selectFrom('channelArchivings')
@@ -3056,6 +3067,33 @@ describe('listBackfillableChannels', () => {
     await fromSuccess(recordChannelUnarchiving)(
       { discordChannelId: thread.discordChannelId },
       context
+    )
+
+    const channels = await fromSuccess(listBackfillableChannels)({}, context)
+
+    expect(channels.map((channel) => channel.id)).toEqual([thread.id])
+  })
+
+  it('owes a re-archived thread a final sweep even though one ran after its earlier archiving', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const thread = await createChannel({ guildId: guild.id, isThread: 1 })
+
+    await recordArchiveEventFor(
+      thread.id,
+      'channelArchivings',
+      '2099-04-01T00:00:00.000Z'
+    )
+    await recordBackfillRunFor(thread.id, '2099-04-01T00:01:00.000Z')
+    await recordArchiveEventFor(
+      thread.id,
+      'channelUnarchivings',
+      '2099-04-01T00:02:00.000Z'
+    )
+    await recordArchiveEventFor(
+      thread.id,
+      'channelArchivings',
+      '2099-04-01T00:03:00.000Z'
     )
 
     const channels = await fromSuccess(listBackfillableChannels)({}, context)
