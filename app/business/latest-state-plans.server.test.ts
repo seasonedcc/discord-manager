@@ -190,7 +190,10 @@ describe('createThread', () => {
       {
         latestStateTables,
         scanning: ['guilds', ...unindexedForeignKeyChildren],
-        reaches: [latestChannelDetailsStep],
+        reaches: [
+          latestChannelDetailsStep,
+          'SEARCH latest_channel_details USING INDEX sqlite_autoindex_channel_detail_revisions_1 (id=?)',
+        ],
       }
     )
   })
