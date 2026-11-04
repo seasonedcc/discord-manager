@@ -1,5 +1,5 @@
 import { InputError, applySchema } from 'composable-functions'
-import { type SqlBool, sql } from 'kysely'
+import { type ExpressionBuilder, type SqlBool, sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -14,6 +14,7 @@ import {
   storedRepliedTo,
 } from '~/business/messages.common'
 import { db } from '~/db/db.server'
+import type { DB } from '~/db/types'
 
 const digestsContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
@@ -130,6 +131,36 @@ function standingReactionsOfTheMessage(ownerDiscordUserId: string) {
     .select(reactionsAsJsonArray)
 }
 
+function latestRevisionOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
+    .selectFrom('messageRevisions')
+    .select('messageRevisions.id')
+    .whereRef('messageRevisions.messageId', '=', 'messages.id')
+    .orderBy('messageRevisions.createdAt', 'desc')
+    .orderBy('messageRevisions.id', 'desc')
+    .limit(1)
+}
+
+function latestChannelDetailsOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
+    .selectFrom('channelDetailRevisions')
+    .select('channelDetailRevisions.id')
+    .whereRef('channelDetailRevisions.channelId', '=', 'messages.channelId')
+    .orderBy('channelDetailRevisions.createdAt', 'desc')
+    .orderBy('channelDetailRevisions.id', 'desc')
+    .limit(1)
+}
+
+function latestAuthorDetailsOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
+    .selectFrom('memberDetailRevisions')
+    .select('memberDetailRevisions.id')
+    .whereRef('memberDetailRevisions.memberId', '=', 'messages.authorMemberId')
+    .orderBy('memberDetailRevisions.createdAt', 'desc')
+    .orderBy('memberDetailRevisions.id', 'desc')
+    .limit(1)
+}
+
 function digestMessagesSince({
   since,
   guildId,
@@ -139,77 +170,30 @@ function digestMessagesSince({
   guildId: string
   ownerDiscordUserId: string
 }) {
-  const rankedRevisions = db()
-    .selectFrom('messageRevisions')
-    .select((eb) => [
-      'messageId',
-      'content',
-      'id as revisionId',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('messageId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestRevisions')
-
-  const rankedChannelDetails = db()
-    .selectFrom('channelDetailRevisions')
-    .select((eb) => [
-      'channelId',
-      'name',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestChannelDetails')
-
-  const rankedMemberDetails = db()
-    .selectFrom('memberDetailRevisions')
-    .select((eb) => [
-      'memberId',
-      'displayName',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('memberId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('latestMemberDetails')
-
   return db()
     .selectFrom('messages')
     .innerJoin('channels', 'channels.id', 'messages.channelId')
-    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .innerJoin(rankedRevisions, 'latestRevisions.messageId', 'messages.id')
-    .innerJoin(
-      rankedChannelDetails,
-      'latestChannelDetails.channelId',
-      'channels.id'
+    .innerJoin('messageRevisions as latestRevisions', (join) =>
+      join.on((eb) => eb('latestRevisions.id', '=', latestRevisionOf(eb)))
     )
-    .innerJoin(
-      rankedMemberDetails,
-      'latestMemberDetails.memberId',
-      'messages.authorMemberId'
+    .innerJoin('channelDetailRevisions as latestChannelDetails', (join) =>
+      join.on((eb) =>
+        eb('latestChannelDetails.id', '=', latestChannelDetailsOf(eb))
+      )
     )
-    .where('latestRevisions.rowNumber', '=', 1)
-    .where('latestChannelDetails.rowNumber', '=', 1)
-    .where('latestMemberDetails.rowNumber', '=', 1)
-    .where('guilds.discordGuildId', '=', guildId)
+    .innerJoin('memberDetailRevisions as latestMemberDetails', (join) =>
+      join.on((eb) =>
+        eb('latestMemberDetails.id', '=', latestAuthorDetailsOf(eb))
+      )
+    )
+    .where(({ exists, selectFrom }) =>
+      exists(
+        selectFrom('guilds')
+          .select('guilds.id')
+          .whereRef('guilds.id', '=', 'channels.guildId')
+          .where('guilds.discordGuildId', '=', guildId)
+      )
+    )
     .where('messages.discordCreatedAt', '>=', since)
     .where(({ not, exists, selectFrom }) =>
       not(
@@ -226,7 +210,11 @@ function digestMessagesSince({
       'messages.discordCreatedAt',
       'messages.channelId',
       'channels.discordChannelId',
-      'guilds.discordGuildId',
+      eb
+        .selectFrom('guilds')
+        .select('guilds.discordGuildId')
+        .whereRef('guilds.id', '=', 'channels.guildId')
+        .as('discordGuildId'),
       'latestChannelDetails.name as channelName',
       'latestMemberDetails.displayName as authorDisplayName',
       'latestRevisions.content',
@@ -236,7 +224,7 @@ function digestMessagesSince({
         .whereRef(
           'messageRevisionEmbeds.messageRevisionId',
           '=',
-          'latestRevisions.revisionId'
+          'latestRevisions.id'
         )
         .as('embeds'),
       eb
@@ -245,7 +233,7 @@ function digestMessagesSince({
         .whereRef(
           'messageRevisionAttachments.messageRevisionId',
           '=',
-          'latestRevisions.revisionId'
+          'latestRevisions.id'
         )
         .as('attachments'),
       standingReactionsOfTheMessage(ownerDiscordUserId).as('reactions'),
@@ -362,7 +350,7 @@ const listMentions = applySchema(
                 .whereRef(
                   'messageRevisionUserMentions.messageRevisionId',
                   '=',
-                  'latestRevisions.revisionId'
+                  'latestRevisions.id'
                 )
                 .where(
                   'messageRevisionUserMentions.mentionedDiscordUserId',

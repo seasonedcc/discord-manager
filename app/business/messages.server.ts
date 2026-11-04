@@ -1,5 +1,11 @@
 import { InputError, applySchema } from 'composable-functions'
-import { type Expression, type SqlBool, type Transaction, sql } from 'kysely'
+import {
+  type Expression,
+  type ExpressionBuilder,
+  type SqlBool,
+  type Transaction,
+  sql,
+} from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -229,6 +235,16 @@ function fetchMessage(transport: MessageFetchTransport) {
   })
 }
 
+function latestRevisionOf(eb: ExpressionBuilder<DB, 'messages'>) {
+  return eb
+    .selectFrom('messageRevisions')
+    .select('messageRevisions.id')
+    .whereRef('messageRevisions.messageId', '=', 'messages.id')
+    .orderBy('messageRevisions.createdAt', 'desc')
+    .orderBy('messageRevisions.id', 'desc')
+    .limit(1)
+}
+
 const dayBucket = sql<string>`substr(messages.discord_created_at, 1, 10)`
 
 function carriesTheText(text: Expression<string>, wanted: string) {
@@ -249,26 +265,16 @@ function messagesMatching({
   until: string | undefined
 }) {
   let matching = db()
-    .with('latestRevisions', (qb) =>
-      qb.selectFrom('messageRevisions').select((eb) => [
-        'messageRevisions.id',
-        'messageRevisions.messageId',
-        'messageRevisions.content',
-        eb.fn
-          .agg<number>('row_number')
-          .over((over) =>
-            over
-              .partitionBy('messageId')
-              .orderBy('createdAt', 'desc')
-              .orderBy('id', 'desc')
-          )
-          .as('rowNumber'),
-      ])
-    )
     .selectFrom('messages')
-    .innerJoin('channels', 'channels.id', 'messages.channelId')
-    .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .where('guilds.discordGuildId', '=', guildId)
+    .where(({ exists, selectFrom }) =>
+      exists(
+        selectFrom('channels')
+          .innerJoin('guilds', 'guilds.id', 'channels.guildId')
+          .select('channels.id')
+          .whereRef('channels.id', '=', 'messages.channelId')
+          .where('guilds.discordGuildId', '=', guildId)
+      )
+    )
     .where(({ not, exists, selectFrom }) =>
       not(
         exists(
@@ -295,10 +301,9 @@ function messagesMatching({
     matching = matching.where((eb) =>
       eb.exists(
         eb
-          .selectFrom('latestRevisions')
+          .selectFrom('messageRevisions as latestRevisions')
           .select('latestRevisions.id')
-          .whereRef('latestRevisions.messageId', '=', 'messages.id')
-          .where('latestRevisions.rowNumber', '=', 1)
+          .where('latestRevisions.id', '=', latestRevisionOf(eb))
           .where((revision) =>
             revision.or([
               carriesTheText(
