@@ -366,7 +366,7 @@ const countMessages = applySchema(
 
   const counted = await matching
     .select((eb) => [
-      eb.fn.count<number>('messages.id').distinct().as('total'),
+      eb.fn.count<number>('messages.id').as('total'),
       eb.fn.min<string | null>('messages.discordCreatedAt').as('oldestMatch'),
       eb.fn.max<string | null>('messages.discordCreatedAt').as('newestMatch'),
     ])
@@ -377,7 +377,7 @@ const countMessages = applySchema(
       ? await matching
           .select((eb) => [
             dayBucket.as('date'),
-            eb.fn.count<number>('messages.id').distinct().as('count'),
+            eb.fn.count<number>('messages.id').as('count'),
           ])
           .groupBy(dayBucket)
           .orderBy(dayBucket, 'asc')
