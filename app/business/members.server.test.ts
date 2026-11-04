@@ -151,6 +151,49 @@ describe('listMembers', () => {
     ])
   })
 
+  it('answers with the name recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const priya = await somebodyWhoPosted(channel.id, {
+      displayName: 'Priya Raman',
+      username: 'priya',
+    })
+    const sameInstant = '2099-01-01T00:00:00.000Z'
+
+    await db()
+      .insertInto('memberDetailRevisions')
+      .values([
+        {
+          createdAt: sameInstant,
+          displayName: 'Renamed first',
+          id: newId(),
+          memberId: priya.id,
+          username: 'priya.first',
+        },
+        {
+          createdAt: sameInstant,
+          displayName: 'Renamed last',
+          id: newId(),
+          memberId: priya.id,
+          username: 'priya.last',
+        },
+      ])
+      .execute()
+
+    const { members } = await fromSuccess(listMembers)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members).toEqual([
+      {
+        discordUserId: priya.discordUserId,
+        displayName: 'Renamed last',
+        username: 'priya.last',
+      },
+    ])
+  })
+
   it('matches part of a display name whatever its case, accents included', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })

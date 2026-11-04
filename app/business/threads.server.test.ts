@@ -315,6 +315,40 @@ describe('createThread', () => {
     expect(requests).toEqual([])
   })
 
+  it('reads the parent channel by the detail revision recorded last when two share an instant', async () => {
+    const { channel, context } = await threadGround()
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+    const { transport } = openingTransport()
+
+    await db()
+      .insertInto('channelDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'a thread first',
+          isThread: 1,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'a channel last',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { thread } = await fromSuccess(createThread(transport))(
+      { channelId: channel.id, name: `incident-${randomUUID()}` },
+      context
+    )
+    const listed = await channelOnTheList(context, created(thread).channelId)
+
+    expect(listed).toMatchObject({ category: 'a channel last' })
+  })
+
   it('skips a message the store already knows was deleted', async () => {
     const { channel, context } = await threadGround()
     const message = await createMessage({ channelId: channel.id })
