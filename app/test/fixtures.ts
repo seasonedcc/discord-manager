@@ -509,13 +509,10 @@ async function createBusyGuild({
 
   return {
     channelIds: channels.map(({ id }) => id),
-    context: {
-      owner: {
-        discordUserId: ownerDiscordUserId,
-        guildId: guild.discordGuildId,
-      },
-      ...ownerCaps(),
-    },
+    context: await ownerContext({
+      guildId: guild.id,
+      discordUserId: ownerDiscordUserId,
+    }),
     firstMessageAt: busyGuildInstant(0),
     lastMessageAt: busyGuildInstant(
       (messageCount - 1) * minutesBetweenBusyGuildMessages
