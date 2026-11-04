@@ -689,6 +689,7 @@ store without touching the network.
   void a message it already handed over: the fetch still records a retrieval and answers
   `retrieved`, with `reactions` absent. Absent means *Discord would not say*; an empty array
   means *no reaction stands* — two different answers that must not collapse into one.
+
 ### What a role grants
 
 Nothing in the store describes roles or permissions, and nothing should: they are read live
@@ -708,17 +709,27 @@ access only, `GET /guilds/{id}/channels` for permission overwrites and
   order, each denying before it allows. Reading that walk backwards, the last step that
   touches the bit decides it — so the step that decides it is also what grants it, and that
   is what `grantedThrough` and `grantedBy` report. A unit table pins every documented edge:
-  a role allow beating a role deny, a personal overwrite beating both, an @everyone deny,
-  and the owner and Administrator short-circuits.
+  a role allow beating a role deny, a personal overwrite beating both, somebody else's
+  personal overwrite counting for nothing, an @everyone deny, and the owner and
+  Administrator short-circuits.
 - **The what-if is the same walk run twice** — once with the roles the owner holds, once
-  without the one being considered. Server-wide losses compare the raw permission bits of
-  the two role sets, so a role that alone grants Administrator loses `Administrator` rather
-  than a list of everything Administrator implies, and every label comes from an exhaustive
-  map keyed on discord.js's `PermissionFlagsBits`, so a new permission cannot compile
-  without the words Discord's role settings use for it. The three answers that make the
-  question trivial — the owner owns the server, another held role grants Administrator, the
-  owner never held the role — are stated in `summary` rather than left for the caller to
-  infer from a column of unchanged rows.
+  without the one being considered. Server-wide losses are the raw permission bits the
+  owner holds now and would not hold without the role, so a bit @everyone or another held
+  role also grants is never lost, a role that alone grants Administrator loses
+  `Administrator` rather than a list of everything Administrator implies, and every label
+  comes from an exhaustive map keyed on discord.js's `PermissionFlagsBits`, so a new
+  permission cannot compile without the words Discord's role settings use for it. The three
+  answers that make the question trivial — the owner owns the server, another held role
+  grants Administrator, the owner never held the role — are stated in `summary` rather than
+  left for the caller to infer from a column of unchanged rows; "another" means another,
+  so asking about the role that grants Administrator is an ordinary comparison.
+- **A timeout counts.** The member fetch carries `communication_disabled_until`, and while
+  it lies ahead Discord takes away every permission but View Channels and Read Message
+  History, exempting only the server owner and Administrator holders — the permissions
+  documentation says so for timed-out members. The walk applies that right after its two
+  exemptions, so Manage Threads shows the owner no private thread; `serverPermissions`
+  keeps only those two bits; and `summary` says until when. A what-if about the role that
+  is the owner's only exemption says that without it the timeout would count.
 - **Threads follow Discord's inheritance.** A public thread answers as its parent does. A
   private thread is visible to whoever can view its parent and either manages threads there
   or was added to it; membership is not fetched, so a private thread is listed only when
@@ -728,10 +739,18 @@ access only, `GET /guilds/{id}/channels` for permission overwrites and
   channel they cannot see, and a private thread that only membership could show them, are
   neither named nor counted, though Discord may show the bot both. `roles_list` lists every
   role, because Discord shows every member the server's roles.
-- **Honest about its reach.** Discord shows the bot only some of the picture — from
+- **Sidebar order.** Channels come the way Discord's sidebar lists them: the uncategorized
+  ones first, then each category by position, and within each group text-like channels
+  above voice and stage channels, then by position, then by id. Discord's API docs only say
+  that channels sort by `position` with ties broken by id; the text-above-voice split is
+  the client's behavior, and discord.js's `getSortableGroupTypes` encodes the same split.
+  Each thread follows its channel, by name.
+- **Honest about its reach.** Discord shows the bot only some of the picture —
+  `GET /guilds/{id}/threads/active` returns only the threads the bot can access, and from
   November 16, 2026 `GET /guilds/{id}/channels` omits every channel the bot cannot view — so
-  every answer carries `coverage`, saying that a channel hidden from the bot, an archived
-  thread, and a private thread seen only through membership are left out.
+  every retrieved answer carries `coverage`, saying that a channel the bot cannot view may
+  be left out and its active threads always are, that archived threads are left out, and so
+  is a private thread seen only through membership.
 
 ### Reply-by-reaction
 

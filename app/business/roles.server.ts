@@ -9,11 +9,13 @@ import {
   type ObservedRole,
   type PermissionFetchFailureKind,
   PermissionFetchOwnerNotMemberError,
+  type PermissionFetchReading,
   PermissionFetchRejectedError,
   PermissionFetchServerUnknownError,
   type PermissionGrant,
   type RoleSetAsideOutcome,
   type ServerRolesTransport,
+  type TimeoutStanding,
   type View,
   channelAccessCoverage,
   everyoneSetAsideMessage,
@@ -23,9 +25,11 @@ import {
   readChannelAccessSchema,
   roleSetAsideSummary,
   serverPermissions,
+  timeoutThatCounts,
   unknownRoleMessage,
   viewsOf,
   visibleNowSummary,
+  withTimeout,
 } from '~/business/roles.common'
 import { db } from '~/db/db.server'
 import { newId } from '~/framework/db.server'
@@ -49,7 +53,7 @@ function failureKindOf(error: unknown): PermissionFetchFailureKind {
 }
 
 async function fetchThroughDiscord<Observed>(
-  reading: 'channel_access' | 'roles',
+  reading: PermissionFetchReading,
   owner: Owner,
   read: () => Promise<Observed>
 ) {
@@ -147,7 +151,8 @@ function listRoles(transport: ServerRolesTransport) {
 }
 
 function inSidebarOrder({ channels, threads }: ObservedChannelAccess) {
-  const byPosition = (left: ObservedChannel, right: ObservedChannel) =>
+  const bySidebarPlace = (left: ObservedChannel, right: ObservedChannel) =>
+    Number(left.isVoice) - Number(right.isVoice) ||
     left.position - right.position ||
     bySnowflake(left.discordChannelId, right.discordChannelId)
   const childrenOf = (parentDiscordChannelId: string | null) =>
@@ -157,7 +162,7 @@ function inSidebarOrder({ channels, threads }: ObservedChannelAccess) {
           !channel.isCategory &&
           channel.parentDiscordChannelId === parentDiscordChannelId
       )
-      .sort(byPosition)
+      .sort(bySidebarPlace)
   const threadsOf = ({ discordChannelId }: ObservedChannel) =>
     threads
       .filter(
@@ -171,7 +176,7 @@ function inSidebarOrder({ channels, threads }: ObservedChannelAccess) {
       )
   const categories = channels
     .filter(({ isCategory }) => isCategory)
-    .sort(byPosition)
+    .sort(bySidebarPlace)
   const uncategorized = channels.filter(
     (channel) =>
       !channel.isCategory &&
@@ -183,7 +188,7 @@ function inSidebarOrder({ channels, threads }: ObservedChannelAccess) {
   )
 
   return [
-    ...[...childrenOf(null), ...uncategorized.sort(byPosition)].map(
+    ...[...childrenOf(null), ...uncategorized.sort(bySidebarPlace)].map(
       (channel) => ({ category: undefined, channel })
     ),
     ...categories.flatMap((category) =>
@@ -230,6 +235,14 @@ function describeGrant(grant: PermissionGrant, roles: ObservedRole[]) {
   }
 }
 
+function activeTimeoutOf(ownerTimedOutUntil: string | null) {
+  if (ownerTimedOutUntil === null) return null
+
+  const until = Date.parse(ownerTimedOutUntil)
+
+  return until > Date.now() ? new Date(until).toISOString() : null
+}
+
 function canViewWithout(view: View | undefined) {
   if (view === 'only_if_added') return 'only_if_added'
 
@@ -274,7 +287,9 @@ function readChannelAccess(transport: ChannelAccessTransport) {
     const viewer = {
       discordUserId: owner.discordUserId,
       heldDiscordRoleIds: observed.ownerDiscordRoleIds,
+      timedOutUntil: activeTimeoutOf(observed.ownerTimedOutUntil),
     }
+    const timeoutNow = timeoutThatCounts(server, viewer)
     const viewsNow = viewsOf(server, viewer, observed)
     const visible = inSidebarOrder(observed).flatMap(
       ({ category, ...channel }) => {
@@ -295,7 +310,10 @@ function readChannelAccess(transport: ChannelAccessTransport) {
     if (!roleSetAside) {
       return {
         status: 'retrieved' as const,
-        summary: visibleNowSummary(visible.length),
+        summary: withTimeout(
+          visibleNowSummary(visible.length),
+          timeoutNow === null ? null : { kind: 'counts', until: timeoutNow }
+        ),
         coverage: channelAccessCoverage,
         channels: visible,
       }
@@ -336,10 +354,20 @@ function readChannelAccess(transport: ChannelAccessTransport) {
               ~serverPermissions(server, viewerWithout)
           )
     const roleName = roleSetAside.name
+    const timeoutWithout = timeoutThatCounts(server, viewerWithout)
     const countOf = (canViewWithoutRole: ReturnType<typeof canViewWithout>) =>
       channels.filter(
         (channel) => channel.canViewWithoutRole === canViewWithoutRole
       ).length
+
+    function timeoutStanding(): TimeoutStanding | null {
+      if (timeoutNow !== null) return { kind: 'counts', until: timeoutNow }
+      if (timeoutWithout !== null) {
+        return { kind: 'counts_without_role', roleName, until: timeoutWithout }
+      }
+
+      return null
+    }
 
     function outcome(): RoleSetAsideOutcome {
       if (!ownerHolds) return { kind: 'not_held', roleName }
@@ -363,7 +391,7 @@ function readChannelAccess(transport: ChannelAccessTransport) {
 
     return {
       status: 'retrieved' as const,
-      summary: roleSetAsideSummary(outcome()),
+      summary: withTimeout(roleSetAsideSummary(outcome()), timeoutStanding()),
       coverage: channelAccessCoverage,
       withoutRole: {
         discordRoleId: roleSetAside.discordRoleId,

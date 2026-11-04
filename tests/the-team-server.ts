@@ -6,6 +6,7 @@ const {
   AddReactions,
   Administrator,
   CreatePrivateThreads,
+  EmbedLinks,
   ManageMessages,
   ManageThreads,
   MentionEveryone,
@@ -20,6 +21,7 @@ const everyoneId = serverEnvironment.DISCORD_GUILD_ID
 
 function theTeamServer({
   ownerHolds = ['engineers', 'support'],
+  ownerTimedOutUntil,
   serverOwnedByTheOwner = false,
 }: {
   ownerHolds?: (
@@ -29,6 +31,7 @@ function theTeamServer({
     | 'moderators'
     | 'support'
   )[]
+  ownerTimedOutUntil?: string
   serverOwnedByTheOwner?: boolean
 } = {}) {
   const roles = {
@@ -50,14 +53,15 @@ function theTeamServer({
       id: nextDiscordId(),
       mentionable: true,
       name: 'Engineers',
-      permissions: MentionEveryone | CreatePrivateThreads,
+      permissions:
+        MentionEveryone | CreatePrivateThreads | SendMessages | EmbedLinks,
       position: 3,
     },
     support: {
       id: nextDiscordId(),
       mentionable: true,
       name: 'Support',
-      permissions: 0n,
+      permissions: EmbedLinks,
       position: 2,
     },
     designers: {
@@ -133,6 +137,16 @@ function theTeamServer({
       parentId: product.id,
       position: 2,
     },
+    supportTicket: {
+      id: nextDiscordId(),
+      name: 'support-ticket-4721',
+      overwrites: [
+        keepsEveryoneOut,
+        { allow: ViewChannel, id: nextDiscordId(), member: true },
+      ],
+      parentId: product.id,
+      position: 3,
+    },
     leadershipOffsite: {
       id: nextDiscordId(),
       name: 'leadership-offsite',
@@ -164,6 +178,9 @@ function theTeamServer({
     memberRoleIds: {
       [ownerDiscordUserId]: ownerHolds.map((key) => roles[key].id),
     },
+    memberTimedOutUntil: ownerTimedOutUntil
+      ? { [ownerDiscordUserId]: ownerTimedOutUntil }
+      : {},
     ownerDiscordUserId: serverOwnedByTheOwner
       ? ownerDiscordUserId
       : nextDiscordId(),

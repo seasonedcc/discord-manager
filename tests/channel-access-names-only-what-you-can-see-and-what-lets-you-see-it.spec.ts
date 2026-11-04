@@ -50,18 +50,18 @@ test('channel access names only what you can see, and what lets you see it', asy
       grantedBy: ['@everyone'],
     },
     {
-      discordChannelId: channels.standup.id,
-      isThread: false,
-      name: channels.standup.name,
-      grantedThrough: 'role_server_permissions',
-      grantedBy: ['@everyone'],
-    },
-    {
       discordChannelId: channels.launchWarRoom.id,
       isThread: false,
       name: channels.launchWarRoom.name,
       grantedThrough: 'your_channel_permissions',
       grantedBy: [],
+    },
+    {
+      discordChannelId: channels.standup.id,
+      isThread: false,
+      name: channels.standup.name,
+      grantedThrough: 'role_server_permissions',
+      grantedBy: ['@everyone'],
     },
     {
       category: categories.product.name,
@@ -94,13 +94,14 @@ test('channel access names only what you can see, and what lets you see it', asy
   )
   assert.equal(
     access.coverage,
-    'Only what Discord shows the bot is judged here: a channel hidden from the bot is missing whether or not you can view it, archived threads are left out, and so is a private thread you see only because someone added you to it.'
+    'Only what Discord shows the bot is judged here: a channel the bot cannot view may be left out and its active threads always are, archived threads are left out, and so is a private thread you see only because someone added you to it.'
   )
 
   const answer = JSON.stringify(access)
 
   for (const hidden of [
     channels.designReviews,
+    channels.supportTicket,
     channels.leadershipOffsite,
     categories.leadership,
     threads.incidentReview,

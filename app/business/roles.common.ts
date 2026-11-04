@@ -72,6 +72,7 @@ type ObservedOverwrite =
 type ObservedChannel = {
   discordChannelId: string
   isCategory: boolean
+  isVoice: boolean
   name: string
   overwrites: ObservedOverwrite[]
   parentDiscordChannelId: string | null
@@ -87,6 +88,7 @@ type ObservedThread = {
 
 type ObservedServerRoles = {
   ownerDiscordRoleIds: string[]
+  ownerTimedOutUntil: string | null
   roles: ObservedRole[]
   serverOwnerDiscordUserId: string
 }
@@ -108,6 +110,8 @@ type ServerRolesTransport = (
 type ChannelAccessTransport = (
   request: PermissionFetchRequest
 ) => Promise<ObservedChannelAccess>
+
+type PermissionFetchReading = 'channel_access' | 'roles'
 
 type PermissionFetchFailureKind =
   | 'owner_not_member'
@@ -163,6 +167,7 @@ type PermissionGrant =
 type Viewer = {
   discordUserId: string
   heldDiscordRoleIds: string[]
+  timedOutUntil: string | null
 }
 
 type Server = {
@@ -187,11 +192,24 @@ function idsOf(roles: ObservedRole[]) {
   return roles.map(({ discordRoleId }) => discordRoleId)
 }
 
+const keptWhileTimedOut =
+  PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory
+
+function timeoutThatCounts(server: Server, viewer: Viewer) {
+  const exempt =
+    viewer.discordUserId === server.serverOwnerDiscordUserId ||
+    rolesOf(server, viewer).some(({ permissions }) =>
+      grants(permissions, PermissionFlagsBits.Administrator)
+    )
+
+  return exempt ? null : viewer.timedOutUntil
+}
+
 function grantOf(
   permission: bigint,
   server: Server,
   viewer: Viewer,
-  overwrites: ObservedOverwrite[] = []
+  overwrites: ObservedOverwrite[]
 ): PermissionGrant | null {
   if (viewer.discordUserId === server.serverOwnerDiscordUserId) {
     return { through: 'server_owner' }
@@ -204,6 +222,10 @@ function grantOf(
 
   if (administrators.length > 0) {
     return { through: 'administrator', discordRoleIds: idsOf(administrators) }
+  }
+
+  if (viewer.timedOutUntil !== null && !grants(keptWhileTimedOut, permission)) {
+    return null
   }
 
   const personal = overwrites.find(
@@ -312,10 +334,14 @@ function viewsOf(
 }
 
 function serverPermissions(server: Server, viewer: Viewer) {
-  return rolesOf(server, viewer).reduce(
+  const held = rolesOf(server, viewer).reduce(
     (bits, { permissions }) => bits | permissions,
     0n
   )
+
+  return timeoutThatCounts(server, viewer) === null
+    ? held
+    : held & keptWhileTimedOut
 }
 
 function permissionLabelsOf(bits: bigint) {
@@ -343,7 +369,7 @@ function listed(names: string[]) {
 }
 
 const channelAccessCoverage =
-  'Only what Discord shows the bot is judged here: a channel hidden from the bot is missing whether or not you can view it, archived threads are left out, and so is a private thread you see only because someone added you to it.'
+  'Only what Discord shows the bot is judged here: a channel the bot cannot view may be left out and its active threads always are, archived threads are left out, and so is a private thread you see only because someone added you to it.'
 
 function visibleNowSummary(visible: number) {
   return `You can view ${counted(visible, 'channel or thread', 'channels and threads')} right now; \`grantedBy\` on each names what lets you see it.`
@@ -372,36 +398,48 @@ function roleSetAsideSummary(outcome: RoleSetAsideOutcome) {
         ? `Another of your roles (${outcome.through[0]}) grants Administrator, so you lose nothing without ${outcome.roleName}.`
         : `Other roles of yours (${listed(outcome.through)}) grant Administrator, so you lose nothing without ${outcome.roleName}.`
     default: {
+      const { lostChannels, lostPermissions, onlyIfAdded, roleName } = outcome
       const losses = [
-        ...(outcome.lostChannels > 0
+        ...(lostChannels > 0
           ? [
-              `${counted(outcome.lostChannels, 'channel or thread', 'channels and threads')} you can view now`,
+              `${counted(lostChannels, 'channel or thread', 'channels and threads')} you can view now`,
             ]
           : []),
-        ...(outcome.lostPermissions > 0
+        ...(lostPermissions > 0
           ? [
               counted(
-                outcome.lostPermissions,
+                lostPermissions,
                 'server-wide permission',
                 'server-wide permissions'
               ),
             ]
           : []),
       ]
-      const lost =
-        losses.length > 0
-          ? `Without ${outcome.roleName} you would lose ${listed(losses)}.`
-          : `Without ${outcome.roleName} you keep every channel, thread and server-wide permission you have now.`
-      const onlyIfAdded =
-        outcome.onlyIfAdded === 1
-          ? ' 1 private thread would stay visible only if someone added you to it.'
-          : outcome.onlyIfAdded > 1
-            ? ` ${outcome.onlyIfAdded} private threads would stay visible only if someone added you to them.`
-            : ''
+      const membershipOnly = `${counted(onlyIfAdded, 'private thread', 'private threads')} would stay visible only if someone added you to ${onlyIfAdded === 1 ? 'it' : 'them'}`
 
-      return `${lost}${onlyIfAdded}`
+      if (losses.length > 0) {
+        const lost = `Without ${roleName} you would lose ${listed(losses)}.`
+
+        return onlyIfAdded > 0 ? `${lost} ${membershipOnly}.` : lost
+      }
+
+      return onlyIfAdded > 0
+        ? `Without ${roleName} you keep every server-wide permission you have and every channel and thread you can view now, except that ${membershipOnly}.`
+        : `Without ${roleName} you keep every channel, thread and server-wide permission you have now.`
     }
   }
+}
+
+type TimeoutStanding =
+  | { kind: 'counts'; until: string }
+  | { kind: 'counts_without_role'; roleName: string; until: string }
+
+function withTimeout(summary: string, standing: TimeoutStanding | null) {
+  if (standing === null) return summary
+
+  return standing.kind === 'counts'
+    ? `${summary} You are timed out until ${standing.until}, and until then Discord takes away every permission you hold except View Channels and Read Message History, so a private thread you would see by managing threads is left out and no other server-wide permission counts.`
+    : `${summary} You are timed out until ${standing.until}. Administrator exempts you from the timeout now, but without ${standing.roleName} Discord would take away every permission you hold except View Channels and Read Message History until then.`
 }
 
 const withoutDiscordRoleIdMessage =
@@ -431,17 +469,17 @@ export {
   PermissionFetchServerUnknownError,
   channelAccessCoverage,
   everyoneSetAsideMessage,
-  grantOf,
   listRolesSchema,
   permissionFetchFailureCopy,
-  permissionLabels,
   permissionLabelsOf,
   readChannelAccessSchema,
   roleSetAsideSummary,
   serverPermissions,
+  timeoutThatCounts,
   unknownRoleMessage,
   viewsOf,
   visibleNowSummary,
+  withTimeout,
 }
 
 export type {
@@ -454,9 +492,11 @@ export type {
   ObservedThread,
   PermissionFetchFailureKind,
   PermissionFetchGuidance,
+  PermissionFetchReading,
   PermissionGrant,
   RoleSetAsideOutcome,
   ServerRolesTransport,
+  TimeoutStanding,
   View,
   Viewer,
 }

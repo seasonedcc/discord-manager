@@ -69,4 +69,13 @@ test('listing roles says which ones are yours', async () => {
       ownerHolds: true,
     },
   ])
+
+  const owned = theTeamServer({ serverOwnedByTheOwner: true })
+
+  session.discord.holdsServer(owned.server)
+
+  const asServerOwner = await session.call<Roles>('roles_list')
+
+  assert.equal(asServerOwner.status, 'retrieved')
+  assert.equal(asServerOwner.ownerIsServerOwner, true)
 })

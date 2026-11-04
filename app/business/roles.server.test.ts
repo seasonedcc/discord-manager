@@ -14,16 +14,19 @@ import {
 import { listRoles, readChannelAccess } from '~/business/roles.server'
 import { db } from '~/db/db.server'
 import { createGuild, ownerContext, snowflake } from '~/test/fixtures'
-import { describe, expect, it } from '~/test/prelude'
+import { afterEach, describe, expect, it, vi } from '~/test/prelude'
 
 const {
   Administrator,
+  EmbedLinks,
   ManageMessages,
   ManageThreads,
   MentionEveryone,
   SendMessages,
   ViewChannel,
 } = PermissionFlagsBits
+
+const anHour = 60 * 60 * 1000
 
 async function accessGround() {
   const guild = await createGuild()
@@ -41,7 +44,7 @@ async function accessGround() {
       discordRoleId: snowflake(),
       mentionable: true,
       name: 'Engineers',
-      permissions: ManageMessages | MentionEveryone,
+      permissions: ManageMessages | MentionEveryone | SendMessages | EmbedLinks,
       position: 2,
     },
     moderators: {
@@ -62,7 +65,7 @@ async function accessGround() {
       discordRoleId: snowflake(),
       mentionable: true,
       name: 'Designers',
-      permissions: 0n,
+      permissions: EmbedLinks,
       position: 1,
     },
   }
@@ -71,6 +74,7 @@ async function accessGround() {
     product: {
       discordChannelId: snowflake(),
       isCategory: true,
+      isVoice: false,
       name: 'Product',
       overwrites: [],
       parentDiscordChannelId: null,
@@ -79,6 +83,7 @@ async function accessGround() {
     general: {
       discordChannelId: snowflake(),
       isCategory: false,
+      isVoice: false,
       name: 'general',
       overwrites: [],
       parentDiscordChannelId: null,
@@ -87,6 +92,7 @@ async function accessGround() {
     engineering: {
       discordChannelId: snowflake(),
       isCategory: false,
+      isVoice: false,
       name: 'engineering',
       overwrites: [
         {
@@ -108,6 +114,7 @@ async function accessGround() {
     leadership: {
       discordChannelId: snowflake(),
       isCategory: false,
+      isVoice: false,
       name: 'leadership-offsite',
       overwrites: [
         {
@@ -143,6 +150,7 @@ async function accessGround() {
     return {
       channels: Object.values(channels),
       ownerDiscordRoleIds: [roles.engineers.discordRoleId],
+      ownerTimedOutUntil: null,
       roles: Object.values(roles),
       serverOwnerDiscordUserId: snowflake(),
       threads: Object.values(threads),
@@ -211,6 +219,19 @@ function telemetryOf({
         .execute()
     },
   }
+}
+
+async function currentAccess(
+  transport: ChannelAccessTransport,
+  context: Awaited<ReturnType<typeof ownerContext>>
+) {
+  const answer = await fromSuccess(readChannelAccess(transport))({}, context)
+
+  if (answer.status !== 'retrieved') {
+    throw new Error(`expected a retrieved read, got a ${answer.status} one`)
+  }
+
+  return answer
 }
 
 async function comparedAccess(
@@ -323,6 +344,10 @@ describe('listRoles', () => {
 })
 
 describe('readChannelAccess', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('lists only what the owner can view, each with what grants it', async () => {
     const { answering, channels, context, roles, threads } =
       await accessGround()
@@ -375,6 +400,38 @@ describe('readChannelAccess', () => {
     expect(answer).not.toContain('incident-review')
   })
 
+  it('lists text channels above voice channels in each group, the way the sidebar does', async () => {
+    const { answering, channels, context } = await accessGround()
+    const voice = (name: string, position: number, parent: string | null) => ({
+      discordChannelId: snowflake(),
+      isCategory: false,
+      isVoice: true,
+      name,
+      overwrites: [],
+      parentDiscordChannelId: parent,
+      position,
+    })
+    const { transport } = answering({
+      channels: [
+        ...Object.values(channels),
+        voice('standup', 0, null),
+        { ...voice('random', 1, null), isVoice: false },
+        voice('pairing', 0, channels.product.discordChannelId),
+      ],
+    })
+
+    const answer = await currentAccess(transport, context)
+
+    expect(answer.channels.map(({ name }) => name)).toEqual([
+      'general',
+      'random',
+      'standup',
+      'engineering',
+      'release-checklist',
+      'pairing',
+    ])
+  })
+
   it('lists a private thread the owner sees by managing threads, and what leaving that role does to it', async () => {
     const { answering, context, roles, threads } = await accessGround()
     const { transport } = answering({
@@ -414,7 +471,12 @@ describe('readChannelAccess', () => {
   it('names the channels and server-wide permissions only that role gives', async () => {
     const { answering, channels, context, roles, threads } =
       await accessGround()
-    const { transport } = answering()
+    const { transport } = answering({
+      ownerDiscordRoleIds: [
+        roles.engineers.discordRoleId,
+        roles.designers.discordRoleId,
+      ],
+    })
 
     const answer = await comparedAccess(
       transport,
@@ -508,6 +570,247 @@ describe('readChannelAccess', () => {
       'Another of your roles (Admins) grants Administrator, so you lose nothing without Engineers.'
     )
     expect(answer).toMatchObject({ withoutRole: { lostPermissions: [] } })
+  })
+
+  it('costs Administrator itself when the role set aside is the only one granting it', async () => {
+    const { answering, channels, context, roles, threads } =
+      await accessGround()
+    const { transport } = answering({
+      ownerDiscordRoleIds: [roles.admins.discordRoleId],
+    })
+
+    const answer = await comparedAccess(
+      transport,
+      roles.admins.discordRoleId,
+      context
+    )
+
+    expect(answer).toMatchObject({
+      summary:
+        'Without Admins you would lose 3 channels and threads you can view now and 1 server-wide permission. 1 private thread would stay visible only if someone added you to it.',
+      withoutRole: {
+        discordRoleId: roles.admins.discordRoleId,
+        lostPermissions: ['Administrator'],
+        name: 'Admins',
+        ownerHolds: true,
+      },
+    })
+    expect(
+      answer.channels.map(
+        ({ canViewWithoutRole, discordChannelId, grantedThrough }) => ({
+          canViewWithoutRole,
+          discordChannelId,
+          grantedThrough,
+        })
+      )
+    ).toEqual([
+      {
+        canViewWithoutRole: 'yes',
+        discordChannelId: channels.general.discordChannelId,
+        grantedThrough: 'administrator',
+      },
+      {
+        canViewWithoutRole: 'only_if_added',
+        discordChannelId: threads.incident.discordChannelId,
+        grantedThrough: 'administrator',
+      },
+      {
+        canViewWithoutRole: 'no',
+        discordChannelId: channels.engineering.discordChannelId,
+        grantedThrough: 'administrator',
+      },
+      {
+        canViewWithoutRole: 'no',
+        discordChannelId: threads.release.discordChannelId,
+        grantedThrough: 'administrator',
+      },
+      {
+        canViewWithoutRole: 'no',
+        discordChannelId: channels.leadership.discordChannelId,
+        grantedThrough: 'administrator',
+      },
+    ])
+  })
+
+  it('names only the other role when two of the roles held grant Administrator', async () => {
+    const { answering, context, roles } = await accessGround()
+    const founders = {
+      discordRoleId: snowflake(),
+      mentionable: false,
+      name: 'Founders',
+      permissions: Administrator,
+      position: 5,
+    }
+    const { transport } = answering({
+      ownerDiscordRoleIds: [roles.admins.discordRoleId, founders.discordRoleId],
+      roles: [...Object.values(roles), founders],
+    })
+
+    const answer = await comparedAccess(
+      transport,
+      roles.admins.discordRoleId,
+      context
+    )
+
+    expect(answer.summary).toBe(
+      'Another of your roles (Founders) grants Administrator, so you lose nothing without Admins.'
+    )
+    expect(answer).toMatchObject({ withoutRole: { lostPermissions: [] } })
+    expect(
+      answer.channels.filter(
+        ({ canViewWithoutRole }) => canViewWithoutRole !== 'yes'
+      )
+    ).toHaveLength(0)
+  })
+
+  it('keeps no promise about a private thread only a channel overwrite let the owner manage', async () => {
+    const { answering, channels, context, roles, threads } =
+      await accessGround()
+    const triage = {
+      discordRoleId: snowflake(),
+      mentionable: false,
+      name: 'Triage',
+      permissions: 0n,
+      position: 1,
+    }
+    const { transport } = answering({
+      channels: Object.values(channels).map((channel) =>
+        channel === channels.general
+          ? {
+              ...channel,
+              overwrites: [
+                {
+                  allow: ManageThreads,
+                  deny: 0n,
+                  discordRoleId: triage.discordRoleId,
+                  kind: 'role' as const,
+                },
+              ],
+            }
+          : channel
+      ),
+      ownerDiscordRoleIds: [
+        roles.engineers.discordRoleId,
+        triage.discordRoleId,
+      ],
+      roles: [...Object.values(roles), triage],
+    })
+
+    const answer = await comparedAccess(
+      transport,
+      triage.discordRoleId,
+      context
+    )
+
+    expect(answer.channels).toContainEqual({
+      category: 'general',
+      discordChannelId: threads.incident.discordChannelId,
+      isThread: true,
+      name: 'incident-review',
+      grantedThrough: 'role_channel_permissions',
+      grantedBy: ['Triage'],
+      canViewWithoutRole: 'only_if_added',
+    })
+    expect(answer.summary).toBe(
+      'Without Triage you keep every server-wide permission you have and every channel and thread you can view now, except that 1 private thread would stay visible only if someone added you to it.'
+    )
+  })
+
+  it('leaves out a private thread a timed-out owner would see by managing threads, and says why', async () => {
+    const { answering, context, roles } = await accessGround()
+    const timedOutUntil = new Date(Date.now() + anHour).toISOString()
+    const { transport } = answering({
+      ownerDiscordRoleIds: [
+        roles.engineers.discordRoleId,
+        roles.moderators.discordRoleId,
+      ],
+      ownerTimedOutUntil: timedOutUntil,
+    })
+
+    const answer = await currentAccess(transport, context)
+
+    expect(answer.channels.map(({ name }) => name)).toEqual([
+      'general',
+      'engineering',
+      'release-checklist',
+    ])
+    expect(answer.summary).toBe(
+      `You can view 3 channels and threads right now; \`grantedBy\` on each names what lets you see it. You are timed out until ${timedOutUntil}, and until then Discord takes away every permission you hold except View Channels and Read Message History, so a private thread you would see by managing threads is left out and no other server-wide permission counts.`
+    )
+  })
+
+  it('compares only what a timeout leaves a timed-out owner', async () => {
+    const { answering, context, roles } = await accessGround()
+    const timedOutUntil = new Date(Date.now() + anHour).toISOString()
+    const { transport } = answering({
+      ownerDiscordRoleIds: [
+        roles.engineers.discordRoleId,
+        roles.moderators.discordRoleId,
+      ],
+      ownerTimedOutUntil: timedOutUntil,
+    })
+
+    const answer = await comparedAccess(
+      transport,
+      roles.moderators.discordRoleId,
+      context
+    )
+
+    expect(answer).toMatchObject({
+      summary: `Without Moderators you keep every channel, thread and server-wide permission you have now. You are timed out until ${timedOutUntil}, and until then Discord takes away every permission you hold except View Channels and Read Message History, so a private thread you would see by managing threads is left out and no other server-wide permission counts.`,
+      withoutRole: { lostPermissions: [] },
+    })
+  })
+
+  it('says when the role set aside is all that exempts a timed-out owner', async () => {
+    const { answering, context, roles } = await accessGround()
+    const timedOutUntil = new Date(Date.now() + anHour).toISOString()
+    const { transport } = answering({
+      ownerDiscordRoleIds: [roles.admins.discordRoleId],
+      ownerTimedOutUntil: timedOutUntil,
+    })
+
+    const answer = await comparedAccess(
+      transport,
+      roles.admins.discordRoleId,
+      context
+    )
+
+    expect(answer).toMatchObject({
+      summary: `Without Admins you would lose 3 channels and threads you can view now and 2 server-wide permissions. 1 private thread would stay visible only if someone added you to it. You are timed out until ${timedOutUntil}. Administrator exempts you from the timeout now, but without Admins Discord would take away every permission you hold except View Channels and Read Message History until then.`,
+      withoutRole: {
+        lostPermissions: ['Administrator', 'Send Messages and Create Posts'],
+      },
+    })
+  })
+
+  it('counts a timeout only until the instant it ends', async () => {
+    const { answering, context, roles, threads } = await accessGround()
+    const instant = Date.now()
+    const heldUntil = (ownerTimedOutUntil: number) =>
+      answering({
+        ownerDiscordRoleIds: [
+          roles.engineers.discordRoleId,
+          roles.moderators.discordRoleId,
+        ],
+        ownerTimedOutUntil: new Date(ownerTimedOutUntil).toISOString(),
+      }).transport
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(instant)
+
+    const endingNow = await currentAccess(heldUntil(instant), context)
+    const endingNext = await currentAccess(heldUntil(instant + 1), context)
+
+    expect(
+      endingNow.channels.map(({ discordChannelId }) => discordChannelId)
+    ).toContain(threads.incident.discordChannelId)
+    expect(
+      endingNext.channels.filter(
+        ({ discordChannelId }) =>
+          discordChannelId === threads.incident.discordChannelId
+      )
+    ).toHaveLength(0)
   })
 
   it('answers that nothing changes without a role the owner does not hold', async () => {

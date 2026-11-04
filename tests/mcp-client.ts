@@ -132,6 +132,7 @@ type HeldThread = {
 type HeldServer = {
   channels: HeldChannel[]
   memberRoleIds: Record<string, string[]>
+  memberTimedOutUntil?: Record<string, string>
   ownerDiscordUserId: string
   roles: HeldRole[]
   threads: HeldThread[]
@@ -257,6 +258,8 @@ async function startDiscordDouble() {
     }
 
     answer(response, 200, {
+      communication_disabled_until:
+        server.memberTimedOutUntil?.[discordUserId] ?? null,
       deaf: false,
       flags: 0,
       joined_at: '2026-01-05T09:00:00.000Z',
