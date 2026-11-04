@@ -194,30 +194,42 @@ and `bookmark_reasons_list` walk the additions, keep the standing ones, and reac
 message by primary key, so they cost the bookmarks ever made rather than the messages ever
 stored.
 
-A lookup reads only its own event tables. The bot identity a mentions read
-compares against filters `gateway_identifications` by the guild's id through a scalar
-subquery rather than joining `guilds`: joined, the planner can start from `guilds` once
-statistics exist and then sort that guild's every identification.
+The bot identity a mentions read compares against reads `gateway_identifications` alone and
+finds the guild's id through a scalar subquery on `guilds`' unique key rather than joining
+`guilds`: joined, the planner can start from `guilds` once statistics exist and then sort
+that guild's every identification.
 
 `app/business/read-plans.server.test.ts` and `app/business/bookmark-read-plans.server.test.ts`
-guard these shapes without timing anything: each captures the SQL its readers actually run
-on a busy synthetic server and holds every `explain query plan`, both as every deployed
-store plans it (the product never gathers statistics, so those plans do not depend on the
-data) and after `analyze`, to one assertion, `expectEveryPlan` in `app/test/query-plans.ts`:
+guard these shapes without timing anything: each captures every statement its readers
+actually run on a busy synthetic server, inside a transaction or not, and holds each
+`explain query plan`, both as every deployed store plans it (the product never gathers
+statistics, so those plans do not depend on the data) and after `analyze`, to one
+assertion, `expectEveryPlan` in `app/test/query-plans.ts`:
 
 - **No whole-table read beyond the guard's allow-list.** A plan scans nothing but what its
   guard names (the guild row, the population a reader walks, such as the standing
   bookmarks or every message for an unwindowed count, and the reasons catalog) and the
-  derived tables it builds itself, and builds no automatic index. The guard names what may be scanned rather than what may not,
-  because SQLite reports an aliased table under its alias: a full read of
-  `bookmark_additions` joined as `standing_bookmarks` shows up as `SCAN standing_bookmarks`,
-  which a list of forbidden table names never matches.
-- **No lookup that sorts.** No subquery that reads a latest-state table may use a temporary
-  b-tree anywhere beneath it, whatever it sorts by and whichever plan branch the sort lands
-  in; the table is recognised by the index it is read through, so an alias does not hide
-  it. A reader's own outer `order by` is not a lookup, and may sort.
+  derived tables it builds itself, and builds no automatic index. The guard names what
+  may be scanned rather than what may not, because SQLite reports an aliased table under
+  its alias: a full read of `bookmark_additions` joined as `standing_bookmarks` shows up as
+  `SCAN standing_bookmarks`, which a list of forbidden table names never matches.
+- **No lookup that sorts.** Each guard lists the tables its readers look up the latest
+  event of. A subquery, a `with` table or any other derived table (`CO-ROUTINE`,
+  `MATERIALIZE`) that reads one of them may not sort, whatever it sorts by. Each temporary
+  b-tree is charged to the nearest of these above it, or else to the statement, and that
+  one's reads are followed through derived tables down to, but not into, nested
+  subqueries: the union a pair lookup sorts stays in view, and an aggregate's own sort is
+  not blamed on a lookup nested inside it. A statement that reads nothing outside its
+  subqueries but listed tables and the guild row is itself a lookup and may not sort
+  either; a reader's own `order by`, over the rows it lists, may. A table is recognized by
+  the index it is read through, so an alias does not hide it.
 - **Every index reached by name**: the window index and each lookup's index, in the readers
   that use them.
+
+The per-message reaction set does sort, on purpose, and no guard lists its tables. It is
+not a latest-event lookup but a standing set: each message's few reaction additions and
+removals are ranked per emoji and reactor and grouped by emoji in temporary b-trees, a
+cost bounded by one message's reactions.
 
 ### Schema (initial)
 
