@@ -1,6 +1,10 @@
 import { PermissionFlagsBits } from 'discord.js'
 import { nextDiscordId } from './discord-ids'
-import { type HeldServer, serverEnvironment } from './mcp-client'
+import {
+  type HeldChannel,
+  type HeldServer,
+  serverEnvironment,
+} from './mcp-client'
 
 const {
   AddReactions,
@@ -82,21 +86,37 @@ function theTeamServer({
   }
   const keepsEveryoneOut = { deny: ViewChannel, id: everyoneId }
   const product = {
-    category: true,
     id: nextDiscordId(),
+    kind: 'category',
     name: 'Product',
     position: 0,
-  }
+  } satisfies HeldChannel
   const leadership = {
-    category: true,
     id: nextDiscordId(),
+    kind: 'category',
     name: 'Leadership',
     position: 1,
-  }
+  } satisfies HeldChannel
   const channels = {
     general: { id: nextDiscordId(), name: 'general', position: 0 },
-    announcements: { id: nextDiscordId(), name: 'announcements', position: 1 },
-    standup: { id: nextDiscordId(), name: 'standup', position: 2, voice: true },
+    announcements: {
+      id: nextDiscordId(),
+      kind: 'announcement',
+      name: 'announcements',
+      position: 1,
+    },
+    standup: {
+      id: nextDiscordId(),
+      kind: 'voice',
+      name: 'standup',
+      position: 2,
+    },
+    townHall: {
+      id: nextDiscordId(),
+      kind: 'stage',
+      name: 'town-hall',
+      position: 3,
+    },
     launchWarRoom: {
       id: nextDiscordId(),
       name: 'launch-war-room',
@@ -104,7 +124,7 @@ function theTeamServer({
         keepsEveryoneOut,
         { allow: ViewChannel, id: ownerDiscordUserId, member: true },
       ],
-      position: 3,
+      position: 4,
     },
     engineering: {
       id: nextDiscordId(),
@@ -154,7 +174,7 @@ function theTeamServer({
       parentId: leadership.id,
       position: 0,
     },
-  }
+  } satisfies Record<string, HeldChannel>
   const threads = {
     releaseChecklist: {
       id: nextDiscordId(),

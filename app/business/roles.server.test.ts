@@ -432,6 +432,45 @@ describe('readChannelAccess', () => {
     ])
   })
 
+  it('sorts a channel whose category is missing among the uncategorized ones, text still above voice', async () => {
+    const { answering, channels, context } = await accessGround()
+    const { transport } = answering({
+      channels: [
+        ...Object.values(channels),
+        {
+          discordChannelId: snowflake(),
+          isCategory: false,
+          isVoice: true,
+          name: 'standup',
+          overwrites: [],
+          parentDiscordChannelId: null,
+          position: 0,
+        },
+        {
+          discordChannelId: snowflake(),
+          isCategory: false,
+          isVoice: false,
+          name: 'hallway',
+          overwrites: [],
+          parentDiscordChannelId: snowflake(),
+          position: 1,
+        },
+      ],
+    })
+
+    const answer = await currentAccess(transport, context)
+
+    expect(
+      answer.channels.map(({ category, name }) => ({ category, name }))
+    ).toEqual([
+      { category: undefined, name: 'general' },
+      { category: undefined, name: 'hallway' },
+      { category: undefined, name: 'standup' },
+      { category: 'Product', name: 'engineering' },
+      { category: 'engineering', name: 'release-checklist' },
+    ])
+  })
+
   it('lists a private thread the owner sees by managing threads, and what leaving that role does to it', async () => {
     const { answering, context, roles, threads } = await accessGround()
     const { transport } = answering({
@@ -782,6 +821,53 @@ describe('readChannelAccess', () => {
         lostPermissions: ['Administrator', 'Send Messages and Create Posts'],
       },
     })
+  })
+
+  it('says nothing about a timeout the server owner is exempt from', async () => {
+    const { answering, context, roles } = await accessGround()
+    const { transport } = answering({
+      ownerTimedOutUntil: new Date(Date.now() + anHour).toISOString(),
+      serverOwnerDiscordUserId: context.owner.discordUserId,
+    })
+
+    const now = await currentAccess(transport, context)
+    const withoutEngineers = await comparedAccess(
+      transport,
+      roles.engineers.discordRoleId,
+      context
+    )
+
+    expect(now.summary).toBe(
+      'You can view 5 channels and threads right now; `grantedBy` on each names what lets you see it.'
+    )
+    expect(withoutEngineers.summary).toBe(
+      'You are the server owner, so you lose nothing without Engineers.'
+    )
+  })
+
+  it('says nothing about a timeout Administrator exempts the owner from', async () => {
+    const { answering, context, roles } = await accessGround()
+    const { transport } = answering({
+      ownerDiscordRoleIds: [
+        roles.engineers.discordRoleId,
+        roles.admins.discordRoleId,
+      ],
+      ownerTimedOutUntil: new Date(Date.now() + anHour).toISOString(),
+    })
+
+    const now = await currentAccess(transport, context)
+    const withoutEngineers = await comparedAccess(
+      transport,
+      roles.engineers.discordRoleId,
+      context
+    )
+
+    expect(now.summary).toBe(
+      'You can view 5 channels and threads right now; `grantedBy` on each names what lets you see it.'
+    )
+    expect(withoutEngineers.summary).toBe(
+      'Another of your roles (Admins) grants Administrator, so you lose nothing without Engineers.'
+    )
   })
 
   it('counts a timeout only until the instant it ends', async () => {

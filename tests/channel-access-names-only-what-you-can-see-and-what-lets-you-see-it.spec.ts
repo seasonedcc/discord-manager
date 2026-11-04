@@ -64,6 +64,13 @@ test('channel access names only what you can see, and what lets you see it', asy
       grantedBy: ['@everyone'],
     },
     {
+      discordChannelId: channels.townHall.id,
+      isThread: false,
+      name: channels.townHall.name,
+      grantedThrough: 'role_server_permissions',
+      grantedBy: ['@everyone'],
+    },
+    {
       category: categories.product.name,
       discordChannelId: channels.engineering.id,
       isThread: false,
@@ -90,7 +97,7 @@ test('channel access names only what you can see, and what lets you see it', asy
   ])
   assert.equal(
     access.summary,
-    'You can view 8 channels and threads right now; `grantedBy` on each names what lets you see it.'
+    'You can view 9 channels and threads right now; `grantedBy` on each names what lets you see it.'
   )
   assert.equal(
     access.coverage,

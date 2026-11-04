@@ -42,9 +42,13 @@ const unknownChannelCode = 10003
 const threadAlreadyCreatedCode = 160004
 const publicThreadType = 11
 const privateThreadType = 12
-const textChannelType = 0
-const voiceChannelType = 2
-const categoryChannelType = 4
+const channelTypes = {
+  announcement: 5,
+  category: 4,
+  stage: 13,
+  text: 0,
+  voice: 2,
+}
 const roleOverwriteType = 0
 const memberOverwriteType = 1
 
@@ -113,13 +117,12 @@ type HeldOverwrite = {
 }
 
 type HeldChannel = {
-  category?: boolean
   id: string
+  kind?: keyof typeof channelTypes
   name: string
   overwrites?: HeldOverwrite[]
   parentId?: string
   position: number
-  voice?: boolean
 }
 
 type HeldThread = {
@@ -192,12 +195,6 @@ async function startDiscordDouble() {
   const serverReads: string[] = []
   let heldServer: HeldServer | undefined
   let refusingServerReads = false
-
-  function channelTypeOf({ category, voice }: HeldChannel) {
-    if (category) return categoryChannelType
-
-    return voice ? voiceChannelType : textChannelType
-  }
 
   function serveServerRead(
     response: ServerResponse,
@@ -287,7 +284,7 @@ async function startDiscordDouble() {
           })
         ),
         position: channel.position,
-        type: channelTypeOf(channel),
+        type: channelTypes[channel.kind ?? 'text'],
       }))
     )
   }
@@ -720,4 +717,4 @@ async function closeOpenSessions() {
 }
 
 export { closeOpenSessions, openMcpSession, repositoryRoot, serverEnvironment }
-export type { HeldServer }
+export type { HeldChannel, HeldServer }

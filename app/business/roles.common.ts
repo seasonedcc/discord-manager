@@ -459,7 +459,7 @@ const readChannelAccessSchema = z.object({
     .min(1, withoutDiscordRoleIdMessage)
     .optional()
     .describe(
-      'The `discordRoleId` of a role you hold, from roles_list. Every channel then also says whether you could still view it without that role, and the answer names the server-wide permissions only that role gives you. Left out, you get your access as it stands.'
+      'The `discordRoleId` of a role you hold, from roles_list. Every channel then also says whether you could still view it without that role, and the answer names the server-wide permissions you would no longer have without it. Left out, you get your access as it stands.'
     ),
 })
 

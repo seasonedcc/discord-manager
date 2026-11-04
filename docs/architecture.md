@@ -714,22 +714,25 @@ access only, `GET /guilds/{id}/channels` for permission overwrites and
   Administrator short-circuits.
 - **The what-if is the same walk run twice** — once with the roles the owner holds, once
   without the one being considered. Server-wide losses are the raw permission bits the
-  owner holds now and would not hold without the role, so a bit @everyone or another held
-  role also grants is never lost, a role that alone grants Administrator loses
-  `Administrator` rather than a list of everything Administrator implies, and every label
-  comes from an exhaustive map keyed on discord.js's `PermissionFlagsBits`, so a new
-  permission cannot compile without the words Discord's role settings use for it. The three
-  answers that make the question trivial — the owner owns the server, another held role
-  grants Administrator, the owner never held the role — are stated in `summary` rather than
-  left for the caller to infer from a column of unchanged rows; "another" means another,
-  so asking about the role that grants Administrator is an ordinary comparison.
+  owner holds now and would not hold without the role. So a bit @everyone or another held
+  role also grants is not lost, and a role that alone grants Administrator loses
+  `Administrator` rather than a list of everything Administrator implies — unless that role
+  is all that exempts a timed-out owner, who would then also lose every bit the timeout
+  takes. Every label comes from an exhaustive map keyed on discord.js's
+  `PermissionFlagsBits`, so a new permission cannot compile without the words Discord's
+  role settings use for it. The three answers that make the question trivial — the owner
+  owns the server, another held role grants Administrator, the owner never held the role —
+  are stated in `summary` rather than left for the caller to infer from a column of
+  unchanged rows; "another" means another, so asking about the role that grants
+  Administrator is an ordinary comparison.
 - **A timeout counts.** The member fetch carries `communication_disabled_until`, and while
   it lies ahead Discord takes away every permission but View Channels and Read Message
   History, exempting only the server owner and Administrator holders — the permissions
   documentation says so for timed-out members. The walk applies that right after its two
   exemptions, so Manage Threads shows the owner no private thread; `serverPermissions`
-  keeps only those two bits; and `summary` says until when. A what-if about the role that
-  is the owner's only exemption says that without it the timeout would count.
+  keeps only those two bits; and `summary` says until when. For an exempt owner `summary`
+  says nothing about the timeout, except in a what-if about the role that is the owner's
+  only exemption, which says that without it the timeout would count.
 - **Threads follow Discord's inheritance.** A public thread answers as its parent does. A
   private thread is visible to whoever can view its parent and either manages threads there
   or was added to it; membership is not fetched, so a private thread is listed only when
@@ -740,11 +743,12 @@ access only, `GET /guilds/{id}/channels` for permission overwrites and
   neither named nor counted, though Discord may show the bot both. `roles_list` lists every
   role, because Discord shows every member the server's roles.
 - **Sidebar order.** Channels come the way Discord's sidebar lists them: the uncategorized
-  ones first, then each category by position, and within each group text-like channels
-  above voice and stage channels, then by position, then by id. Discord's API docs only say
-  that channels sort by `position` with ties broken by id; the text-above-voice split is
-  the client's behavior, and discord.js's `getSortableGroupTypes` encodes the same split.
-  Each thread follows its channel, by name.
+  ones first — joined by any channel whose category Discord did not show the bot, sorted
+  with them as one group — then each category by position, and within each group text-like
+  channels above voice and stage channels, then by position, then by id. Discord's API docs
+  only say that channels sort by `position` with ties broken by id; the text-above-voice
+  split is the client's behavior, and discord.js's `getSortableGroupTypes` encodes the same
+  split. Each thread follows its channel, by name.
 - **Honest about its reach.** Discord shows the bot only some of the picture —
   `GET /guilds/{id}/threads/active` returns only the threads the bot can access, and from
   November 16, 2026 `GET /guilds/{id}/channels` omits every channel the bot cannot view — so

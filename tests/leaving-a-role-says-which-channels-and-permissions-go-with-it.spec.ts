@@ -63,6 +63,7 @@ test('leaving a role says which channels and permissions go with it', async () =
         discordChannelId: channels.launchWarRoom.id,
       },
       { canViewWithoutRole: 'yes', discordChannelId: channels.standup.id },
+      { canViewWithoutRole: 'yes', discordChannelId: channels.townHall.id },
       { canViewWithoutRole: 'no', discordChannelId: channels.engineering.id },
       {
         canViewWithoutRole: 'no',

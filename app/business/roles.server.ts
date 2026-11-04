@@ -155,7 +155,7 @@ function inSidebarOrder({ channels, threads }: ObservedChannelAccess) {
     Number(left.isVoice) - Number(right.isVoice) ||
     left.position - right.position ||
     bySnowflake(left.discordChannelId, right.discordChannelId)
-  const childrenOf = (parentDiscordChannelId: string | null) =>
+  const childrenOf = (parentDiscordChannelId: string) =>
     channels
       .filter(
         (channel) =>
@@ -177,20 +177,19 @@ function inSidebarOrder({ channels, threads }: ObservedChannelAccess) {
   const categories = channels
     .filter(({ isCategory }) => isCategory)
     .sort(bySidebarPlace)
-  const uncategorized = channels.filter(
-    (channel) =>
-      !channel.isCategory &&
-      channel.parentDiscordChannelId !== null &&
-      !categories.some(
-        ({ discordChannelId }) =>
-          discordChannelId === channel.parentDiscordChannelId
-      )
-  )
+  const uncategorized = channels
+    .filter(
+      (channel) =>
+        !channel.isCategory &&
+        !categories.some(
+          ({ discordChannelId }) =>
+            discordChannelId === channel.parentDiscordChannelId
+        )
+    )
+    .sort(bySidebarPlace)
 
   return [
-    ...[...childrenOf(null), ...uncategorized.sort(bySidebarPlace)].map(
-      (channel) => ({ category: undefined, channel })
-    ),
+    ...uncategorized.map((channel) => ({ category: undefined, channel })),
     ...categories.flatMap((category) =>
       childrenOf(category.discordChannelId).map((channel) => ({
         category: category.name,

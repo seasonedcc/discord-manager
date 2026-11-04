@@ -25,7 +25,7 @@ test('a timeout leaves you only View Channels and Read Message History', async (
 
   assert.equal(
     now.summary,
-    `You can view 8 channels and threads right now; \`grantedBy\` on each names what lets you see it. You are timed out until ${timedOutUntil}, and until then Discord takes away every permission you hold except View Channels and Read Message History, so a private thread you would see by managing threads is left out and no other server-wide permission counts.`
+    `You can view 9 channels and threads right now; \`grantedBy\` on each names what lets you see it. You are timed out until ${timedOutUntil}, and until then Discord takes away every permission you hold except View Channels and Read Message History, so a private thread you would see by managing threads is left out and no other server-wide permission counts.`
   )
   assert.equal(
     now.channels.filter(

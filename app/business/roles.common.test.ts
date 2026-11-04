@@ -63,7 +63,7 @@ function serverWith(
   }
 }
 
-function holding(...held: ObservedRole[]): Viewer {
+function holding(...held: ObservedRole[]) {
   return {
     discordUserId: ownerId,
     heldDiscordRoleIds: held.map(({ discordRoleId }) => discordRoleId),
@@ -71,7 +71,7 @@ function holding(...held: ObservedRole[]): Viewer {
   }
 }
 
-function timedOut(viewer: Viewer): Viewer {
+function timedOut(viewer: Viewer) {
   return { ...viewer, timedOutUntil: timeoutEnd }
 }
 
