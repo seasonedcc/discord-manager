@@ -526,4 +526,82 @@ describe('readIngestionStatus', () => {
       ...backfillStatusCopy.never,
     })
   })
+
+  it('judges a channel by the backfill run started last when two start at the same instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const sameInstant = new Date().toISOString()
+    const startedFirst = await startBackfillRun(channel.id, sameInstant)
+    const startedLast = await startBackfillRun(channel.id, sameInstant)
+
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        id: newId(),
+        backfillRunId: startedFirst.id,
+        errorMessage: 'Missing Access',
+      })
+      .execute()
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: startedLast.id,
+        fetchedMessageCount: 0,
+        storedMessageCount: 0,
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'completed',
+      channels: { completed: 1, failed: 0 },
+    })
+  })
+
+  it('names a channel by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+    const run = await startBackfillRun(channel.id)
+
+    await db()
+      .insertInto('channelDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed first',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed last',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        id: newId(),
+        backfillRunId: run.id,
+        errorMessage: 'Missing Access',
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill.failedChannelNames).toEqual(['renamed last'])
+  })
 })
