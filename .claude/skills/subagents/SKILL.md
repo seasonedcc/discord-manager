@@ -80,6 +80,12 @@ Measured in this repo (issue #77, 2026-08, opus/xhigh build and remediation lane
 - **Remediation lane on an existing branch**: 3 review fixes (a test-double lever plus E2E spec, a seed-journey/spec pair, a type-alias inline) with mutation proofs, a PR-body correction, and a live-proof redo landed at **18%** — on the fixes-not-branch-size curve with the proof redo priced as roughly two extra fixes.
 - **Review fan-out** (3 sonnet finders + 1 verifier per finding over a ~1k-line diff, charter carrying a 10-item accepted-decisions list): finders **16–24%**, verifiers **4–8%**. A decision-rich charter pushes finders above the historical 9–20% band — every finder reads and probes the accepted-decisions list rather than skipping it, and that work is part of the fan-out's price.
 
+Measured in this repo (issues #96/#97, 2026-11, opus/xhigh build and remediation lanes, sonnet/xhigh reviewers):
+
+- **Performance-rewrite build lane, one agent** — converting a module's readers from whole-table rankings to correlated lookups, with a widening migration, a plan-guard test file, tie-break tests, a before/after benchmark with identity hashes on a copy of a real store, a mutation table, a live stdio proof, and draft-PR authorship — two in parallel landed at **29%** and **30%**. Benchmarks on a real-store copy and mutation tables are heavy; budget such a lane as a full feature.
+- **Remediation lane on an existing branch** whose fixes include redesigning a shared test guard, plus a full mutation table and a re-benchmark: four landed at **29%** each whether they carried 3 fixes or 7 — off the fixes-not-branch-size curve above, because the mutation table and benchmark reruns, not the fix count, set the cost. A polish lane (docs and PR-body truth, plus two tests with mutation proofs and a live-proof redo): **21%**.
+- **Review fan-out** (3 sonnet finders + 1 verifier per finding): finders **14–29%** — the plan-inspection lens is the most expensive, since it builds scratch stores and dumps query plans — verifiers **5–8%**. A single opus reviewer over a remediation delta: **16%**.
+
 ## Measure a live or finished agent's context
 
 Transcripts record per-turn token usage. Extract just the numbers — never read the JSONL wholesale (it overflows the reader's own window). The last turn's `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` is that agent's current context occupancy:
