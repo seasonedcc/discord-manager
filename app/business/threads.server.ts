@@ -1,5 +1,5 @@
 import { InputError, applySchema } from 'composable-functions'
-import type { Transaction } from 'kysely'
+import type { ExpressionBuilder, Transaction } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -63,48 +63,32 @@ async function recordObservedDeletion(trx: Transaction<DB>, messageId: string) {
     .execute()
 }
 
-function latestChannelDetails() {
-  const ranked = db()
+function latestChannelDetailsOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
     .selectFrom('channelDetailRevisions')
-    .select((eb) => [
-      'channelId',
-      'isThread',
-      'name',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('rankedDetails')
-
-  return db()
-    .selectFrom(ranked)
-    .select(['channelId', 'isThread', 'name'])
-    .where('rowNumber', '=', 1)
-    .as('channelDetails')
+    .select('channelDetailRevisions.id')
+    .whereRef('channelDetailRevisions.channelId', '=', 'channels.id')
+    .orderBy('channelDetailRevisions.createdAt', 'desc')
+    .orderBy('channelDetailRevisions.id', 'desc')
+    .limit(1)
 }
 
 async function findParentChannel(channelId: string) {
   return await db()
     .selectFrom('channels')
     .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .innerJoin(
-      latestChannelDetails(),
-      'channelDetails.channelId',
-      'channels.id'
+    .innerJoin('channelDetailRevisions as latestChannelDetails', (join) =>
+      join.on((eb) =>
+        eb('latestChannelDetails.id', '=', latestChannelDetailsOf(eb))
+      )
     )
     .where('channels.id', '=', channelId)
     .select((eb) => [
       'channels.id',
       'channels.discordChannelId',
       'channels.guildId',
-      'channelDetails.isThread',
-      'channelDetails.name',
+      'latestChannelDetails.isThread',
+      'latestChannelDetails.name',
       'guilds.discordGuildId',
       eb
         .exists(

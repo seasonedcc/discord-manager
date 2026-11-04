@@ -61,6 +61,11 @@ type BusyGuildAttributes = {
   messageCount?: number
 }
 
+type BusyChannelHistoryAttributes = {
+  channelIds: string[]
+  runsPerChannel?: number
+}
+
 type OwnerContextAttributes = {
   guildId?: string
   discordUserId?: string
@@ -621,6 +626,249 @@ async function createBusyBookmarks({
   return { reasonIds: reasons.map(({ id }) => id) }
 }
 
+async function createBusyChannelHistory({
+  channelIds,
+  runsPerChannel = 40,
+}: BusyChannelHistoryAttributes) {
+  const channels = await db()
+    .selectFrom('channels')
+    .select(['id', 'discordChannelId'])
+    .where('id', 'in', channelIds)
+    .execute()
+  const discordChannelIdOf = (channelId: string) => {
+    const channel = channels.find(({ id }) => id === channelId)
+
+    if (!channel) throw new Error(`No busy guild channel ${channelId}`)
+
+    return channel.discordChannelId
+  }
+  const eventAt = (channelIndex: number, step: number) =>
+    busyGuildInstant(channelIndex * 60 + step)
+
+  const backfillRuns = channelIds.flatMap((channelId, channelIndex) =>
+    Array.from({ length: runsPerChannel }, (_, runIndex) => ({
+      id: newId(),
+      channelId,
+      createdAt: busyGuildInstant(runIndex * 1440 + channelIndex),
+    }))
+  )
+  const backfillRunProgress = backfillRuns.flatMap((run) =>
+    [1, 2].map((page) => ({
+      id: newId(),
+      backfillRunId: run.id,
+      fetchedMessageCount: page * 100,
+      storedMessageCount: page * 90,
+      createdAt: run.createdAt,
+    }))
+  )
+  const newestRuns = backfillRuns.filter(
+    (_, index) => index % runsPerChannel === runsPerChannel - 1
+  )
+  const backfillRunCompletions = newestRuns
+    .filter((_, channelIndex) => channelIndex % 3 === 0)
+    .map((run) => ({
+      id: newId(),
+      backfillRunId: run.id,
+      fetchedMessageCount: 200,
+      storedMessageCount: 180,
+    }))
+  const backfillRunFailures = newestRuns
+    .filter((_, channelIndex) => channelIndex % 3 === 1)
+    .map((run) => ({
+      id: newId(),
+      backfillRunId: run.id,
+      errorMessage: 'Missing Access',
+    }))
+
+  const channelTopicChanges = channelIds.flatMap((channelId, channelIndex) =>
+    [0, ...(channelIndex % 2 === 0 ? [2] : [])].map((step) => ({
+      id: newId(),
+      channelId,
+      topic: `topic ${channelIndex}, take ${step}`,
+      createdAt: eventAt(channelIndex, step),
+    }))
+  )
+  const channelTopicClearings = channelIds.map((channelId, channelIndex) => ({
+    id: newId(),
+    channelId,
+    createdAt: eventAt(channelIndex, 1),
+  }))
+  const channelCategoryChanges = channelIds.flatMap((channelId, channelIndex) =>
+    [0, 1].map((step) => ({
+      id: newId(),
+      channelId,
+      category: `category ${channelIndex % 8}, take ${step}`,
+      createdAt: eventAt(channelIndex, step),
+    }))
+  )
+  const channelCategoryClearings = channelIds.flatMap(
+    (channelId, channelIndex) =>
+      channelIndex % 5 === 0
+        ? [{ id: newId(), channelId, createdAt: eventAt(channelIndex, 2) }]
+        : []
+  )
+  const channelPositionChanges = channelIds.flatMap((channelId, channelIndex) =>
+    [0, 1].map((step) => ({
+      id: newId(),
+      channelId,
+      position: channelIndex + step,
+      createdAt: eventAt(channelIndex, step),
+    }))
+  )
+  const channelPositionClearings = channelIds.flatMap(
+    (channelId, channelIndex) =>
+      channelIndex % 7 === 0
+        ? [{ id: newId(), channelId, createdAt: eventAt(channelIndex, 2) }]
+        : []
+  )
+
+  const threadIndexes = channelIds
+    .map((_, channelIndex) => channelIndex)
+    .filter((channelIndex) => channelIndex % 4 === 0)
+  const threadDetailRevisions = threadIndexes.map((channelIndex) => ({
+    id: newId(),
+    channelId: channelIds[channelIndex],
+    name: `thread-${channelIndex}`,
+    isThread: 1,
+    createdAt: eventAt(channelIndex, 30),
+  }))
+  const channelArchivings = threadIndexes.flatMap((channelIndex) =>
+    [31, ...(channelIndex % 8 === 0 ? [33] : [])].map((step) => ({
+      id: newId(),
+      channelId: channelIds[channelIndex],
+      createdAt: eventAt(channelIndex, step),
+    }))
+  )
+  const channelUnarchivings = threadIndexes.map((channelIndex) => ({
+    id: newId(),
+    channelId: channelIds[channelIndex],
+    createdAt: eventAt(channelIndex, 32),
+  }))
+
+  const messageSendRequests = channelIds.flatMap((channelId, channelIndex) =>
+    [0, 1, 2, 3, 4].map((step) => ({
+      id: newId(),
+      channelId,
+      content: `send ${channelIndex}, take ${step}`,
+      createdAt: eventAt(channelIndex, 40 + step),
+    }))
+  )
+  const sendsOf = (step: number) =>
+    messageSendRequests.filter((_, index) => index % 5 === step)
+  const messageSendDeliveries = [...sendsOf(0), ...sendsOf(4)].map(
+    (request) => ({
+      id: newId(),
+      messageSendRequestId: request.id,
+      discordMessageId: snowflake(),
+      createdAt: request.createdAt,
+    })
+  )
+  const messageSendFailures = [...sendsOf(1), ...sendsOf(3)].map((request) => ({
+    id: newId(),
+    messageSendRequestId: request.id,
+    kind: 'unreachable',
+    errorMessage: 'fetch failed',
+    createdAt: request.createdAt,
+  }))
+  const messageSendSkips = sendsOf(2).map((request) => ({
+    id: newId(),
+    messageSendRequestId: request.id,
+    reason: 'empty_content',
+    createdAt: request.createdAt,
+  }))
+  const messageSendRequestRetries = sendsOf(4).map((request, index) => ({
+    id: newId(),
+    requestId: request.id,
+    retriedRequestId: sendsOf(3)[index].id,
+    createdAt: request.createdAt,
+  }))
+
+  await db()
+    .transaction()
+    .execute(async (trx) => {
+      for (const batch of inBatches(backfillRuns)) {
+        await trx.insertInto('backfillRuns').values(batch).execute()
+      }
+
+      for (const batch of inBatches(backfillRunProgress)) {
+        await trx.insertInto('backfillRunProgress').values(batch).execute()
+      }
+
+      await trx
+        .insertInto('backfillRunCompletions')
+        .values(backfillRunCompletions)
+        .execute()
+      await trx
+        .insertInto('backfillRunFailures')
+        .values(backfillRunFailures)
+        .execute()
+      await trx
+        .insertInto('channelTopicChanges')
+        .values(channelTopicChanges)
+        .execute()
+      await trx
+        .insertInto('channelTopicClearings')
+        .values(channelTopicClearings)
+        .execute()
+      await trx
+        .insertInto('channelCategoryChanges')
+        .values(channelCategoryChanges)
+        .execute()
+      await trx
+        .insertInto('channelCategoryClearings')
+        .values(channelCategoryClearings)
+        .execute()
+      await trx
+        .insertInto('channelPositionChanges')
+        .values(channelPositionChanges)
+        .execute()
+      await trx
+        .insertInto('channelPositionClearings')
+        .values(channelPositionClearings)
+        .execute()
+      await trx
+        .insertInto('channelDetailRevisions')
+        .values(threadDetailRevisions)
+        .execute()
+      await trx
+        .insertInto('channelArchivings')
+        .values(channelArchivings)
+        .execute()
+      await trx
+        .insertInto('channelUnarchivings')
+        .values(channelUnarchivings)
+        .execute()
+      await trx
+        .insertInto('messageSendRequests')
+        .values(messageSendRequests)
+        .execute()
+      await trx
+        .insertInto('messageSendDeliveries')
+        .values(messageSendDeliveries)
+        .execute()
+      await trx
+        .insertInto('messageSendFailures')
+        .values(messageSendFailures)
+        .execute()
+      await trx
+        .insertInto('messageSendSkips')
+        .values(messageSendSkips)
+        .execute()
+      await trx
+        .insertInto('messageSendRequestRetries')
+        .values(messageSendRequestRetries)
+        .execute()
+    })
+
+  return {
+    activeThreadDiscordChannelIds: threadIndexes
+      .filter((channelIndex) => channelIndex % 8 !== 0)
+      .map((channelIndex) => discordChannelIdOf(channelIds[channelIndex])),
+    archivedThreadDiscordChannelId: discordChannelIdOf(channelIds[0]),
+    retriedRequestId: sendsOf(3)[0].id,
+  }
+}
+
 async function ownerContext({
   guildId,
   discordUserId = snowflake(),
@@ -643,6 +891,7 @@ export {
   configuredGuild,
   createBookmarkedMessage,
   createBusyBookmarks,
+  createBusyChannelHistory,
   createBusyGuild,
   createChannel,
   createGatewayIdentification,

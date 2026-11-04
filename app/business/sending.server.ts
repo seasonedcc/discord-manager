@@ -1,6 +1,5 @@
 import { InputError, applySchema } from 'composable-functions'
-import type { Kysely } from 'kysely'
-import { sql } from 'kysely'
+import { type ExpressionBuilder, type Kysely, sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import {
@@ -21,6 +20,8 @@ import {
 import { db } from '~/db/db.server'
 import type { DB } from '~/db/types'
 import { newId } from '~/framework/db.server'
+
+const messageSendSilentSince = sql<string>`strftime('%Y-%m-%dT%H:%M:%fZ','now', ${`-${messageSendStallThresholdMinutes} minutes`})`
 
 const sendingContextSchema = ownerContextSchema.extend({
   canSendMessages: z.literal(true),
@@ -58,149 +59,110 @@ function skipReasonFor({
   return null
 }
 
-function messageSendStandings() {
-  const outcomeEvents = db()
-    .selectFrom('messageSendDeliveries')
-    .select([
-      'id',
-      'messageSendRequestId',
-      'createdAt',
-      sql<MessageSendStatus>`'delivered'`.as('outcome'),
-    ])
-    .unionAll(
-      db()
-        .selectFrom('messageSendFailures')
-        .select([
-          'id',
-          'messageSendRequestId',
-          'createdAt',
-          sql<MessageSendStatus>`'failed'`.as('outcome'),
-        ])
-    )
-    .unionAll(
-      db()
-        .selectFrom('messageSendSkips')
-        .select([
-          'id',
-          'messageSendRequestId',
-          'createdAt',
-          sql<MessageSendStatus>`'skipped'`.as('outcome'),
-        ])
-    )
-
-  const latestOutcomes = db()
+function latestOutcomeOf(eb: ExpressionBuilder<DB, 'messageSendRequests'>) {
+  return eb
     .selectFrom(
-      db()
-        .selectFrom(outcomeEvents.as('outcomeEvents'))
-        .select((eb) => [
-          'messageSendRequestId',
-          'outcome',
-          eb.fn
-            .agg<number>('row_number')
-            .over((over) =>
-              over
-                .partitionBy('messageSendRequestId')
-                .orderBy('createdAt', 'desc')
-                .orderBy('id', 'desc')
-            )
-            .as('rowNumber'),
-        ])
-        .as('rankedOutcomes')
-    )
-    .select(['messageSendRequestId', 'outcome'])
-    .where('rowNumber', '=', 1)
-    .as('latestOutcomes')
-
-  const latestDeliveries = db()
-    .selectFrom(
-      db()
+      eb
         .selectFrom('messageSendDeliveries')
-        .select((eb) => [
-          'messageSendRequestId',
-          'discordMessageId',
-          eb.fn
-            .agg<number>('row_number')
-            .over((over) =>
-              over
-                .partitionBy('messageSendRequestId')
-                .orderBy('createdAt', 'desc')
-                .orderBy('id', 'desc')
-            )
-            .as('rowNumber'),
+        .select([
+          sql<MessageSendStatus>`'delivered'`.as('outcome'),
+          'messageSendDeliveries.createdAt',
+          'messageSendDeliveries.id',
         ])
-        .as('rankedDeliveries')
-    )
-    .select(['messageSendRequestId', 'discordMessageId'])
-    .where('rowNumber', '=', 1)
-    .as('latestDeliveries')
-
-  const latestFailures = db()
-    .selectFrom(
-      db()
-        .selectFrom('messageSendFailures')
-        .select((eb) => [
-          'messageSendRequestId',
-          'kind',
-          eb.fn
-            .agg<number>('row_number')
-            .over((over) =>
-              over
-                .partitionBy('messageSendRequestId')
-                .orderBy('createdAt', 'desc')
-                .orderBy('id', 'desc')
+        .whereRef(
+          'messageSendDeliveries.messageSendRequestId',
+          '=',
+          'messageSendRequests.id'
+        )
+        .unionAll(
+          eb
+            .selectFrom('messageSendFailures')
+            .select([
+              sql<MessageSendStatus>`'failed'`.as('outcome'),
+              'messageSendFailures.createdAt',
+              'messageSendFailures.id',
+            ])
+            .whereRef(
+              'messageSendFailures.messageSendRequestId',
+              '=',
+              'messageSendRequests.id'
             )
-            .as('rowNumber'),
-        ])
-        .as('rankedFailures')
-    )
-    .select(['messageSendRequestId', 'kind'])
-    .where('rowNumber', '=', 1)
-    .as('latestFailures')
-
-  const latestSkips = db()
-    .selectFrom(
-      db()
-        .selectFrom('messageSendSkips')
-        .select((eb) => [
-          'messageSendRequestId',
-          'reason',
-          eb.fn
-            .agg<number>('row_number')
-            .over((over) =>
-              over
-                .partitionBy('messageSendRequestId')
-                .orderBy('createdAt', 'desc')
-                .orderBy('id', 'desc')
+        )
+        .unionAll(
+          eb
+            .selectFrom('messageSendSkips')
+            .select([
+              sql<MessageSendStatus>`'skipped'`.as('outcome'),
+              'messageSendSkips.createdAt',
+              'messageSendSkips.id',
+            ])
+            .whereRef(
+              'messageSendSkips.messageSendRequestId',
+              '=',
+              'messageSendRequests.id'
             )
-            .as('rowNumber'),
-        ])
-        .as('rankedSkips')
+        )
+        .orderBy('createdAt', 'desc')
+        .orderBy('id', 'desc')
+        .limit(1)
+        .as('latestOutcomes')
     )
-    .select(['messageSendRequestId', 'reason'])
-    .where('rowNumber', '=', 1)
-    .as('latestSkips')
+    .select('latestOutcomes.outcome')
+}
 
+function latestDeliveryOf(eb: ExpressionBuilder<DB, 'messageSendRequests'>) {
+  return eb
+    .selectFrom('messageSendDeliveries')
+    .select('messageSendDeliveries.id')
+    .whereRef(
+      'messageSendDeliveries.messageSendRequestId',
+      '=',
+      'messageSendRequests.id'
+    )
+    .orderBy('messageSendDeliveries.createdAt', 'desc')
+    .orderBy('messageSendDeliveries.id', 'desc')
+    .limit(1)
+}
+
+function latestFailureOf(eb: ExpressionBuilder<DB, 'messageSendRequests'>) {
+  return eb
+    .selectFrom('messageSendFailures')
+    .select('messageSendFailures.id')
+    .whereRef(
+      'messageSendFailures.messageSendRequestId',
+      '=',
+      'messageSendRequests.id'
+    )
+    .orderBy('messageSendFailures.createdAt', 'desc')
+    .orderBy('messageSendFailures.id', 'desc')
+    .limit(1)
+}
+
+function latestSkipOf(eb: ExpressionBuilder<DB, 'messageSendRequests'>) {
+  return eb
+    .selectFrom('messageSendSkips')
+    .select('messageSendSkips.id')
+    .whereRef(
+      'messageSendSkips.messageSendRequestId',
+      '=',
+      'messageSendRequests.id'
+    )
+    .orderBy('messageSendSkips.createdAt', 'desc')
+    .orderBy('messageSendSkips.id', 'desc')
+    .limit(1)
+}
+
+function messageSendStandings() {
   return db()
     .selectFrom('messageSendRequests')
-    .leftJoin(
-      latestOutcomes,
-      'latestOutcomes.messageSendRequestId',
-      'messageSendRequests.id'
+    .leftJoin('messageSendDeliveries as latestDeliveries', (join) =>
+      join.on((eb) => eb('latestDeliveries.id', '=', latestDeliveryOf(eb)))
     )
-    .leftJoin(
-      latestDeliveries,
-      'latestDeliveries.messageSendRequestId',
-      'messageSendRequests.id'
+    .leftJoin('messageSendFailures as latestFailures', (join) =>
+      join.on((eb) => eb('latestFailures.id', '=', latestFailureOf(eb)))
     )
-    .leftJoin(
-      latestFailures,
-      'latestFailures.messageSendRequestId',
-      'messageSendRequests.id'
-    )
-    .leftJoin(
-      latestSkips,
-      'latestSkips.messageSendRequestId',
-      'messageSendRequests.id'
+    .leftJoin('messageSendSkips as latestSkips', (join) =>
+      join.on((eb) => eb('latestSkips.id', '=', latestSkipOf(eb)))
     )
     .select((eb) => [
       'messageSendRequests.id as requestId',
@@ -215,14 +177,18 @@ function messageSendStandings() {
         .ref('latestSkips.reason')
         .$castTo<MessageSendSkipReason | null>()
         .as('reason'),
-      sql<MessageSendStatus>`coalesce(
-        latest_outcomes.outcome,
-        case
-          when message_send_requests.created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now', ${`-${messageSendStallThresholdMinutes} minutes`})
-          then 'stalled'
-          else 'pending'
-        end
-      )`.as('status'),
+      eb.fn
+        .coalesce(
+          latestOutcomeOf(eb),
+          eb
+            .case()
+            .when('messageSendRequests.createdAt', '<', messageSendSilentSince)
+            .then('stalled')
+            .else('pending')
+            .end()
+            .$castTo<MessageSendStatus>()
+        )
+        .as('status'),
     ])
     .as('standings')
 }

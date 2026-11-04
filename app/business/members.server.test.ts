@@ -151,6 +151,49 @@ describe('listMembers', () => {
     ])
   })
 
+  it('answers with the name recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const priya = await somebodyWhoPosted(channel.id, {
+      displayName: 'Priya Raman',
+      username: 'priya',
+    })
+    const sameInstant = '2099-01-01T00:00:00.000Z'
+
+    await db()
+      .insertInto('memberDetailRevisions')
+      .values([
+        {
+          createdAt: sameInstant,
+          displayName: 'Renamed first',
+          id: newId(),
+          memberId: priya.id,
+          username: 'priya.first',
+        },
+        {
+          createdAt: sameInstant,
+          displayName: 'Renamed last',
+          id: newId(),
+          memberId: priya.id,
+          username: 'priya.last',
+        },
+      ])
+      .execute()
+
+    const { members } = await fromSuccess(listMembers)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members).toEqual([
+      {
+        discordUserId: priya.discordUserId,
+        displayName: 'Renamed last',
+        username: 'priya.last',
+      },
+    ])
+  })
+
   it('matches part of a display name whatever its case, accents included', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
@@ -356,6 +399,83 @@ describe('listMembers', () => {
         discordUserId: uptime.discordUserId,
         displayName: 'Uptime Watch',
         username: 'uptime-watch',
+      },
+    ])
+  })
+
+  it('marks the bot identified last when two identifications share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const bot = await somebodyWhoPosted(channel.id, {
+      displayName: 'Robin Manager',
+      username: 'robin-manager',
+    })
+    const uptime = await somebodyWhoPosted(channel.id, {
+      displayName: 'Uptime Watch',
+      username: 'uptime-watch',
+    })
+
+    await createGatewayIdentification({
+      botDiscordUserId: uptime.discordUserId,
+      guildId: guild.id,
+      identifiedAt: '2099-02-01T00:00:00.000Z',
+    })
+    await createGatewayIdentification({
+      botDiscordUserId: bot.discordUserId,
+      guildId: guild.id,
+      identifiedAt: '2099-02-01T00:00:00.000Z',
+    })
+
+    const { members } = await fromSuccess(listMembers)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members.filter(({ isYourBot }) => isYourBot)).toEqual([
+      {
+        discordUserId: bot.discordUserId,
+        displayName: 'Robin Manager',
+        isYourBot: true,
+        username: 'robin-manager',
+      },
+    ])
+  })
+
+  it('ignores a bot identity another server recorded later', async () => {
+    const guild = await createGuild()
+    const otherGuild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const bot = await somebodyWhoPosted(channel.id, {
+      displayName: 'Robin Manager',
+      username: 'robin-manager',
+    })
+    const theirBot = await somebodyWhoPosted(channel.id, {
+      displayName: 'Their Manager',
+      username: 'their-manager',
+    })
+
+    await createGatewayIdentification({
+      botDiscordUserId: bot.discordUserId,
+      guildId: guild.id,
+      identifiedAt: '2099-03-01T00:00:00.000Z',
+    })
+    await createGatewayIdentification({
+      botDiscordUserId: theirBot.discordUserId,
+      guildId: otherGuild.id,
+      identifiedAt: '2099-03-01T01:00:00.000Z',
+    })
+
+    const { members } = await fromSuccess(listMembers)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(members.filter(({ isYourBot }) => isYourBot)).toEqual([
+      {
+        discordUserId: bot.discordUserId,
+        displayName: 'Robin Manager',
+        isYourBot: true,
+        username: 'robin-manager',
       },
     ])
   })

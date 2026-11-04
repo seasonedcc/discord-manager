@@ -289,6 +289,46 @@ describe('readIngestionStatus', () => {
     })
   })
 
+  it('judges a stall by the newest progress row, not the first one the run recorded', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const run = await startBackfillRun(
+      channel.id,
+      minutesAgo(backfillStallThresholdMinutes * 4)
+    )
+
+    await db()
+      .insertInto('backfillRunProgress')
+      .values([
+        {
+          id: newId(),
+          backfillRunId: run.id,
+          fetchedMessageCount: 300,
+          storedMessageCount: 300,
+          createdAt: minutesAgo(backfillStallThresholdMinutes * 3),
+        },
+        {
+          id: newId(),
+          backfillRunId: run.id,
+          fetchedMessageCount: 700,
+          storedMessageCount: 700,
+          createdAt: new Date().toISOString(),
+        },
+      ])
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'running',
+      channels: { completed: 0, failed: 0, running: 1, stalled: 0 },
+      ...backfillStatusCopy.running,
+    })
+  })
+
   it('speaks for the worst channel when one backfill failed', async () => {
     const guild = await createGuild()
     const failing = await createChannel({ guildId: guild.id })
@@ -525,5 +565,83 @@ describe('readIngestionStatus', () => {
       lastRunStartedAt: null,
       ...backfillStatusCopy.never,
     })
+  })
+
+  it('judges a channel by the backfill run started last when two start at the same instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const sameInstant = new Date().toISOString()
+    const startedFirst = await startBackfillRun(channel.id, sameInstant)
+    const startedLast = await startBackfillRun(channel.id, sameInstant)
+
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        id: newId(),
+        backfillRunId: startedFirst.id,
+        errorMessage: 'Missing Access',
+      })
+      .execute()
+    await db()
+      .insertInto('backfillRunCompletions')
+      .values({
+        id: newId(),
+        backfillRunId: startedLast.id,
+        fetchedMessageCount: 0,
+        storedMessageCount: 0,
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill).toMatchObject({
+      status: 'completed',
+      channels: { completed: 1, failed: 0 },
+    })
+  })
+
+  it('names a channel by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+    const run = await startBackfillRun(channel.id)
+
+    await db()
+      .insertInto('channelDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed first',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed last',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await db()
+      .insertInto('backfillRunFailures')
+      .values({
+        id: newId(),
+        backfillRunId: run.id,
+        errorMessage: 'Missing Access',
+      })
+      .execute()
+
+    const { ingestion } = await fromSuccess(readIngestionStatus)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(ingestion.backfill.failedChannelNames).toEqual(['renamed last'])
   })
 })

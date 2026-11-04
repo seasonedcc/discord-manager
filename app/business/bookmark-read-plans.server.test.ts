@@ -12,6 +12,7 @@ import { expectEveryPlan } from '~/test/query-plans'
 
 const latestStateTables = [
   'message_revisions',
+  'message_deletions',
   'channel_detail_revisions',
   'member_detail_revisions',
   'bookmark_additions',
@@ -19,6 +20,7 @@ const latestStateTables = [
   'bookmark_snoozes',
   'bookmark_reason_assignments',
   'bookmark_reason_detail_revisions',
+  'bookmark_reason_retirements',
 ]
 
 const latestBookmarkEventSteps = [

@@ -1,5 +1,5 @@
 import { InputError, applySchema, fromSuccess } from 'composable-functions'
-import type { Transaction } from 'kysely'
+import type { ExpressionBuilder, Transaction } from 'kysely'
 import { sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContext, ownerContextSchema } from '~/business/auth.server'
@@ -154,7 +154,7 @@ async function findOrCreateGuild(trx: Transaction<DB>, discordGuildId: string) {
 }
 
 async function currentChannelTopic(trx: Transaction<DB>, channelId: string) {
-  const events = trx
+  const newest = await trx
     .selectFrom('channelTopicChanges')
     .select((eb) => [
       'createdAt',
@@ -168,10 +168,6 @@ async function currentChannelTopic(trx: Transaction<DB>, channelId: string) {
         .select(['createdAt', 'id', sql<string | null>`null`.as('topic')])
         .where('channelId', '=', channelId)
     )
-
-  const newest = await trx
-    .selectFrom(events.as('topicEvents'))
-    .select('topic')
     .orderBy('createdAt', 'desc')
     .orderBy('id', 'desc')
     .limit(1)
@@ -181,7 +177,7 @@ async function currentChannelTopic(trx: Transaction<DB>, channelId: string) {
 }
 
 async function currentChannelCategory(trx: Transaction<DB>, channelId: string) {
-  const events = trx
+  const newest = await trx
     .selectFrom('channelCategoryChanges')
     .select((eb) => [
       'createdAt',
@@ -195,10 +191,6 @@ async function currentChannelCategory(trx: Transaction<DB>, channelId: string) {
         .select(['createdAt', 'id', sql<string | null>`null`.as('category')])
         .where('channelId', '=', channelId)
     )
-
-  const newest = await trx
-    .selectFrom(events.as('categoryEvents'))
-    .select('category')
     .orderBy('createdAt', 'desc')
     .orderBy('id', 'desc')
     .limit(1)
@@ -208,7 +200,7 @@ async function currentChannelCategory(trx: Transaction<DB>, channelId: string) {
 }
 
 async function currentChannelPosition(trx: Transaction<DB>, channelId: string) {
-  const events = trx
+  const newest = await trx
     .selectFrom('channelPositionChanges')
     .select((eb) => [
       'createdAt',
@@ -222,10 +214,6 @@ async function currentChannelPosition(trx: Transaction<DB>, channelId: string) {
         .select(['createdAt', 'id', sql<number | null>`null`.as('position')])
         .where('channelId', '=', channelId)
     )
-
-  const newest = await trx
-    .selectFrom(events.as('positionEvents'))
-    .select('position')
     .orderBy('createdAt', 'desc')
     .orderBy('id', 'desc')
     .limit(1)
@@ -561,71 +549,59 @@ function findIngestedChannel(discordChannelId: string, discordGuildId: string) {
     .executeTakeFirst()
 }
 
-function latestChannelArchivedStates() {
-  const events = db()
-    .selectFrom('channelArchivings')
-    .select(['channelId', 'createdAt', 'id', sql<number>`1`.as('archived')])
-    .unionAll(
-      db()
-        .selectFrom('channelUnarchivings')
-        .select(['channelId', 'createdAt', 'id', sql<number>`0`.as('archived')])
-    )
-
-  const ranked = db()
-    .selectFrom(events.as('archivedEvents'))
-    .select((eb) => [
-      'channelId',
-      'archived',
-      'createdAt',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
+function latestArchivedStateOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
+    .selectFrom(
+      eb
+        .selectFrom('channelArchivings')
+        .select([
+          sql<number>`1`.as('archived'),
+          'channelArchivings.createdAt',
+          'channelArchivings.id',
+        ])
+        .whereRef('channelArchivings.channelId', '=', 'channels.id')
+        .unionAll(
+          eb
+            .selectFrom('channelUnarchivings')
+            .select([
+              sql<number>`0`.as('archived'),
+              'channelUnarchivings.createdAt',
+              'channelUnarchivings.id',
+            ])
+            .whereRef('channelUnarchivings.channelId', '=', 'channels.id')
         )
-        .as('rowNumber'),
-    ])
-    .as('rankedArchivedStates')
-
-  return db()
-    .selectFrom(ranked)
-    .select(['channelId', 'archived', 'createdAt'])
-    .where('rowNumber', '=', 1)
-    .as('channelArchivedStates')
+        .orderBy('createdAt', 'desc')
+        .orderBy('id', 'desc')
+        .limit(1)
+        .as('latestArchivedEvents')
+    )
+    .select('latestArchivedEvents.archived')
 }
 
-function latestChannelThreadFlags() {
-  const ranked = db()
-    .selectFrom('channelDetailRevisions')
-    .select((eb) => [
-      'channelId',
-      'isThread',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('rankedThreadFlags')
+function lastArchivedAtOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
+    .selectFrom('channelArchivings')
+    .select((archivings) =>
+      archivings.fn.max('channelArchivings.createdAt').as('lastArchivedAt')
+    )
+    .whereRef('channelArchivings.channelId', '=', 'channels.id')
+}
 
-  return db()
-    .selectFrom(ranked)
-    .select(['channelId', 'isThread'])
-    .where('rowNumber', '=', 1)
-    .as('channelThreadFlags')
+function latestChannelDetailsOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
+    .selectFrom('channelDetailRevisions')
+    .select('channelDetailRevisions.id')
+    .whereRef('channelDetailRevisions.channelId', '=', 'channels.id')
+    .orderBy('channelDetailRevisions.createdAt', 'desc')
+    .orderBy('channelDetailRevisions.id', 'desc')
+    .limit(1)
 }
 
 async function currentlyArchived(channelId: string) {
   const state = await db()
-    .selectFrom(latestChannelArchivedStates())
-    .select('archived')
-    .where('channelArchivedStates.channelId', '=', channelId)
+    .selectFrom('channels')
+    .select((eb) => latestArchivedStateOf(eb).as('archived'))
+    .where('channels.id', '=', channelId)
     .executeTakeFirst()
 
   return state?.archived === 1
@@ -857,23 +833,18 @@ const reconcileThreadArchivings = applySchema(
   const threads = await db()
     .selectFrom('channels')
     .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .innerJoin(
-      latestChannelThreadFlags(),
-      'channelThreadFlags.channelId',
-      'channels.id'
+    .innerJoin('channelDetailRevisions as latestChannelDetails', (join) =>
+      join.on((eb) =>
+        eb('latestChannelDetails.id', '=', latestChannelDetailsOf(eb))
+      )
     )
-    .leftJoin(
-      latestChannelArchivedStates(),
-      'channelArchivedStates.channelId',
-      'channels.id'
-    )
-    .select([
+    .select((eb) => [
       'channels.id',
       'channels.discordChannelId',
-      'channelArchivedStates.archived',
+      latestArchivedStateOf(eb).as('archived'),
     ])
     .where('guilds.discordGuildId', '=', context.owner.guildId)
-    .where('channelThreadFlags.isThread', '=', 1)
+    .where('latestChannelDetails.isThread', '=', 1)
     .where(({ exists, not, selectFrom }) =>
       not(
         exists(
@@ -1417,11 +1388,6 @@ const listBackfillableChannels = applySchema(
   return await db()
     .selectFrom('channels')
     .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .leftJoin(
-      latestChannelArchivedStates(),
-      'channelArchivedStates.channelId',
-      'channels.id'
-    )
     .select('channels.id')
     .where('guilds.discordGuildId', '=', context.owner.guildId)
     .where(({ exists, not, selectFrom }) =>
@@ -1435,19 +1401,14 @@ const listBackfillableChannels = applySchema(
     )
     .where((eb) =>
       eb.or([
-        eb('channelArchivedStates.archived', 'is', null),
-        eb('channelArchivedStates.archived', '=', 0),
+        eb(latestArchivedStateOf(eb), 'is not', 1),
         eb.not(
           eb.exists(
             eb
               .selectFrom('backfillRuns')
               .select('backfillRuns.id')
               .whereRef('backfillRuns.channelId', '=', 'channels.id')
-              .whereRef(
-                'backfillRuns.createdAt',
-                '>',
-                'channelArchivedStates.createdAt'
-              )
+              .where('backfillRuns.createdAt', '>', lastArchivedAtOf(eb))
           )
         ),
       ])

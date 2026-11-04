@@ -1,45 +1,34 @@
 import { applySchema } from 'composable-functions'
+import type { ExpressionBuilder } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import { listMembersSchema } from '~/business/members.common'
 import { db } from '~/db/db.server'
+import type { DB } from '~/db/types'
 
 const membersContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
 })
 
-function latestMemberDetails() {
-  const ranked = db()
+function latestMemberDetailsOf(eb: ExpressionBuilder<DB, 'members'>) {
+  return eb
     .selectFrom('memberDetailRevisions')
-    .select((eb) => [
-      'memberId',
-      'displayName',
-      'username',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('memberId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('rankedDetails')
-
-  return db()
-    .selectFrom(ranked)
-    .select(['memberId', 'displayName', 'username'])
-    .where('rowNumber', '=', 1)
-    .as('memberDetails')
+    .select('memberDetailRevisions.id')
+    .whereRef('memberDetailRevisions.memberId', '=', 'members.id')
+    .orderBy('memberDetailRevisions.createdAt', 'desc')
+    .orderBy('memberDetailRevisions.id', 'desc')
+    .limit(1)
 }
 
 function latestBotIdentityOf(guildId: string) {
   return db()
     .selectFrom('gatewayIdentifications')
-    .innerJoin('guilds', 'guilds.id', 'gatewayIdentifications.guildId')
     .select('gatewayIdentifications.botDiscordUserId')
-    .where('guilds.discordGuildId', '=', guildId)
+    .where('gatewayIdentifications.guildId', '=', ({ selectFrom }) =>
+      selectFrom('guilds')
+        .select('guilds.id')
+        .where('guilds.discordGuildId', '=', guildId)
+    )
     .orderBy('gatewayIdentifications.createdAt', 'desc')
     .orderBy('gatewayIdentifications.id', 'desc')
     .limit(1)
@@ -61,7 +50,11 @@ const listMembers = applySchema(
 )(async ({ query }, context) => {
   const roster = await db()
     .selectFrom('members')
-    .innerJoin(latestMemberDetails(), 'memberDetails.memberId', 'members.id')
+    .innerJoin('memberDetailRevisions as latestMemberDetails', (join) =>
+      join.on((eb) =>
+        eb('latestMemberDetails.id', '=', latestMemberDetailsOf(eb))
+      )
+    )
     .where(({ exists, selectFrom }) =>
       exists(
         selectFrom('messages')
@@ -74,8 +67,8 @@ const listMembers = applySchema(
     )
     .select((eb) => [
       'members.discordUserId',
-      'memberDetails.displayName',
-      'memberDetails.username',
+      'latestMemberDetails.displayName',
+      'latestMemberDetails.username',
       eb(
         'members.discordUserId',
         '=',

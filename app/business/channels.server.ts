@@ -1,204 +1,148 @@
 import { applySchema } from 'composable-functions'
-import { sql } from 'kysely'
+import { type ExpressionBuilder, sql } from 'kysely'
 import { z } from 'zod'
 import { ownerContextSchema } from '~/business/auth.server'
 import { listChannelsSchema } from '~/business/channels.common'
 import { db } from '~/db/db.server'
+import type { DB } from '~/db/types'
 
 const channelsContextSchema = ownerContextSchema.extend({
   canReadMessages: z.literal(true),
 })
 
-function latestChannelDetails() {
-  const ranked = db()
+function latestChannelDetailsOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
     .selectFrom('channelDetailRevisions')
-    .select((eb) => [
-      'channelId',
-      'name',
-      'isThread',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
-        )
-        .as('rowNumber'),
-    ])
-    .as('rankedDetails')
-
-  return db()
-    .selectFrom(ranked)
-    .select(['channelId', 'name', 'isThread'])
-    .where('rowNumber', '=', 1)
-    .as('channelDetails')
+    .select('channelDetailRevisions.id')
+    .whereRef('channelDetailRevisions.channelId', '=', 'channels.id')
+    .orderBy('channelDetailRevisions.createdAt', 'desc')
+    .orderBy('channelDetailRevisions.id', 'desc')
+    .limit(1)
 }
 
-function latestChannelTopics() {
-  const events = db()
-    .selectFrom('channelTopicChanges')
-    .select((eb) => [
-      'channelId',
-      'createdAt',
-      'id',
-      eb.ref('topic').$castTo<string | null>().as('topic'),
-    ])
-    .unionAll(
-      db()
-        .selectFrom('channelTopicClearings')
-        .select([
-          'channelId',
-          'createdAt',
-          'id',
-          sql<string | null>`null`.as('topic'),
+function latestTopicOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
+    .selectFrom(
+      eb
+        .selectFrom('channelTopicChanges')
+        .select((change) => [
+          change
+            .ref('channelTopicChanges.topic')
+            .$castTo<string | null>()
+            .as('topic'),
+          'channelTopicChanges.createdAt',
+          'channelTopicChanges.id',
         ])
-    )
-
-  const ranked = db()
-    .selectFrom(events.as('topicEvents'))
-    .select((eb) => [
-      'channelId',
-      'topic',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
+        .whereRef('channelTopicChanges.channelId', '=', 'channels.id')
+        .unionAll(
+          eb
+            .selectFrom('channelTopicClearings')
+            .select([
+              sql<string | null>`null`.as('topic'),
+              'channelTopicClearings.createdAt',
+              'channelTopicClearings.id',
+            ])
+            .whereRef('channelTopicClearings.channelId', '=', 'channels.id')
         )
-        .as('rowNumber'),
-    ])
-    .as('rankedTopics')
-
-  return db()
-    .selectFrom(ranked)
-    .select(['channelId', 'topic'])
-    .where('rowNumber', '=', 1)
-    .as('channelTopics')
+        .orderBy('createdAt', 'desc')
+        .orderBy('id', 'desc')
+        .limit(1)
+        .as('latestTopicEvents')
+    )
+    .select('latestTopicEvents.topic')
 }
 
-function latestChannelCategories() {
-  const events = db()
-    .selectFrom('channelCategoryChanges')
-    .select((eb) => [
-      'channelId',
-      'createdAt',
-      'id',
-      eb.ref('category').$castTo<string | null>().as('category'),
-    ])
-    .unionAll(
-      db()
-        .selectFrom('channelCategoryClearings')
-        .select([
-          'channelId',
-          'createdAt',
-          'id',
-          sql<string | null>`null`.as('category'),
+function latestCategoryOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
+    .selectFrom(
+      eb
+        .selectFrom('channelCategoryChanges')
+        .select((change) => [
+          change
+            .ref('channelCategoryChanges.category')
+            .$castTo<string | null>()
+            .as('category'),
+          'channelCategoryChanges.createdAt',
+          'channelCategoryChanges.id',
         ])
-    )
-
-  const ranked = db()
-    .selectFrom(events.as('categoryEvents'))
-    .select((eb) => [
-      'channelId',
-      'category',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
+        .whereRef('channelCategoryChanges.channelId', '=', 'channels.id')
+        .unionAll(
+          eb
+            .selectFrom('channelCategoryClearings')
+            .select([
+              sql<string | null>`null`.as('category'),
+              'channelCategoryClearings.createdAt',
+              'channelCategoryClearings.id',
+            ])
+            .whereRef('channelCategoryClearings.channelId', '=', 'channels.id')
         )
-        .as('rowNumber'),
-    ])
-    .as('rankedCategories')
-
-  return db()
-    .selectFrom(ranked)
-    .select(['channelId', 'category'])
-    .where('rowNumber', '=', 1)
-    .as('channelCategories')
+        .orderBy('createdAt', 'desc')
+        .orderBy('id', 'desc')
+        .limit(1)
+        .as('latestCategoryEvents')
+    )
+    .select('latestCategoryEvents.category')
 }
 
-function latestChannelPositions() {
-  const events = db()
-    .selectFrom('channelPositionChanges')
-    .select((eb) => [
-      'channelId',
-      'createdAt',
-      'id',
-      eb.ref('position').$castTo<number | null>().as('position'),
-    ])
-    .unionAll(
-      db()
-        .selectFrom('channelPositionClearings')
-        .select([
-          'channelId',
-          'createdAt',
-          'id',
-          sql<number | null>`null`.as('position'),
+function latestPositionOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
+    .selectFrom(
+      eb
+        .selectFrom('channelPositionChanges')
+        .select((change) => [
+          change
+            .ref('channelPositionChanges.position')
+            .$castTo<number | null>()
+            .as('position'),
+          'channelPositionChanges.createdAt',
+          'channelPositionChanges.id',
         ])
-    )
-
-  const ranked = db()
-    .selectFrom(events.as('positionEvents'))
-    .select((eb) => [
-      'channelId',
-      'position',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
+        .whereRef('channelPositionChanges.channelId', '=', 'channels.id')
+        .unionAll(
+          eb
+            .selectFrom('channelPositionClearings')
+            .select([
+              sql<number | null>`null`.as('position'),
+              'channelPositionClearings.createdAt',
+              'channelPositionClearings.id',
+            ])
+            .whereRef('channelPositionClearings.channelId', '=', 'channels.id')
         )
-        .as('rowNumber'),
-    ])
-    .as('rankedPositions')
-
-  return db()
-    .selectFrom(ranked)
-    .select(['channelId', 'position'])
-    .where('rowNumber', '=', 1)
-    .as('channelPositions')
+        .orderBy('createdAt', 'desc')
+        .orderBy('id', 'desc')
+        .limit(1)
+        .as('latestPositionEvents')
+    )
+    .select('latestPositionEvents.position')
 }
 
-function latestChannelArchivedStates() {
-  const events = db()
-    .selectFrom('channelArchivings')
-    .select(['channelId', 'createdAt', 'id', sql<number>`1`.as('archived')])
-    .unionAll(
-      db()
-        .selectFrom('channelUnarchivings')
-        .select(['channelId', 'createdAt', 'id', sql<number>`0`.as('archived')])
-    )
-
-  const ranked = db()
-    .selectFrom(events.as('archivedEvents'))
-    .select((eb) => [
-      'channelId',
-      'archived',
-      eb.fn
-        .agg<number>('row_number')
-        .over((over) =>
-          over
-            .partitionBy('channelId')
-            .orderBy('createdAt', 'desc')
-            .orderBy('id', 'desc')
+function latestArchivedStateOf(eb: ExpressionBuilder<DB, 'channels'>) {
+  return eb
+    .selectFrom(
+      eb
+        .selectFrom('channelArchivings')
+        .select([
+          sql<number>`1`.as('archived'),
+          'channelArchivings.createdAt',
+          'channelArchivings.id',
+        ])
+        .whereRef('channelArchivings.channelId', '=', 'channels.id')
+        .unionAll(
+          eb
+            .selectFrom('channelUnarchivings')
+            .select([
+              sql<number>`0`.as('archived'),
+              'channelUnarchivings.createdAt',
+              'channelUnarchivings.id',
+            ])
+            .whereRef('channelUnarchivings.channelId', '=', 'channels.id')
         )
-        .as('rowNumber'),
-    ])
-    .as('rankedArchivedStates')
-
-  return db()
-    .selectFrom(ranked)
-    .select(['channelId', 'archived'])
-    .where('rowNumber', '=', 1)
-    .as('channelArchivedStates')
+        .orderBy('createdAt', 'desc')
+        .orderBy('id', 'desc')
+        .limit(1)
+        .as('latestArchivedEvents')
+    )
+    .select('latestArchivedEvents.archived')
 }
 
 const listChannels = applySchema(
@@ -208,26 +152,10 @@ const listChannels = applySchema(
   const rows = await db()
     .selectFrom('channels')
     .innerJoin('guilds', 'guilds.id', 'channels.guildId')
-    .innerJoin(
-      latestChannelDetails(),
-      'channelDetails.channelId',
-      'channels.id'
-    )
-    .leftJoin(latestChannelTopics(), 'channelTopics.channelId', 'channels.id')
-    .leftJoin(
-      latestChannelCategories(),
-      'channelCategories.channelId',
-      'channels.id'
-    )
-    .leftJoin(
-      latestChannelPositions(),
-      'channelPositions.channelId',
-      'channels.id'
-    )
-    .leftJoin(
-      latestChannelArchivedStates(),
-      'channelArchivedStates.channelId',
-      'channels.id'
+    .innerJoin('channelDetailRevisions as latestChannelDetails', (join) =>
+      join.on((eb) =>
+        eb('latestChannelDetails.id', '=', latestChannelDetailsOf(eb))
+      )
     )
     .where('guilds.discordGuildId', '=', context.owner.guildId)
     .where(({ not, exists, selectFrom }) =>
@@ -242,20 +170,18 @@ const listChannels = applySchema(
     .select((eb) => [
       'channels.id as channelId',
       'channels.discordChannelId',
-      'channelDetails.name',
-      'channelDetails.isThread',
-      'channelTopics.topic',
-      'channelCategories.category',
-      'channelPositions.position',
-      eb.fn
-        .coalesce('channelArchivedStates.archived', sql<number>`0`)
-        .as('archived'),
+      'latestChannelDetails.name',
+      'latestChannelDetails.isThread',
+      latestTopicOf(eb).as('topic'),
+      latestCategoryOf(eb).as('category'),
+      latestPositionOf(eb).as('position'),
+      eb.fn.coalesce(latestArchivedStateOf(eb), sql<number>`0`).as('archived'),
     ])
-    .orderBy('channelDetails.isThread', 'asc')
+    .orderBy('latestChannelDetails.isThread', 'asc')
     .orderBy('archived', 'asc')
-    .orderBy('channelCategories.category', 'asc')
-    .orderBy('channelPositions.position', 'asc')
-    .orderBy('channelDetails.name', 'asc')
+    .orderBy('category', 'asc')
+    .orderBy('position', 'asc')
+    .orderBy('latestChannelDetails.name', 'asc')
     .orderBy('channels.discordChannelId', 'asc')
     .execute()
 
