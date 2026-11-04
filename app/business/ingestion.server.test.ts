@@ -9,7 +9,11 @@ import {
   snowflake,
 } from '~/test/fixtures'
 import { db, describe, expect, it, vi } from '~/test/prelude'
-import type { BackfilledMessage, FetchChannelHistory } from './ingestion.common'
+import {
+  type BackfilledMessage,
+  type FetchChannelHistory,
+  backfillPageSize,
+} from './ingestion.common'
 import {
   backfillChannel,
   backfillIngestedChannels,
@@ -93,6 +97,10 @@ function replyReferencesOf(discordMessageId: string) {
     ])
     .where('messages.discordMessageId', '=', discordMessageId)
     .execute()
+}
+
+function fullPage() {
+  return Array.from({ length: backfillPageSize }, () => backfilledMessage())
 }
 
 function fakeChannelHistory(pages: BackfilledMessage[][]) {
@@ -2577,22 +2585,48 @@ describe('runChannelBackfill', () => {
   it('records a failure, not a completion, when it stops at the page limit', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
-    const fetchChannelHistory: FetchChannelHistory = async () =>
-      Array.from({ length: 100 }).map(() => backfilledMessage())
+    const history = fakeChannelHistory([fullPage(), fullPage(), fullPage()])
 
     const result = await fromSuccess(runChannelBackfill)(
-      { channelId: channel.id, fetchChannelHistory },
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+        pageLimit: 2,
+      },
       ownerContextFor(guild)
     )
 
     const telemetry = await backfillTelemetryOf(result.backfillRunId)
 
+    expect(history.requests).toHaveLength(2)
     expect(result.outcome).toBe('stopped_at_the_page_limit')
     expect(telemetry.completions).toHaveLength(0)
     expect(telemetry.failures).toHaveLength(1)
     expect(telemetry.failures[0].errorMessage).toBe(
       'Stopped at the page limit before reaching the newest messages'
     )
+  })
+
+  it('completes when Discord runs out of history on the last page the limit allows', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const history = fakeChannelHistory([fullPage(), [backfilledMessage()]])
+
+    const result = await fromSuccess(runChannelBackfill)(
+      {
+        channelId: channel.id,
+        fetchChannelHistory: history.fetchChannelHistory,
+        pageLimit: 2,
+      },
+      ownerContextFor(guild)
+    )
+
+    const telemetry = await backfillTelemetryOf(result.backfillRunId)
+
+    expect(history.requests).toHaveLength(2)
+    expect(result.outcome).toBe('completed')
+    expect(telemetry.completions).toHaveLength(1)
+    expect(telemetry.failures).toHaveLength(0)
   })
 
   it('refuses a channel this deployment has not ingested', async () => {

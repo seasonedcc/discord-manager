@@ -1,5 +1,7 @@
+import * as path from 'node:path'
 import { sql } from 'kysely'
 import { newId } from '~/framework/db.server'
+import { env } from '~/framework/env.server'
 import { createMessage } from './fixtures'
 import { db, describe, expect, it } from './prelude'
 
@@ -85,6 +87,15 @@ describe('the unit database', () => {
       .executeTakeFirstOrThrow()
 
     expect(count).toBeGreaterThanOrEqual(0)
+  })
+
+  it('is a copy this test file owns, never the store global setup migrated', async () => {
+    const { rows } = await sql<{ file: string }>`
+      select file from pragma_database_list where name = 'main'
+    `.execute(db())
+
+    expect(rows[0].file).toBe(path.resolve(env().databasePath))
+    expect(path.basename(env().databasePath)).not.toBe('migrated.db')
   })
 })
 

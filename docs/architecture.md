@@ -105,7 +105,8 @@ app/
     run.ts              daemon entrypoint
   test/
     prelude.ts          describe/expect/it/vi + db
-    global-setup.ts     throwaway unit database: create, migrate, guard
+    global-setup.ts     throwaway unit store: create, migrate, guard
+    file-setup.ts       a private copy of that store for each test file
     fixtures.ts         createGuild/createChannel/createMessage/ownerContext factories
 tests/
   *.spec.ts             behavior-sentence specs driving the real MCP server over stdio
@@ -832,10 +833,12 @@ is silence, and silence is exactly what the quiet derivation reads.
 
 ## Testing
 
-- **Unit**: Vitest against a real throwaway SQLite database (created + migrated in global
-  setup, `_unit` suffix guard). Real queries, no mocks. Colocated `*.test.ts`, one
-  `describe` per public function, fixtures with `crypto.randomUUID()` entropy,
-  `fromSuccess` for happy paths, specific error assertions.
+- **Unit**: Vitest against real throwaway SQLite stores. Global setup migrates one store
+  in a folder whose name must contain `unit`, and every test file runs against its own
+  copy of it, so files run in parallel without ever waiting on each other's write locks.
+  Real queries, no mocks. Colocated `*.test.ts`, one `describe` per public function,
+  fixtures with `crypto.randomUUID()` entropy, `fromSuccess` for happy paths, specific
+  error assertions.
 - **End-to-end**: specs named as behavior sentences (`a-bookmarked-message-survives-the-
   authors-edit.spec.ts`), one test per file. `tests/run-e2e.ts` deletes the E2E database
   file, migrates it, seeds it **once per run** through the real ingestion business
