@@ -243,10 +243,11 @@ depend on the data) and after `analyze`, to one assertion, `expectEveryPlan` in
   joined as `standing_bookmarks` shows up as `SCAN standing_bookmarks`, which a list of
   forbidden table names never matches. Thread creation's guard also names the children of
   `channels` and `thread_creation_requests` that have no index on their foreign key: an
-  insert with `returning` or `on conflict` into a parent table makes SQLite plan a scan of
-  each such child, in case the new row resolves an outstanding foreign-key violation. At
-  run time SQLite skips that scan unless a violation is outstanding, so it costs nothing on
-  a store whose constraints hold.
+  insert with `returning` into a parent table makes SQLite plan a scan of each such child,
+  in case the new row resolves an outstanding foreign-key violation. `on conflict` alone
+  plans none; the thread's `channels` insert plans them because it also uses `returning`.
+  At run time SQLite skips that scan unless a violation is outstanding, so it costs
+  nothing on a store whose constraints hold.
 - **No lookup that sorts.** Each guard lists the tables its readers look up the latest
   event of, and the tables they probe once per row with `exists`, such as a channel's
   removals or a backfill run's completion. A subquery, a `with` table or any other derived
