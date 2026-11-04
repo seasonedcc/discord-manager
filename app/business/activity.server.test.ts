@@ -392,6 +392,81 @@ describe('readActivitySince', () => {
     })
   })
 
+  it('follows the bot identity recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const first = await createGatewayIdentification({
+      guildId: guild.id,
+      identifiedAt: '2100-08-01T00:00:00.000Z',
+    })
+    const last = await createGatewayIdentification({
+      guildId: guild.id,
+      identifiedAt: '2100-08-01T00:00:00.000Z',
+    })
+
+    await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      recordedAt: '2100-08-02T00:00:00.000Z',
+      mentionedDiscordUserIds: [last.botDiscordUserId],
+    })
+    await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      recordedAt: '2100-08-03T00:00:00.000Z',
+      mentionedDiscordUserIds: [first.botDiscordUserId],
+    })
+
+    const { activity } = await fromSuccess(readActivitySince)(
+      { since: '2100-08-01T00:00:00.000Z' },
+      context
+    )
+
+    expect(activity.mentions).toEqual({
+      count: 1,
+      newestAt: '2100-08-02T00:00:00.000Z',
+    })
+  })
+
+  it('ignores a bot identity another server recorded later', async () => {
+    const guild = await createGuild()
+    const otherGuild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const context = await ownerContext({ guildId: guild.id })
+    const ourBot = await createGatewayIdentification({
+      guildId: guild.id,
+      identifiedAt: '2100-08-10T00:00:00.000Z',
+    })
+    const theirBot = await createGatewayIdentification({
+      guildId: otherGuild.id,
+      identifiedAt: '2100-08-10T01:00:00.000Z',
+    })
+
+    await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      recordedAt: '2100-08-11T00:00:00.000Z',
+      mentionedDiscordUserIds: [ourBot.botDiscordUserId],
+    })
+    await createMessage({
+      channelId: channel.id,
+      content: 'thanks, that helped',
+      recordedAt: '2100-08-12T00:00:00.000Z',
+      mentionedDiscordUserIds: [theirBot.botDiscordUserId],
+    })
+
+    const { activity } = await fromSuccess(readActivitySince)(
+      { since: '2100-08-10T00:00:00.000Z' },
+      context
+    )
+
+    expect(activity.mentions).toEqual({
+      count: 1,
+      newestAt: '2100-08-11T00:00:00.000Z',
+    })
+  })
+
   it('counts a bookmark addition after the cutoff, even one a later removal undid', async () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
