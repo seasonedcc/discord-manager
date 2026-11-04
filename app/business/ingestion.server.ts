@@ -133,6 +133,7 @@ const runChannelBackfillSchema = z.object({
     (value) => typeof value === 'function',
     { message: 'A Discord history transport is required' }
   ),
+  pageLimit: z.number().int().positive().default(backfillPageLimit),
 })
 
 type ObservedAuthor = z.output<typeof observedAuthorSchema>
@@ -1285,7 +1286,7 @@ async function storeBackfilledPage(
 const runChannelBackfill = applySchema(
   runChannelBackfillSchema,
   backfillContextSchema
-)(async ({ channelId, fetchChannelHistory }, context) => {
+)(async ({ channelId, fetchChannelHistory, pageLimit }, context) => {
   const channel = await db()
     .selectFrom('channels')
     .innerJoin('guilds', 'guilds.id', 'channels.guildId')
@@ -1316,7 +1317,7 @@ const runChannelBackfill = applySchema(
     let afterDiscordMessageId =
       cursor?.discordMessageId ?? discordHistoryBeginningSnowflake
 
-    for (let page = 0; page < backfillPageLimit; page += 1) {
+    for (let page = 0; page < pageLimit; page += 1) {
       const messages = await fetchChannelHistory({
         afterDiscordMessageId,
         discordChannelId: channel.discordChannelId,
