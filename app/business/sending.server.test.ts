@@ -1189,4 +1189,132 @@ describe('readMessageSendStatus', () => {
         .sort()
     ).toEqual(retryableStates)
   })
+
+  it('reads the outcome recorded last when a delivery and a failure share an instant', async () => {
+    const { channel, context } = await sendingGround()
+    const deliveredLast = await issueRequestWithoutOutcome({
+      channelId: channel.id,
+    })
+    const failedLast = await issueRequestWithoutOutcome({
+      channelId: channel.id,
+    })
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+
+    await db()
+      .insertInto('messageSendFailures')
+      .values({
+        id: newId(),
+        messageSendRequestId: deliveredLast.id,
+        kind: 'unreachable',
+        errorMessage: 'fetch failed',
+        createdAt: sameInstant,
+      })
+      .execute()
+    await db()
+      .insertInto('messageSendDeliveries')
+      .values([
+        {
+          id: newId(),
+          messageSendRequestId: deliveredLast.id,
+          discordMessageId: snowflake(),
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageSendRequestId: failedLast.id,
+          discordMessageId: snowflake(),
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await db()
+      .insertInto('messageSendFailures')
+      .values({
+        id: newId(),
+        messageSendRequestId: failedLast.id,
+        kind: 'unreachable',
+        errorMessage: 'fetch failed',
+        createdAt: sameInstant,
+      })
+      .execute()
+
+    const statusOf = async (requestId: string) =>
+      (await fromSuccess(readMessageSendStatus)({ requestId }, context)).send
+        .status
+
+    expect(await statusOf(deliveredLast.id)).toBe('delivered')
+    expect(await statusOf(failedLast.id)).toBe('failed')
+  })
+
+  it('reads the delivery, failure and skip each recorded last when two share an instant', async () => {
+    const { channel, context } = await sendingGround()
+    const request = await issueRequestWithoutOutcome({ channelId: channel.id })
+    const sameInstant = '2099-03-02T00:00:00.000Z'
+    const deliveredLast = snowflake()
+
+    await db()
+      .insertInto('messageSendDeliveries')
+      .values([
+        {
+          id: newId(),
+          messageSendRequestId: request.id,
+          discordMessageId: snowflake(),
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageSendRequestId: request.id,
+          discordMessageId: deliveredLast,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await db()
+      .insertInto('messageSendFailures')
+      .values([
+        {
+          id: newId(),
+          messageSendRequestId: request.id,
+          kind: 'rejected',
+          errorMessage: 'Missing Permissions',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageSendRequestId: request.id,
+          kind: 'unreachable',
+          errorMessage: 'fetch failed',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+    await db()
+      .insertInto('messageSendSkips')
+      .values([
+        {
+          id: newId(),
+          messageSendRequestId: request.id,
+          reason: 'empty_content',
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          messageSendRequestId: request.id,
+          reason: 'channel_not_found',
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { send } = await fromSuccess(readMessageSendStatus)(
+      { requestId: request.id },
+      context
+    )
+
+    expect(send).toMatchObject({
+      discordMessageId: deliveredLast,
+      kind: 'unreachable',
+      reason: 'channel_not_found',
+    })
+  })
 })
