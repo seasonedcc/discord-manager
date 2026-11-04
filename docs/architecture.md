@@ -194,17 +194,37 @@ and `bookmark_reasons_list` walk the additions, keep the standing ones, and reac
 message by primary key, so they cost the bookmarks ever made rather than the messages ever
 stored.
 
+A pair whose value the reader wants carries it in both arms, `null` on the clearing side,
+so a parent with no event in either table reads `null` — the pair's own meaning of "never
+had one":
+
+```sql
+(select topic from (
+  select topic, created_at, id from channel_topic_changes where channel_id = channels.id
+  union all
+  select null, created_at, id from channel_topic_clearings where channel_id = channels.id
+  order by created_at desc, id desc limit 1
+))
+```
+
+The channel's topic, category and position pairs and its archive pair read this way, and
+so does a send's status, which unions the send's three outcome tables (deliveries,
+failures and skips) the same way. Where a reader needs one table's latest row besides — a
+send's latest delivery for its message id — it left-joins that row by id the same way the
+inner join above does, so a missing row stays a missing field rather than a missing parent.
+
 The bot identity a mentions read compares against reads `gateway_identifications` alone and
 finds the guild's id through a scalar subquery on `guilds`' unique key rather than joining
 `guilds`: joined, the planner can start from `guilds` once statistics exist and then sort
 that guild's every identification.
 
-`app/business/read-plans.server.test.ts` and `app/business/bookmark-read-plans.server.test.ts`
-guard these shapes without timing anything: each captures every statement its readers
-actually run on a busy synthetic server, inside a transaction or not, and holds each
-`explain query plan`, both as every deployed store plans it (the product never gathers
-statistics, so those plans do not depend on the data) and after `analyze`, to one
-assertion, `expectEveryPlan` in `app/test/query-plans.ts`:
+`app/business/read-plans.server.test.ts`, `app/business/bookmark-read-plans.server.test.ts`
+and `app/business/latest-state-plans.server.test.ts` guard these shapes without timing
+anything: each captures every statement its readers actually run on a busy synthetic
+server, inside a transaction or not, and holds each `explain query plan`, both as every
+deployed store plans it (the product never gathers statistics, so those plans do not
+depend on the data) and after `analyze`, to one assertion, `expectEveryPlan` in
+`app/test/query-plans.ts`:
 
 - **No whole-table read beyond the guard's allow-list.** A plan scans nothing but what its
   guard names (the guild row, the population a reader walks, such as the standing
@@ -240,9 +260,11 @@ discordMessageId unique, discordCreatedAt).
 Events, each indexed by its parent — `(parentId, createdAt desc)` wherever latest-event-wins
 reads them; `(parentId, createdAt desc, id desc)` where a per-row lookup reads the latest
 event, widened from the two-column index on `message_revisions`, `channel_detail_revisions`,
-`member_detail_revisions`, `bookmark_additions`, `bookmark_removals`, `bookmark_snoozes`,
-`bookmark_reason_assignments` and `bookmark_reason_detail_revisions`, and new on
-`gateway_identifications`, which had none; and a
+`member_detail_revisions`, `backfill_runs`, both tables of every channel attribute pair
+and of the archive pair, a send's three outcome tables, `bookmark_additions`,
+`bookmark_removals`, `bookmark_snoozes`, `bookmark_reason_assignments` and
+`bookmark_reason_detail_revisions`, and new on `gateway_identifications`, which had none;
+and a
 unique key on the parent plus what tells its rows apart where a parent's rows are one set
 read whole (`message_revision_user_mentions`, `message_revision_embeds`,
 `message_revision_attachments`):
