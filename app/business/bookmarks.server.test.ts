@@ -1931,35 +1931,41 @@ describe('listBookmarkReasons', () => {
     const guild = await createGuild()
     const channel = await createChannel({ guildId: guild.id })
     const context = await ownerContext({ guildId: guild.id })
-    const reason = await createReason(context)
-    const resolvedLast = await createMessage({ channelId: channel.id })
-    const bookmarkedLast = await createMessage({ channelId: channel.id })
+    const resolvedLast = {
+      message: await createMessage({ channelId: channel.id }),
+      reason: await createReason(context),
+    }
+    const bookmarkedLast = {
+      message: await createMessage({ channelId: channel.id }),
+      reason: await createReason(context),
+    }
 
-    await recordBookmarkEventsAtOneInstant(resolvedLast.id, [
+    await recordBookmarkEventsAtOneInstant(resolvedLast.message.id, [
       'addition',
       'removal',
     ])
-    await recordBookmarkEventsAtOneInstant(bookmarkedLast.id, [
+    await recordBookmarkEventsAtOneInstant(bookmarkedLast.message.id, [
       'removal',
       'addition',
     ])
     await db()
       .insertInto('bookmarkReasonAssignments')
       .values(
-        [resolvedLast, bookmarkedLast].map(({ id }) => ({
+        [resolvedLast, bookmarkedLast].map(({ message, reason }) => ({
           id: newId(),
-          messageId: id,
+          messageId: message.id,
           reasonId: reason.reasonId,
         }))
       )
       .execute()
 
     const { reasons } = await fromSuccess(listBookmarkReasons)({}, context)
-
-    expect(
+    const countOf = ({ reason }: typeof resolvedLast) =>
       reasons.find(({ reasonId }) => reasonId === reason.reasonId)
         ?.bookmarkCount
-    ).toBe(1)
+
+    expect(countOf(resolvedLast)).toBe(0)
+    expect(countOf(bookmarkedLast)).toBe(1)
   })
 
   it('names a reason by the detail revision recorded last when two share an instant', async () => {
