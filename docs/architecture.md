@@ -171,27 +171,53 @@ take it, `messages` must drive the query: the configured guild is checked with a
 which would let guilds → channels drive and sort every message in the window before the
 limit applies. Scanned in time order, a catch-up stops after its first 201 rows.
 
-A reversible pair reads its latest event the same way, over both tables at once: the
-parent's rows from each side are unioned, ordered `created_at desc, id desc`, and the first
-one kept, so a same-millisecond tie between an addition and a removal still goes to the
-event recorded last. The bookmark readers are built on it. A **standing bookmark** is a
-`bookmark_additions` row that is its message's latest bookmark event; `bookmarks_list` and
-`bookmark_reasons_list` walk the additions, keep the standing ones, and reach each message
-by primary key, so they cost the bookmarks ever made rather than the messages ever stored.
+A reversible pair reads its latest event the same way, over both tables at once, with one
+scalar subquery whose arms are each correlated to the parent:
 
-`app/business/read-plans.server.test.ts` guards both shapes without timing anything: it
-captures the SQL each reader actually runs and asserts its `explain query plan` on a busy
-synthetic server — no automatic index, no scan of a latest-state table, no latest-state
-lookup sorting its tie-break, and the window index and each lookup's index reached by
-name — both as every deployed store plans it (the product never gathers statistics, so
-those plans do not depend on the data) and after `analyze`.
-`app/business/bookmark-read-plans.server.test.ts` holds the bookmark readers to the same
-rules over a busy guild with bookmarks, reasons, assignments and snoozes, and lets a plan
-scan nothing but the standing bookmarks it walks, the reasons catalog, the guild row and
-the derived tables it builds itself.
-It names what may be scanned rather than what may not, because SQLite reports an aliased
-table under its alias: a full read of `bookmark_additions` joined as `standing_bookmarks`
-shows up as `SCAN standing_bookmarks`, which a list of forbidden table names never matches.
+```sql
+standing_bookmarks.id = (select id from (
+  select id, created_at from bookmark_additions where message_id = standing_bookmarks.message_id
+  union all
+  select id, created_at from bookmark_removals where message_id = standing_bookmarks.message_id
+  order by created_at desc, id desc limit 1
+))
+```
+
+The `order by` sits inside the compound select, so SQLite merges the two arms' index-ordered
+seeks and stops at the first row: a same-millisecond tie between an addition and a removal
+still goes to the event recorded last, and nothing is sorted. Written outside the union, the
+same `order by` sorts every one of the parent's events, because SQLite folds a union into
+the query around it only when that query returns every column it orders by, and a lookup
+returns the id alone. The bookmark readers are built on this pair. A **standing bookmark**
+is a `bookmark_additions` row that is its message's latest bookmark event; `bookmarks_list`
+and `bookmark_reasons_list` walk the additions, keep the standing ones, and reach each
+message by primary key, so they cost the bookmarks ever made rather than the messages ever
+stored.
+
+A lookup reads only its own event tables. The bot identity a mentions read
+compares against filters `gateway_identifications` by the guild's id through a scalar
+subquery rather than joining `guilds`: joined, the planner can start from `guilds` once
+statistics exist and then sort that guild's every identification.
+
+`app/business/read-plans.server.test.ts` and `app/business/bookmark-read-plans.server.test.ts`
+guard these shapes without timing anything: each captures the SQL its readers actually run
+on a busy synthetic server and holds every `explain query plan`, both as every deployed
+store plans it (the product never gathers statistics, so those plans do not depend on the
+data) and after `analyze`, to one assertion, `expectEveryPlan` in `app/test/query-plans.ts`:
+
+- **No whole-table read beyond the guard's allow-list.** A plan scans nothing but what its
+  guard names (the guild row, the population a reader walks, such as the standing
+  bookmarks or every message for an unwindowed count, and the reasons catalog) and the
+  derived tables it builds itself, and builds no automatic index. The guard names what may be scanned rather than what may not,
+  because SQLite reports an aliased table under its alias: a full read of
+  `bookmark_additions` joined as `standing_bookmarks` shows up as `SCAN standing_bookmarks`,
+  which a list of forbidden table names never matches.
+- **No lookup that sorts.** No subquery that reads a latest-state table may use a temporary
+  b-tree anywhere beneath it, whatever it sorts by and whichever plan branch the sort lands
+  in; the table is recognised by the index it is read through, so an alias does not hide
+  it. A reader's own outer `order by` is not a lookup, and may sort.
+- **Every index reached by name**: the window index and each lookup's index, in the readers
+  that use them.
 
 ### Schema (initial)
 
