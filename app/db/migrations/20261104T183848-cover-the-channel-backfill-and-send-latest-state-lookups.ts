@@ -73,6 +73,12 @@ const widenedIndexes = [
     widened: 'messageSendSkipsRequestIdCreatedAtIdIndex',
     replaced: 'messageSendSkipsRequestIdCreatedAtIndex',
   },
+  {
+    table: 'messageSendRequestRetries',
+    parent: 'requestId',
+    widened: 'messageSendRequestRetriesRequestIdCreatedAtIdIndex',
+    replaced: 'messageSendRequestRetriesRequestIdCreatedAtIndex',
+  },
 ]
 
 export async function up(db: Kysely<any>): Promise<void> {

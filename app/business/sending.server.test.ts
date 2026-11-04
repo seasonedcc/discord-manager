@@ -1317,4 +1317,41 @@ describe('readMessageSendStatus', () => {
       reason: 'channel_not_found',
     })
   })
+
+  it('names the send a retry was made for by the retry link recorded last when two share an instant', async () => {
+    const { channel, context } = await sendingGround()
+    const linkedFirst = await issueRequestWithoutOutcome({
+      channelId: channel.id,
+    })
+    const linkedLast = await issueRequestWithoutOutcome({
+      channelId: channel.id,
+    })
+    const retry = await issueRequestWithoutOutcome({ channelId: channel.id })
+    const sameInstant = '2099-03-03T00:00:00.000Z'
+
+    await db()
+      .insertInto('messageSendRequestRetries')
+      .values([
+        {
+          id: newId(),
+          requestId: retry.id,
+          retriedRequestId: linkedFirst.id,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          requestId: retry.id,
+          retriedRequestId: linkedLast.id,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { send } = await fromSuccess(readMessageSendStatus)(
+      { requestId: retry.id },
+      context
+    )
+
+    expect(send.retryOfRequestId).toBe(linkedLast.id)
+  })
 })
