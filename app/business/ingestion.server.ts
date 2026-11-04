@@ -154,7 +154,7 @@ async function findOrCreateGuild(trx: Transaction<DB>, discordGuildId: string) {
 }
 
 async function currentChannelTopic(trx: Transaction<DB>, channelId: string) {
-  const events = trx
+  const newest = await trx
     .selectFrom('channelTopicChanges')
     .select((eb) => [
       'createdAt',
@@ -168,10 +168,6 @@ async function currentChannelTopic(trx: Transaction<DB>, channelId: string) {
         .select(['createdAt', 'id', sql<string | null>`null`.as('topic')])
         .where('channelId', '=', channelId)
     )
-
-  const newest = await trx
-    .selectFrom(events.as('topicEvents'))
-    .select('topic')
     .orderBy('createdAt', 'desc')
     .orderBy('id', 'desc')
     .limit(1)
@@ -181,7 +177,7 @@ async function currentChannelTopic(trx: Transaction<DB>, channelId: string) {
 }
 
 async function currentChannelCategory(trx: Transaction<DB>, channelId: string) {
-  const events = trx
+  const newest = await trx
     .selectFrom('channelCategoryChanges')
     .select((eb) => [
       'createdAt',
@@ -195,10 +191,6 @@ async function currentChannelCategory(trx: Transaction<DB>, channelId: string) {
         .select(['createdAt', 'id', sql<string | null>`null`.as('category')])
         .where('channelId', '=', channelId)
     )
-
-  const newest = await trx
-    .selectFrom(events.as('categoryEvents'))
-    .select('category')
     .orderBy('createdAt', 'desc')
     .orderBy('id', 'desc')
     .limit(1)
@@ -208,7 +200,7 @@ async function currentChannelCategory(trx: Transaction<DB>, channelId: string) {
 }
 
 async function currentChannelPosition(trx: Transaction<DB>, channelId: string) {
-  const events = trx
+  const newest = await trx
     .selectFrom('channelPositionChanges')
     .select((eb) => [
       'createdAt',
@@ -222,10 +214,6 @@ async function currentChannelPosition(trx: Transaction<DB>, channelId: string) {
         .select(['createdAt', 'id', sql<number | null>`null`.as('position')])
         .where('channelId', '=', channelId)
     )
-
-  const newest = await trx
-    .selectFrom(events.as('positionEvents'))
-    .select('position')
     .orderBy('createdAt', 'desc')
     .orderBy('id', 'desc')
     .limit(1)

@@ -856,6 +856,82 @@ function channelAttributeRowsOf(channelId: string) {
   )
 }
 
+async function changeAndClearEveryAttributeAtOnce(
+  channelId: string,
+  recordedLast: 'change' | 'clearing',
+  instant: string
+) {
+  const change = async () => {
+    await db()
+      .insertInto('channelTopicChanges')
+      .values({ id: newId(), channelId, topic: 'Company', createdAt: instant })
+      .execute()
+    await db()
+      .insertInto('channelCategoryChanges')
+      .values({
+        id: newId(),
+        channelId,
+        category: 'Company',
+        createdAt: instant,
+      })
+      .execute()
+    await db()
+      .insertInto('channelPositionChanges')
+      .values({ id: newId(), channelId, position: 4, createdAt: instant })
+      .execute()
+  }
+  const clear = async () => {
+    await db()
+      .insertInto('channelTopicClearings')
+      .values({ id: newId(), channelId, createdAt: instant })
+      .execute()
+    await db()
+      .insertInto('channelCategoryClearings')
+      .values({ id: newId(), channelId, createdAt: instant })
+      .execute()
+    await db()
+      .insertInto('channelPositionClearings')
+      .values({ id: newId(), channelId, createdAt: instant })
+      .execute()
+  }
+
+  if (recordedLast === 'change') {
+    await clear()
+    await change()
+  } else {
+    await change()
+    await clear()
+  }
+}
+
+async function attributeEventCountsOf(channelId: string) {
+  const countOf = async (
+    table:
+      | 'channelTopicChanges'
+      | 'channelTopicClearings'
+      | 'channelCategoryChanges'
+      | 'channelCategoryClearings'
+      | 'channelPositionChanges'
+      | 'channelPositionClearings'
+  ) =>
+    (
+      await db()
+        .selectFrom(table)
+        .select((eb) => eb.fn.countAll<number>().as('count'))
+        .where('channelId', '=', channelId)
+        .executeTakeFirstOrThrow()
+    ).count
+
+  return {
+    categories: await countOf('channelCategoryChanges'),
+    categoryClearings: await countOf('channelCategoryClearings'),
+    positionClearings: await countOf('channelPositionClearings'),
+    positions: await countOf('channelPositionChanges'),
+    topicClearings: await countOf('channelTopicClearings'),
+    topics: await countOf('channelTopicChanges'),
+  }
+}
+
 describe('recordChannelSnapshot', () => {
   it('records no attribute event for a channel that carries none', async () => {
     const guild = await createGuild()
@@ -975,6 +1051,56 @@ describe('recordChannelSnapshot', () => {
     expect(attributes.topics).toHaveLength(1)
     expect(attributes.topicClearings).toHaveLength(1)
     expect(attributes.categoryClearings).toHaveLength(1)
+  })
+
+  it('reads each attribute by the event recorded last when a change and a clearing share an instant', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const changedLast = await createChannel({ guildId: guild.id })
+    const clearedLast = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-02T00:00:00.000Z'
+
+    await changeAndClearEveryAttributeAtOnce(
+      changedLast.id,
+      'change',
+      sameInstant
+    )
+    await changeAndClearEveryAttributeAtOnce(
+      clearedLast.id,
+      'clearing',
+      sameInstant
+    )
+
+    await fromSuccess(recordChannelSnapshot)(
+      observedChannel({
+        category: 'Company',
+        discordChannelId: changedLast.discordChannelId,
+        position: 4,
+        topic: 'Company',
+      }),
+      context
+    )
+    await fromSuccess(recordChannelSnapshot)(
+      observedChannel({
+        category: undefined,
+        discordChannelId: clearedLast.discordChannelId,
+        position: undefined,
+        topic: undefined,
+      }),
+      context
+    )
+
+    const oneOfEach = {
+      categories: 1,
+      categoryClearings: 1,
+      positionClearings: 1,
+      positions: 1,
+      topicClearings: 1,
+      topics: 1,
+    }
+
+    expect(await attributeEventCountsOf(changedLast.id)).toEqual(oneOfEach)
+    expect(await attributeEventCountsOf(clearedLast.id)).toEqual(oneOfEach)
   })
 
   it('records a thread as a channel of its own, with no position', async () => {
