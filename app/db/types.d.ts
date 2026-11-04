@@ -348,6 +348,28 @@ export interface MessageSendSkips {
   reason: string;
 }
 
+export interface PermissionFetchFailures {
+  createdAt: Generated<string>;
+  errorMessage: string;
+  id: string;
+  kind: string;
+  permissionFetchRequestId: string;
+}
+
+export interface PermissionFetchRequests {
+  createdAt: Generated<string>;
+  discordGuildId: string;
+  id: string;
+  ownerDiscordUserId: string;
+  reading: string;
+}
+
+export interface PermissionFetchRetrievals {
+  createdAt: Generated<string>;
+  id: string;
+  permissionFetchRequestId: string;
+}
+
 export interface ThreadCreationFailures {
   createdAt: Generated<string>;
   errorMessage: string;
@@ -434,6 +456,9 @@ export interface DB {
   messageSendRequestRetries: MessageSendRequestRetries;
   messageSendRequests: MessageSendRequests;
   messageSendSkips: MessageSendSkips;
+  permissionFetchFailures: PermissionFetchFailures;
+  permissionFetchRequests: PermissionFetchRequests;
+  permissionFetchRetrievals: PermissionFetchRetrievals;
   threadCreationFailures: ThreadCreationFailures;
   threadCreationRequestAnchors: ThreadCreationRequestAnchors;
   threadCreationRequests: ThreadCreationRequests;

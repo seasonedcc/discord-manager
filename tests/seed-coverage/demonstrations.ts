@@ -32,6 +32,7 @@ type ToolName =
   | 'bookmarks_resolve'
   | 'bookmarks_set_reason'
   | 'bookmarks_snooze'
+  | 'channels_access'
   | 'channels_list'
   | 'ingestion_status'
   | 'members_list'
@@ -41,6 +42,7 @@ type ToolName =
   | 'messages_fetch'
   | 'messages_send'
   | 'messages_send_status'
+  | 'roles_list'
   | 'threads_create'
 
 type OwnerContext = ReturnType<typeof ownerContext>
@@ -53,10 +55,14 @@ type SeedDemonstration = {
 const gateSource = 'tests/seed-coverage/demonstrations.ts'
 
 const declaredUnseedable = {
+  channels_access:
+    'reads the roles, channels, permission overwrites and active threads live from Discord and judges them on the spot, keeping none of it, so no local store can answer for it — the README says under "Try it before inviting a bot" that it needs a real bot token and a real server',
   messages_fetch:
     'reads one message live from Discord, so no local store can answer for it — the README says under "Try it before inviting a bot" that it needs a real bot token and a real server',
   messages_send:
     'posts to a channel through Discord, so no local store can answer for it — the README says under "Try it before inviting a bot" that sending fails on demo credentials, which is why the seed leaves a refused send behind for messages_send_status to read',
+  roles_list:
+    'reads the server roles and the ones you hold live from Discord, keeping none of it, so no local store can answer for it — the README says under "Try it before inviting a bot" that it needs a real bot token and a real server',
   threads_create:
     'opens a thread through Discord and answers with the channel id Discord gave it, so no local store can answer for it — the README says under "Try it before inviting a bot" that it needs a real bot token and a real server, and the seeded thread in channels_list is what demonstrates a thread locally',
 } satisfies Partial<Record<ToolName, string>>

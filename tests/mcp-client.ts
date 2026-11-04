@@ -30,10 +30,23 @@ const messageReactionPath =
 const channelThreadsPath = /^\/v10\/channels\/(\d{17,20})\/threads$/
 const messageThreadsPath =
   /^\/v10\/channels\/(\d{17,20})\/messages\/(\d{17,20})\/threads$/
+const guildPath = /^\/v10\/guilds\/(\d{17,20})$/
+const guildMemberPath = /^\/v10\/guilds\/(\d{17,20})\/members\/(\d{17,20})$/
+const guildChannelsPath = /^\/v10\/guilds\/(\d{17,20})\/channels$/
+const guildActiveThreadsPath = /^\/v10\/guilds\/(\d{17,20})\/threads\/active$/
 const unknownMessageCode = 10008
+const unknownGuildCode = 10004
+const unknownMemberCode = 10007
+const missingAccessCode = 50001
 const unknownChannelCode = 10003
 const threadAlreadyCreatedCode = 160004
 const publicThreadType = 11
+const privateThreadType = 12
+const textChannelType = 0
+const voiceChannelType = 2
+const categoryChannelType = 4
+const roleOverwriteType = 0
+const memberOverwriteType = 1
 
 type RecordedSend = {
   content: string
@@ -82,6 +95,46 @@ type LiveMessage = {
   flags?: number
   forwarding?: { discordChannelId: string; discordMessageId: string }
   reactions?: LiveReaction[]
+}
+
+type HeldRole = {
+  id: string
+  mentionable: boolean
+  name: string
+  permissions: bigint
+  position: number
+}
+
+type HeldOverwrite = {
+  allow?: bigint
+  deny?: bigint
+  id: string
+  member?: boolean
+}
+
+type HeldChannel = {
+  category?: boolean
+  id: string
+  name: string
+  overwrites?: HeldOverwrite[]
+  parentId?: string
+  position: number
+  voice?: boolean
+}
+
+type HeldThread = {
+  id: string
+  name: string
+  parentId: string
+  private?: boolean
+}
+
+type HeldServer = {
+  channels: HeldChannel[]
+  memberRoleIds: Record<string, string[]>
+  ownerDiscordUserId: string
+  roles: HeldRole[]
+  threads: HeldThread[]
 }
 
 const replyMessageType = 19
@@ -135,6 +188,122 @@ async function startDiscordDouble() {
   const heldMessages = new Map<string, LiveMessage>()
   const forgottenMessageIds = new Set<string>()
   const unlistableReactionMessageIds = new Set<string>()
+  const serverReads: string[] = []
+  let heldServer: HeldServer | undefined
+  let refusingServerReads = false
+
+  function channelTypeOf({ category, voice }: HeldChannel) {
+    if (category) return categoryChannelType
+
+    return voice ? voiceChannelType : textChannelType
+  }
+
+  function serveServerRead(
+    response: ServerResponse,
+    pathname: string,
+    discordGuildId: string,
+    answerFrom: (server: HeldServer) => void
+  ) {
+    serverReads.push(pathname)
+
+    if (refusingServerReads) {
+      return answer(response, 403, {
+        message: 'Missing Access',
+        code: missingAccessCode,
+      })
+    }
+
+    if (!heldServer || discordGuildId !== serverEnvironment.DISCORD_GUILD_ID) {
+      return answer(response, 404, {
+        message: 'Unknown Guild',
+        code: unknownGuildCode,
+      })
+    }
+
+    answerFrom(heldServer)
+  }
+
+  function serveGuild(response: ServerResponse, server: HeldServer) {
+    answer(response, 200, {
+      id: serverEnvironment.DISCORD_GUILD_ID,
+      name: 'The team server',
+      owner_id: server.ownerDiscordUserId,
+      roles: server.roles.map((role) => ({
+        color: 0,
+        flags: 0,
+        hoist: false,
+        id: role.id,
+        managed: false,
+        mentionable: role.mentionable,
+        name: role.name,
+        permissions: String(role.permissions),
+        position: role.position,
+      })),
+    })
+  }
+
+  function serveGuildMember(
+    response: ServerResponse,
+    server: HeldServer,
+    discordUserId: string
+  ) {
+    const roleIds = server.memberRoleIds[discordUserId]
+
+    if (!roleIds) {
+      return answer(response, 404, {
+        message: 'Unknown Member',
+        code: unknownMemberCode,
+      })
+    }
+
+    answer(response, 200, {
+      deaf: false,
+      flags: 0,
+      joined_at: '2026-01-05T09:00:00.000Z',
+      mute: false,
+      roles: roleIds,
+      user: { id: discordUserId, username: `member-${discordUserId}` },
+    })
+  }
+
+  function serveGuildChannels(response: ServerResponse, server: HeldServer) {
+    answer(
+      response,
+      200,
+      server.channels.map((channel) => ({
+        guild_id: serverEnvironment.DISCORD_GUILD_ID,
+        id: channel.id,
+        name: channel.name,
+        parent_id: channel.parentId ?? null,
+        permission_overwrites: (channel.overwrites ?? []).map(
+          ({ allow = 0n, deny = 0n, id, member }) => ({
+            allow: String(allow),
+            deny: String(deny),
+            id,
+            type: member ? memberOverwriteType : roleOverwriteType,
+          })
+        ),
+        position: channel.position,
+        type: channelTypeOf(channel),
+      }))
+    )
+  }
+
+  function serveGuildActiveThreads(
+    response: ServerResponse,
+    server: HeldServer
+  ) {
+    answer(response, 200, {
+      members: [],
+      threads: server.threads.map((thread) => ({
+        guild_id: serverEnvironment.DISCORD_GUILD_ID,
+        id: thread.id,
+        name: thread.name,
+        parent_id: thread.parentId,
+        type: thread.private ? privateThreadType : publicThreadType,
+      })),
+    })
+  }
 
   function serveSend(
     response: ServerResponse,
@@ -337,6 +506,13 @@ async function startDiscordDouble() {
         request.method === 'POST' ? pathname.match(channelThreadsPath) : null
       const anchored =
         request.method === 'POST' ? pathname.match(messageThreadsPath) : null
+      const guild = request.method === 'GET' ? pathname.match(guildPath) : null
+      const guildMember =
+        request.method === 'GET' ? pathname.match(guildMemberPath) : null
+      const guildChannels =
+        request.method === 'GET' ? pathname.match(guildChannelsPath) : null
+      const guildActiveThreads =
+        request.method === 'GET' ? pathname.match(guildActiveThreadsPath) : null
 
       if (posted) {
         return serveSend(response, posted[1], Buffer.concat(chunks))
@@ -356,6 +532,33 @@ async function startDiscordDouble() {
       }
 
       if (read) return serveMessage(response, read[1], read[2])
+
+      if (guild) {
+        return serveServerRead(response, pathname, guild[1], (server) =>
+          serveGuild(response, server)
+        )
+      }
+
+      if (guildMember) {
+        return serveServerRead(response, pathname, guildMember[1], (server) =>
+          serveGuildMember(response, server, guildMember[2])
+        )
+      }
+
+      if (guildChannels) {
+        return serveServerRead(response, pathname, guildChannels[1], (server) =>
+          serveGuildChannels(response, server)
+        )
+      }
+
+      if (guildActiveThreads) {
+        return serveServerRead(
+          response,
+          pathname,
+          guildActiveThreads[1],
+          (server) => serveGuildActiveThreads(response, server)
+        )
+      }
 
       if (reactors) {
         return serveReactors(
@@ -388,6 +591,9 @@ async function startDiscordDouble() {
       heldMessages.delete(discordMessageId)
       forgottenMessageIds.add(discordMessageId)
     },
+    holdsServer(server: HeldServer) {
+      heldServer = server
+    },
     holdsMessage(discordMessageId: string, live: LiveMessage) {
       forgottenMessageIds.delete(discordMessageId)
       heldMessages.set(discordMessageId, live)
@@ -395,6 +601,9 @@ async function startDiscordDouble() {
     reads,
     refuseReactorListingsOf(discordMessageId: string) {
       unlistableReactionMessageIds.add(discordMessageId)
+    },
+    refuseServerReads() {
+      refusingServerReads = true
     },
     refuseSendsTo(discordChannelId: string) {
       refusedChannelIds.add(discordChannelId)
@@ -406,6 +615,7 @@ async function startDiscordDouble() {
       alreadyThreadedMessageIds.add(discordMessageId)
     },
     sends,
+    serverReads,
     threads,
     async stop() {
       await new Promise<void>((resolve, reject) => {
@@ -507,3 +717,4 @@ async function closeOpenSessions() {
 }
 
 export { closeOpenSessions, openMcpSession, repositoryRoot, serverEnvironment }
+export type { HeldServer }
