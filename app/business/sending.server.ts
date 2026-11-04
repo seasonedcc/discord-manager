@@ -21,6 +21,8 @@ import { db } from '~/db/db.server'
 import type { DB } from '~/db/types'
 import { newId } from '~/framework/db.server'
 
+const messageSendSilentSince = sql<string>`strftime('%Y-%m-%dT%H:%M:%fZ','now', ${`-${messageSendStallThresholdMinutes} minutes`})`
+
 const sendingContextSchema = ownerContextSchema.extend({
   canSendMessages: z.literal(true),
 })
@@ -178,11 +180,13 @@ function messageSendStandings() {
       eb.fn
         .coalesce(
           latestOutcomeOf(eb),
-          sql<MessageSendStatus>`case
-            when message_send_requests.created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now', ${`-${messageSendStallThresholdMinutes} minutes`})
-            then 'stalled'
-            else 'pending'
-          end`
+          eb
+            .case()
+            .when('messageSendRequests.createdAt', '<', messageSendSilentSince)
+            .then('stalled')
+            .else('pending')
+            .end()
+            .$castTo<MessageSendStatus>()
         )
         .as('status'),
     ])
