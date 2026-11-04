@@ -1048,6 +1048,31 @@ function channelUnarchivingsOf(channelId: string) {
     .execute()
 }
 
+async function archiveAndUnarchiveAtOnce(
+  channelId: string,
+  recordedLast: 'archiving' | 'unarchiving',
+  instant: string
+) {
+  const archive = () =>
+    db()
+      .insertInto('channelArchivings')
+      .values({ id: newId(), channelId, createdAt: instant })
+      .execute()
+  const unarchive = () =>
+    db()
+      .insertInto('channelUnarchivings')
+      .values({ id: newId(), channelId, createdAt: instant })
+      .execute()
+
+  if (recordedLast === 'archiving') {
+    await unarchive()
+    await archive()
+  } else {
+    await archive()
+    await unarchive()
+  }
+}
+
 describe('recordChannelArchiving', () => {
   it('records that a thread went quiet enough for Discord to archive it', async () => {
     const guild = await createGuild()
@@ -1115,6 +1140,39 @@ describe('recordChannelArchiving', () => {
     expect(result).toEqual({
       outcome: 'skipped',
       reason: 'channel_not_ingested',
+    })
+  })
+
+  it('reads the archive event recorded last when an archiving and an unarchiving share an instant', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const archivedLast = await createChannel({ guildId: guild.id, isThread: 1 })
+    const unarchivedLast = await createChannel({
+      guildId: guild.id,
+      isThread: 1,
+    })
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+
+    await archiveAndUnarchiveAtOnce(archivedLast.id, 'archiving', sameInstant)
+    await archiveAndUnarchiveAtOnce(
+      unarchivedLast.id,
+      'unarchiving',
+      sameInstant
+    )
+
+    const archive = (thread: { discordChannelId: string }) =>
+      fromSuccess(recordChannelArchiving)(
+        { discordChannelId: thread.discordChannelId },
+        context
+      )
+
+    expect(await archive(archivedLast)).toEqual({
+      outcome: 'skipped',
+      reason: 'channel_is_already_archived',
+    })
+    expect(await archive(unarchivedLast)).toEqual({
+      channelId: unarchivedLast.id,
+      outcome: 'recorded',
     })
   })
 })
@@ -1272,6 +1330,78 @@ describe('reconcileThreadArchivings', () => {
     )
 
     expect(await channelArchivingsOf(otherThread.id)).toHaveLength(0)
+  })
+
+  it('reads the archive event recorded last when an archiving and an unarchiving share an instant', async () => {
+    const guild = await createGuild()
+    const archivedLast = await createChannel({ guildId: guild.id, isThread: 1 })
+    const unarchivedLast = await createChannel({
+      guildId: guild.id,
+      isThread: 1,
+    })
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+
+    await archiveAndUnarchiveAtOnce(archivedLast.id, 'archiving', sameInstant)
+    await archiveAndUnarchiveAtOnce(
+      unarchivedLast.id,
+      'unarchiving',
+      sameInstant
+    )
+
+    const result = await fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds: [] },
+      ownerContextFor(guild)
+    )
+
+    expect(result.archivedChannelIds).toEqual([unarchivedLast.id])
+  })
+
+  it('tells a thread by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const threadLast = await createChannel({ guildId: guild.id })
+    const channelLast = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+
+    await db()
+      .insertInto('channelDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          channelId: threadLast.id,
+          name: 'a channel first',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: channelLast.id,
+          name: 'a thread first',
+          isThread: 1,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: threadLast.id,
+          name: 'a thread last',
+          isThread: 1,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: channelLast.id,
+          name: 'a channel last',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const result = await fromSuccess(reconcileThreadArchivings)(
+      { activeThreadDiscordChannelIds: [] },
+      ownerContextFor(guild)
+    )
+
+    expect(result.archivedChannelIds).toEqual([threadLast.id])
   })
 })
 
@@ -2824,6 +2954,30 @@ describe('listBackfillableChannels', () => {
     const channels = await fromSuccess(listBackfillableChannels)({}, context)
 
     expect(channels.map((channel) => channel.id)).toEqual([])
+  })
+
+  it('reads the archive event recorded last when an archiving and an unarchiving share an instant', async () => {
+    const guild = await createGuild()
+    const context = ownerContextFor(guild)
+    const archivedLast = await createChannel({ guildId: guild.id, isThread: 1 })
+    const unarchivedLast = await createChannel({
+      guildId: guild.id,
+      isThread: 1,
+    })
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+
+    await archiveAndUnarchiveAtOnce(archivedLast.id, 'archiving', sameInstant)
+    await archiveAndUnarchiveAtOnce(
+      unarchivedLast.id,
+      'unarchiving',
+      sameInstant
+    )
+    await recordBackfillRunFor(archivedLast.id, '2099-03-01T00:00:01.000Z')
+    await recordBackfillRunFor(unarchivedLast.id, '2099-03-01T00:00:01.000Z')
+
+    const channels = await fromSuccess(listBackfillableChannels)({}, context)
+
+    expect(channels.map((channel) => channel.id)).toEqual([unarchivedLast.id])
   })
 })
 
