@@ -353,4 +353,216 @@ describe('listChannels', () => {
     if (result.success) throw new Error('expected a failure')
     expect(isContextError(result.errors[0])).toBe(true)
   })
+
+  it('names a channel by the detail revision recorded last when two share an instant', async () => {
+    const guild = await createGuild()
+    const channel = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-01T00:00:00.000Z'
+
+    await db()
+      .insertInto('channelDetailRevisions')
+      .values([
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed first',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+        {
+          id: newId(),
+          channelId: channel.id,
+          name: 'renamed last',
+          isThread: 0,
+          createdAt: sameInstant,
+        },
+      ])
+      .execute()
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+
+    expect(channels.map(({ name }) => name)).toEqual(['renamed last'])
+  })
+
+  it('reads the topic event recorded last when a change and a clearing share an instant', async () => {
+    const guild = await createGuild()
+    const clearedLast = await createChannel({ guildId: guild.id })
+    const changedLast = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-02T00:00:00.000Z'
+
+    await db()
+      .insertInto('channelTopicChanges')
+      .values({
+        id: newId(),
+        channelId: clearedLast.id,
+        topic: 'changed first',
+        createdAt: sameInstant,
+      })
+      .execute()
+    await db()
+      .insertInto('channelTopicClearings')
+      .values([
+        { id: newId(), channelId: clearedLast.id, createdAt: sameInstant },
+        { id: newId(), channelId: changedLast.id, createdAt: sameInstant },
+      ])
+      .execute()
+    await db()
+      .insertInto('channelTopicChanges')
+      .values({
+        id: newId(),
+        channelId: changedLast.id,
+        topic: 'changed last',
+        createdAt: sameInstant,
+      })
+      .execute()
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const listed = new Map(
+      channels.map((channel) => [channel.channelId, channel])
+    )
+
+    expect(listed.get(clearedLast.id)).not.toHaveProperty('topic')
+    expect(listed.get(changedLast.id)).toHaveProperty('topic', 'changed last')
+  })
+
+  it('reads the category event recorded last when a change and a clearing share an instant', async () => {
+    const guild = await createGuild()
+    const clearedLast = await createChannel({ guildId: guild.id })
+    const changedLast = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-03T00:00:00.000Z'
+
+    await db()
+      .insertInto('channelCategoryChanges')
+      .values({
+        id: newId(),
+        channelId: clearedLast.id,
+        category: 'Changed first',
+        createdAt: sameInstant,
+      })
+      .execute()
+    await db()
+      .insertInto('channelCategoryClearings')
+      .values([
+        { id: newId(), channelId: clearedLast.id, createdAt: sameInstant },
+        { id: newId(), channelId: changedLast.id, createdAt: sameInstant },
+      ])
+      .execute()
+    await db()
+      .insertInto('channelCategoryChanges')
+      .values({
+        id: newId(),
+        channelId: changedLast.id,
+        category: 'Changed last',
+        createdAt: sameInstant,
+      })
+      .execute()
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const listed = new Map(
+      channels.map((channel) => [channel.channelId, channel])
+    )
+
+    expect(listed.get(clearedLast.id)).not.toHaveProperty('category')
+    expect(listed.get(changedLast.id)).toHaveProperty(
+      'category',
+      'Changed last'
+    )
+  })
+
+  it('reads the position event recorded last when a change and a clearing share an instant', async () => {
+    const guild = await createGuild()
+    const clearedLast = await createChannel({ guildId: guild.id })
+    const changedLast = await createChannel({ guildId: guild.id })
+    const sameInstant = '2099-03-04T00:00:00.000Z'
+
+    await db()
+      .insertInto('channelPositionChanges')
+      .values({
+        id: newId(),
+        channelId: clearedLast.id,
+        position: 1,
+        createdAt: sameInstant,
+      })
+      .execute()
+    await db()
+      .insertInto('channelPositionClearings')
+      .values([
+        { id: newId(), channelId: clearedLast.id, createdAt: sameInstant },
+        { id: newId(), channelId: changedLast.id, createdAt: sameInstant },
+      ])
+      .execute()
+    await db()
+      .insertInto('channelPositionChanges')
+      .values({
+        id: newId(),
+        channelId: changedLast.id,
+        position: 2,
+        createdAt: sameInstant,
+      })
+      .execute()
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const listed = new Map(
+      channels.map((channel) => [channel.channelId, channel])
+    )
+
+    expect(listed.get(clearedLast.id)).not.toHaveProperty('position')
+    expect(listed.get(changedLast.id)).toHaveProperty('position', 2)
+  })
+
+  it('reads the archive event recorded last when an archiving and an unarchiving share an instant', async () => {
+    const guild = await createGuild()
+    const archivedLast = await createChannel({ guildId: guild.id, isThread: 1 })
+    const unarchivedLast = await createChannel({
+      guildId: guild.id,
+      isThread: 1,
+    })
+    const sameInstant = '2099-03-05T00:00:00.000Z'
+
+    await db()
+      .insertInto('channelUnarchivings')
+      .values({
+        id: newId(),
+        channelId: archivedLast.id,
+        createdAt: sameInstant,
+      })
+      .execute()
+    await db()
+      .insertInto('channelArchivings')
+      .values([
+        { id: newId(), channelId: archivedLast.id, createdAt: sameInstant },
+        { id: newId(), channelId: unarchivedLast.id, createdAt: sameInstant },
+      ])
+      .execute()
+    await db()
+      .insertInto('channelUnarchivings')
+      .values({
+        id: newId(),
+        channelId: unarchivedLast.id,
+        createdAt: sameInstant,
+      })
+      .execute()
+
+    const { channels } = await fromSuccess(listChannels)(
+      {},
+      await ownerContext({ guildId: guild.id })
+    )
+    const archivedOf = (channelId: string) =>
+      channels.find((channel) => channel.channelId === channelId)?.archived
+
+    expect(archivedOf(archivedLast.id)).toBe(true)
+    expect(archivedOf(unarchivedLast.id)).toBe(false)
+  })
 })
