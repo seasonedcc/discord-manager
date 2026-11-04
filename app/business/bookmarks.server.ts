@@ -151,7 +151,7 @@ function standingReactionsOfTheMessage(ownerDiscordUserId: string) {
 }
 
 function latestBookmarkEventOf(messageId: Expression<string>) {
-  const bookmarkEvents = db()
+  const latestBookmarkEvents = db()
     .selectFrom('bookmarkAdditions')
     .select(['bookmarkAdditions.id', 'bookmarkAdditions.createdAt'])
     .where('bookmarkAdditions.messageId', '=', messageId)
@@ -161,13 +161,13 @@ function latestBookmarkEventOf(messageId: Expression<string>) {
         .select(['bookmarkRemovals.id', 'bookmarkRemovals.createdAt'])
         .where('bookmarkRemovals.messageId', '=', messageId)
     )
+    .orderBy('createdAt', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
 
   return db()
-    .selectFrom(bookmarkEvents.as('bookmarkEvents'))
-    .select('bookmarkEvents.id')
-    .orderBy('bookmarkEvents.createdAt', 'desc')
-    .orderBy('bookmarkEvents.id', 'desc')
-    .limit(1)
+    .selectFrom(latestBookmarkEvents.as('latestBookmarkEvents'))
+    .select('latestBookmarkEvents.id')
 }
 
 function latestReasonDetailsOf(reasonId: Expression<string>) {
