@@ -34,9 +34,11 @@ Two processes share one SQLite database file (WAL mode makes this safe):
   gateway, so queueing it would let a long sweep read as silence. Each beat is gated on the
   client actually being ready — a beat is a claim about the link, not about the process.
 - The MCP server — a stdio process the owner's AI client spawns per session (wired via
-  `.mcp.json`). It reads the store, and it calls Discord's REST API three ways over: to post
-  sends, to read one message live for `messages_fetch`, and to create a thread for
-  `threads_create`. It writes only what those calls observe — the telemetry of every call it
+  `.mcp.json`). It reads the store, and it calls Discord's REST API four ways over: to post
+  sends, to read one message live for `messages_fetch`, to create a thread for
+  `threads_create`, and to read the server's roles, the owner's membership, its channels and
+  its active threads for `roles_list` and `channels_access`. It writes only what those calls
+  observe — the telemetry of every call it
   makes, the deletion Discord reports when a message the store holds is gone from there, and
   the channel rows describing a thread it just created, so `channels_list` shows the thread
   before the daemon has heard of it. That last one makes the MCP process a second writer of
@@ -78,6 +80,7 @@ app/
     bookmarks.server.ts        add/remove/resolve/snooze + list derivation
     sending.server.ts          draft-and-send with its telemetry family
     threads.server.ts          public thread creation with its telemetry family
+    roles.server.ts            roles and channel access read live, with their telemetry family
     jobs.server.ts             registered jobs array
     *.common.ts                schemas, copy maps, named constants per domain
   db/
@@ -282,6 +285,22 @@ skip-reason enum; no shared framework, no shared enums:
   can ever turn 160004 into a thread. The `gone` failure writes the deletion it observed
   alongside the failure row, in one transaction, exactly as `messages_fetch` does.
 
+- `permission_fetch_requests` / `permission_fetch_retrievals` / `permission_fetch_failures`
+  (with a `kind` of `owner_not_member`, `server_unknown`, `rejected` or `unreachable`) —
+  `roles_list` and `channels_access` reading the server's roles and channels live. One
+  family serves both tools: each call writes one request row whose `reading` says which of
+  the two asked (`roles` or `channel_access`), alongside the guild and owner ids it asked
+  about, and the REST calls behind it — up to four, fired together — succeed or fail as one
+  outcome. Like the fetch family it answers inline, so it carries no silence window, no
+  status reader and no skip table: nothing the store holds can pre-refuse a read of live
+  permissions. `owner_not_member` keys on Discord's `Unknown Member` and `Unknown User`
+  codes from the single-member fetch, and `server_unknown` on `Unknown Guild`, because each
+  points at its own setting — `DISCORD_OWNER_USER_ID` or `DISCORD_GUILD_ID` — while
+  everything else Discord refuses stays in `rejected`, whose next action is safe under all
+  of it. A `withoutDiscordRoleId` naming @everyone is refused before any request is written;
+  one naming a role the server does not have can only be refused after the read, so that
+  call records a retrieval and still answers with an `InputError`.
+
 Owner-facing status is always mapped copy from exhaustive typed maps in `.common.ts`
 (summary + nextAction per reason), never raw vendor text — pinned by serialization tests.
 
@@ -391,7 +410,8 @@ link + reason), `bookmarks_resolve`, `bookmarks_snooze`, `bookmarks_set_reason`,
 `bookmark_reasons_retire`, `messages_fetch` (by stored message id), `messages_send`
 (channel, content, optional reply, optional retry of an earlier request),
 `messages_send_status` (by request id), `threads_create` (a name plus either a channel
-or a message to anchor on, never both), `ingestion_status`.
+or a message to anchor on, never both), `roles_list`, `channels_access` (optional
+`withoutDiscordRoleId`), `ingestion_status`.
 
 Names are `<domain>_<verb_phrase>`, descriptions outcome-oriented, input schemas reuse the
 business functions' own exported schemas, dates cross the boundary as ISO strings. The
@@ -670,6 +690,73 @@ store without touching the network.
   void a message it already handed over: the fetch still records a retrieval and answers
   `retrieved`, with `reactions` absent. Absent means *Discord would not say*; an empty array
   means *no reaction stands* — two different answers that must not collapse into one.
+
+### What a role grants
+
+Nothing in the store describes roles or permissions, and nothing should: they are read live
+when the owner asks, the way `messages_fetch` reads a message. `listRoles` and
+`readChannelAccess` in `roles.server.ts` take an injected transport, and the tool file
+supplies one built on the shared REST client: `GET /guilds/{id}` for the server owner and
+every role with its permission bits, `GET /guilds/{id}/members/{ownerId}` for the roles the
+owner holds — a single-member fetch, which needs no privileged intent — and, for channel
+access only, `GET /guilds/{id}/channels` for permission overwrites and
+`GET /guilds/{id}/threads/active`. No gateway intent changes.
+
+- **Discord's own algorithm, read backwards.** `grantOf` in `roles.common.ts` is a pure
+  function implementing Discord's documented permission walk: the server owner holds
+  everything; a held role granting Administrator holds everything; otherwise the base is
+  @everyone's permissions plus every held role's, then the channel's @everyone overwrite,
+  the union of the held roles' overwrites, and the owner's personal overwrite apply in that
+  order, each denying before it allows. Reading that walk backwards, the last step that
+  touches the bit decides it — so the step that decides it is also what grants it, and that
+  is what `grantedThrough` and `grantedBy` report. A unit table pins every documented edge:
+  a role allow beating a role deny, a personal overwrite beating both, somebody else's
+  personal overwrite counting for nothing, an @everyone deny, and the owner and
+  Administrator short-circuits.
+- **The what-if is the same walk run twice** — once with the roles the owner holds, once
+  without the one being considered. Server-wide losses are the raw permission bits the
+  owner holds now and would not hold without the role. So a bit @everyone or another held
+  role also grants is not lost, and a role that alone grants Administrator loses
+  `Administrator` rather than a list of everything Administrator implies — unless that role
+  is all that exempts a timed-out owner, who would then also lose every bit the timeout
+  takes. Every label comes from an exhaustive map keyed on discord.js's
+  `PermissionFlagsBits`, so a new permission cannot compile without the words Discord's
+  role settings use for it. The three answers that make the question trivial — the owner
+  owns the server, another held role grants Administrator, the owner never held the role —
+  are stated in `summary` rather than left for the caller to infer from a column of
+  unchanged rows; "another" means another, so asking about the role that grants
+  Administrator is an ordinary comparison.
+- **A timeout counts.** The member fetch carries `communication_disabled_until`, and while
+  it lies ahead Discord takes away every permission but View Channels and Read Message
+  History, exempting only the server owner and Administrator holders — the permissions
+  documentation says so for timed-out members. The walk applies that right after its two
+  exemptions, so Manage Threads shows the owner no private thread; `serverPermissions`
+  keeps only those two bits; and `summary` says until when. For an exempt owner `summary`
+  says nothing about the timeout, except in a what-if about the role that is the owner's
+  only exemption, which says that without it the timeout would count.
+- **Threads follow Discord's inheritance.** A public thread answers as its parent does. A
+  private thread is visible to whoever can view its parent and either manages threads there
+  or was added to it; membership is not fetched, so a private thread is listed only when
+  Manage Threads already shows it, and its what-if reads `only_if_added` when leaving the
+  role would leave membership as the only way in. Only active threads are read.
+- **Hidden stays hidden.** `channels_access` names only what the owner can view right now: a
+  channel they cannot see, and a private thread that only membership could show them, are
+  neither named nor counted, though Discord may show the bot both. `roles_list` lists every
+  role, because Discord shows every member the server's roles.
+- **Sidebar order.** Channels come the way Discord's sidebar lists them: the uncategorized
+  ones first — joined by any channel whose category Discord did not show the bot, sorted
+  with them as one group — then each category by position, and within each group text-like
+  channels above voice and stage channels, then by position, then by id. Discord's API docs
+  only say that channels sort by `position` with ties broken by id; the text-above-voice
+  split is the client's behavior, and discord.js's `getSortableGroupTypes` encodes the same
+  split. Each thread follows its channel, by name.
+- **Honest about its reach.** Discord shows the bot only some of the picture —
+  `GET /guilds/{id}/threads/active` returns only the threads the bot can access, and from
+  November 16, 2026 `GET /guilds/{id}/channels` omits every channel the bot cannot view — so
+  every retrieved answer carries `coverage`, saying that a channel the bot cannot view may
+  be left out and its active threads always are, that archived threads are left out, and so
+  is a private thread seen only through membership.
+
 ### Reply-by-reaction
 
 A reaction is an answer people actually give, so the store keeps all of them and the

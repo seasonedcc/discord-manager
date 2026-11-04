@@ -1,0 +1,220 @@
+import { PermissionFlagsBits } from 'discord.js'
+import { nextDiscordId } from './discord-ids'
+import {
+  type HeldChannel,
+  type HeldServer,
+  serverEnvironment,
+} from './mcp-client'
+
+const {
+  AddReactions,
+  Administrator,
+  CreatePrivateThreads,
+  EmbedLinks,
+  ManageMessages,
+  ManageThreads,
+  MentionEveryone,
+  ModerateMembers,
+  ReadMessageHistory,
+  SendMessages,
+  ViewChannel,
+} = PermissionFlagsBits
+
+const ownerDiscordUserId = serverEnvironment.DISCORD_OWNER_USER_ID
+const everyoneId = serverEnvironment.DISCORD_GUILD_ID
+
+function theTeamServer({
+  ownerHolds = ['engineers', 'support'],
+  ownerTimedOutUntil,
+  serverOwnedByTheOwner = false,
+}: {
+  ownerHolds?: (
+    | 'admins'
+    | 'designers'
+    | 'engineers'
+    | 'moderators'
+    | 'support'
+  )[]
+  ownerTimedOutUntil?: string
+  serverOwnedByTheOwner?: boolean
+} = {}) {
+  const roles = {
+    admins: {
+      id: nextDiscordId(),
+      mentionable: false,
+      name: 'Admins',
+      permissions: Administrator,
+      position: 5,
+    },
+    moderators: {
+      id: nextDiscordId(),
+      mentionable: false,
+      name: 'Moderators',
+      permissions: ManageMessages | ManageThreads | ModerateMembers,
+      position: 4,
+    },
+    engineers: {
+      id: nextDiscordId(),
+      mentionable: true,
+      name: 'Engineers',
+      permissions:
+        MentionEveryone | CreatePrivateThreads | SendMessages | EmbedLinks,
+      position: 3,
+    },
+    support: {
+      id: nextDiscordId(),
+      mentionable: true,
+      name: 'Support',
+      permissions: EmbedLinks,
+      position: 2,
+    },
+    designers: {
+      id: nextDiscordId(),
+      mentionable: true,
+      name: 'Designers',
+      permissions: 0n,
+      position: 1,
+    },
+    everyone: {
+      id: everyoneId,
+      mentionable: false,
+      name: '@everyone',
+      permissions:
+        ViewChannel | SendMessages | ReadMessageHistory | AddReactions,
+      position: 0,
+    },
+  }
+  const keepsEveryoneOut = { deny: ViewChannel, id: everyoneId }
+  const product = {
+    id: nextDiscordId(),
+    kind: 'category',
+    name: 'Product',
+    position: 0,
+  } satisfies HeldChannel
+  const leadership = {
+    id: nextDiscordId(),
+    kind: 'category',
+    name: 'Leadership',
+    position: 1,
+  } satisfies HeldChannel
+  const channels = {
+    general: { id: nextDiscordId(), name: 'general', position: 0 },
+    announcements: {
+      id: nextDiscordId(),
+      kind: 'announcement',
+      name: 'announcements',
+      position: 1,
+    },
+    standup: {
+      id: nextDiscordId(),
+      kind: 'voice',
+      name: 'standup',
+      position: 2,
+    },
+    townHall: {
+      id: nextDiscordId(),
+      kind: 'stage',
+      name: 'town-hall',
+      position: 3,
+    },
+    launchWarRoom: {
+      id: nextDiscordId(),
+      name: 'launch-war-room',
+      overwrites: [
+        keepsEveryoneOut,
+        { allow: ViewChannel, id: ownerDiscordUserId, member: true },
+      ],
+      position: 4,
+    },
+    engineering: {
+      id: nextDiscordId(),
+      name: 'engineering',
+      overwrites: [
+        keepsEveryoneOut,
+        { allow: ViewChannel, id: roles.engineers.id },
+      ],
+      parentId: product.id,
+      position: 0,
+    },
+    supportDesk: {
+      id: nextDiscordId(),
+      name: 'support-desk',
+      overwrites: [
+        keepsEveryoneOut,
+        { allow: ViewChannel, id: roles.engineers.id },
+        { allow: ViewChannel, id: roles.support.id },
+      ],
+      parentId: product.id,
+      position: 1,
+    },
+    designReviews: {
+      id: nextDiscordId(),
+      name: 'design-reviews',
+      overwrites: [
+        keepsEveryoneOut,
+        { allow: ViewChannel, id: roles.designers.id },
+      ],
+      parentId: product.id,
+      position: 2,
+    },
+    supportTicket: {
+      id: nextDiscordId(),
+      name: 'support-ticket-4721',
+      overwrites: [
+        keepsEveryoneOut,
+        { allow: ViewChannel, id: nextDiscordId(), member: true },
+      ],
+      parentId: product.id,
+      position: 3,
+    },
+    leadershipOffsite: {
+      id: nextDiscordId(),
+      name: 'leadership-offsite',
+      overwrites: [keepsEveryoneOut],
+      parentId: leadership.id,
+      position: 0,
+    },
+  } satisfies Record<string, HeldChannel>
+  const threads = {
+    releaseChecklist: {
+      id: nextDiscordId(),
+      name: 'release-checklist',
+      parentId: channels.engineering.id,
+    },
+    onboardingQuestions: {
+      id: nextDiscordId(),
+      name: 'onboarding-questions',
+      parentId: channels.general.id,
+    },
+    incidentReview: {
+      id: nextDiscordId(),
+      name: 'incident-review',
+      parentId: channels.general.id,
+      private: true,
+    },
+  }
+  const server: HeldServer = {
+    channels: [product, leadership, ...Object.values(channels)],
+    memberRoleIds: {
+      [ownerDiscordUserId]: ownerHolds.map((key) => roles[key].id),
+    },
+    memberTimedOutUntil: ownerTimedOutUntil
+      ? { [ownerDiscordUserId]: ownerTimedOutUntil }
+      : {},
+    ownerDiscordUserId: serverOwnedByTheOwner
+      ? ownerDiscordUserId
+      : nextDiscordId(),
+    roles: Object.values(roles),
+    threads: Object.values(threads),
+  }
+
+  return {
+    categories: { leadership, product },
+    channels,
+    roles,
+    server,
+    threads,
+  }
+}
+
+export { theTeamServer }
