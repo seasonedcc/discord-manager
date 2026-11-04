@@ -2,9 +2,8 @@ import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import Database from 'better-sqlite3'
 import { type CompiledQuery, sql } from 'kysely'
-import { vi } from 'vitest'
-import { db } from '~/db/db.server'
 import { env } from '~/framework/env.server'
+import { db, vi } from './prelude'
 
 async function statementsRunBy(read: () => Promise<unknown>) {
   const executeQuery = vi.spyOn(db().getExecutor(), 'executeQuery')
@@ -32,12 +31,15 @@ async function copyWithStatistics() {
   return copy
 }
 
-function stepsOf(store: Database.Database, statement: CompiledQuery) {
+function branchesOf(store: Database.Database, statement: CompiledQuery) {
   const steps = store
     .prepare(`explain query plan ${statement.sql}`)
-    .all(...statement.parameters) as { detail: string }[]
+    .all(...statement.parameters) as { parent: number; detail: string }[]
+  const parents = [...new Set(steps.map(({ parent }) => parent))]
 
-  return steps.map(({ detail }) => detail)
+  return parents.map((parent) =>
+    steps.filter((step) => step.parent === parent).map(({ detail }) => detail)
+  )
 }
 
 async function plansOf(read: () => Promise<unknown>) {
@@ -51,14 +53,14 @@ async function plansOf(read: () => Promise<unknown>) {
     return [
       {
         statistics: 'never gathered',
-        steps: statements.flatMap((statement) =>
-          stepsOf(withoutStatistics, statement)
+        branches: statements.flatMap((statement) =>
+          branchesOf(withoutStatistics, statement)
         ),
       },
       {
         statistics: 'gathered',
-        steps: statements.flatMap((statement) =>
-          stepsOf(withStatistics, statement)
+        branches: statements.flatMap((statement) =>
+          branchesOf(withStatistics, statement)
         ),
       },
     ]
@@ -78,4 +80,14 @@ function wholeTableSteps(steps: string[], tables: string[]) {
   )
 }
 
-export { plansOf, wholeTableSteps }
+function lookupsSortingTheirTieBreak(branches: string[][], tables: string[]) {
+  return branches.filter(
+    (steps) =>
+      steps.includes('USE TEMP B-TREE FOR LAST TERM OF ORDER BY') &&
+      steps.some((step) =>
+        tables.some((table) => step.startsWith(`SEARCH ${table} `))
+      )
+  )
+}
+
+export { lookupsSortingTheirTieBreak, plansOf, wholeTableSteps }

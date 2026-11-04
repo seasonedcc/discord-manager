@@ -3,10 +3,13 @@ import { catchUpSince, listMentions } from '~/business/digests.server'
 import { countMessages } from '~/business/messages.server'
 import { createBusyGuild } from '~/test/fixtures'
 import { beforeAll, describe, expect, it } from '~/test/prelude'
-import { plansOf, wholeTableSteps } from '~/test/query-plans'
+import {
+  lookupsSortingTheirTieBreak,
+  plansOf,
+  wholeTableSteps,
+} from '~/test/query-plans'
 
 const latestStateTables = [
-  'messages',
   'message_revisions',
   'channel_detail_revisions',
   'member_detail_revisions',
@@ -18,6 +21,18 @@ const serverWideWindowStep =
 
 const channelWindowStep =
   'SEARCH messages USING INDEX messages_channel_id_discord_created_at_index (channel_id=? AND discord_created_at>?)'
+
+const latestRevisionStep =
+  'SEARCH message_revisions USING COVERING INDEX message_revisions_message_id_created_at_id_index (message_id=?)'
+
+const digestLookupSteps = [
+  latestRevisionStep,
+  'SEARCH channel_detail_revisions USING COVERING INDEX channel_detail_revisions_channel_id_created_at_id_index (channel_id=?)',
+  'SEARCH member_detail_revisions USING COVERING INDEX member_detail_revisions_member_id_created_at_id_index (member_id=?)',
+]
+
+const latestBotIdentityStep =
+  'SEARCH gateway_identifications USING INDEX gateway_identifications_guild_id_created_at_id_index (guild_id=?)'
 
 let busyGuild: Awaited<ReturnType<typeof createBusyGuild>>
 let lastDay: string
@@ -31,17 +46,28 @@ beforeAll(async () => {
 
 async function expectEveryPlan(
   read: () => Promise<unknown>,
-  { reaches, scanning = [] }: { reaches: string; scanning?: string[] }
+  { reaches, scanning = [] }: { reaches: string[]; scanning?: string[] }
 ) {
-  for (const { statistics, steps } of await plansOf(read)) {
+  for (const { statistics, branches } of await plansOf(read)) {
+    const steps = branches.flat()
+
     expect(
       wholeTableSteps(
         steps,
-        latestStateTables.filter((table) => !scanning.includes(table))
+        ['messages', ...latestStateTables].filter(
+          (table) => !scanning.includes(table)
+        )
       ),
       `statistics ${statistics}`
     ).toEqual([])
-    expect(steps, `statistics ${statistics}`).toContain(reaches)
+    expect(
+      lookupsSortingTheirTieBreak(branches, latestStateTables),
+      `statistics ${statistics}`
+    ).toEqual([])
+
+    for (const step of reaches) {
+      expect(steps, `statistics ${statistics}`).toContain(step)
+    }
   }
 }
 
@@ -50,7 +76,7 @@ describe('catchUpSince', () => {
     for (const since of [lastDay, busyGuild.firstMessageAt]) {
       await expectEveryPlan(
         () => fromSuccess(catchUpSince)({ since }, busyGuild.context),
-        { reaches: serverWideWindowStep }
+        { reaches: [serverWideWindowStep, ...digestLookupSteps] }
       )
     }
   })
@@ -65,7 +91,7 @@ describe('catchUpSince', () => {
           },
           busyGuild.context
         ),
-      { reaches: channelWindowStep }
+      { reaches: [channelWindowStep, ...digestLookupSteps] }
     )
   })
 })
@@ -75,7 +101,13 @@ describe('listMentions', () => {
     for (const since of [lastDay, busyGuild.firstMessageAt]) {
       await expectEveryPlan(
         () => fromSuccess(listMentions)({ since }, busyGuild.context),
-        { reaches: serverWideWindowStep }
+        {
+          reaches: [
+            serverWideWindowStep,
+            ...digestLookupSteps,
+            latestBotIdentityStep,
+          ],
+        }
       )
     }
   })
@@ -89,7 +121,7 @@ describe('countMessages', () => {
           { since: lastDay, groupBy: 'day' },
           busyGuild.context
         ),
-      { reaches: serverWideWindowStep }
+      { reaches: [serverWideWindowStep] }
     )
   })
 
@@ -100,7 +132,7 @@ describe('countMessages', () => {
           { contentContains: 'message 1', since: lastDay, groupBy: 'day' },
           busyGuild.context
         ),
-      { reaches: serverWideWindowStep }
+      { reaches: [serverWideWindowStep, latestRevisionStep] }
     )
   })
 
@@ -111,11 +143,7 @@ describe('countMessages', () => {
           { contentContains: 'message 1' },
           busyGuild.context
         ),
-      {
-        reaches:
-          'SEARCH message_revisions USING COVERING INDEX message_revisions_message_id_created_at_id_index (message_id=?)',
-        scanning: ['messages'],
-      }
+      { reaches: [latestRevisionStep], scanning: ['messages'] }
     )
   })
 })
