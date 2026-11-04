@@ -173,9 +173,10 @@ limit applies. Scanned in time order, a catch-up stops after its first 201 rows.
 
 `app/business/read-plans.server.test.ts` guards both shapes without timing anything: it
 captures the SQL each reader actually runs and asserts its `explain query plan` on a busy
-synthetic server — no automatic index, no scan of a latest-state table, and the window
-index reached — both as every deployed store plans it (the product never gathers
-statistics, so those plans do not depend on the data) and after `analyze`.
+synthetic server — no automatic index, no scan of a latest-state table, no latest-state
+lookup sorting its tie-break, and the window index and each lookup's index reached by
+name — both as every deployed store plans it (the product never gathers statistics, so
+those plans do not depend on the data) and after `analyze`.
 
 ### Schema (initial)
 
@@ -184,11 +185,12 @@ unique), `members` (discordUserId unique), `messages` (channelId FK, authorMembe
 discordMessageId unique, discordCreatedAt).
 
 Events, each indexed by its parent — `(parentId, createdAt desc)` wherever latest-event-wins
-reads them, widened to `(parentId, createdAt desc, id desc)` where a per-row lookup reads
-the latest event (`message_revisions`, `channel_detail_revisions`, `member_detail_revisions`,
-`gateway_identifications`), and a unique key on the parent plus what tells its rows apart
-where a parent's rows are one set read whole (`message_revision_user_mentions`,
-`message_revision_embeds`, `message_revision_attachments`):
+reads them; `(parentId, createdAt desc, id desc)` where a per-row lookup reads the latest
+event, widened from the two-column index on `message_revisions`, `channel_detail_revisions`
+and `member_detail_revisions`, and new on `gateway_identifications`, which had none; and a
+unique key on the parent plus what tells its rows apart where a parent's rows are one set
+read whole (`message_revision_user_mentions`, `message_revision_embeds`,
+`message_revision_attachments`):
 
 - `channel_detail_revisions` — full snapshot of what every channel always has: name and
   isThread.
@@ -656,7 +658,7 @@ plain data, and written in the same transaction as the revision they belong to.
   a defaulted empty list would strip a preview the message still shows. Creation has nothing
   to lose that way, which is why only the edit demands the words.
 - The readers (`digestMessagesSince`, `listBookmarks`) aggregate both sets in SQL —
-  `json_group_array` over a correlated subquery keyed on the ranked revision's id — so a
+  `json_group_array` over a correlated subquery keyed on the current revision's id — so a
   digest stays one query and shows only the current version's embeds, never a pre-edit one.
 - Nothing is fetched: an attachment is a filename, a size and Discord's own signed URL,
   which expires in about a day. The store names files; it does not archive them.
