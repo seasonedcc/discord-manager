@@ -24,7 +24,7 @@ Everything is stored locally in SQLite as an append-only event history: edits ar
 
 ## Setup
 
-You'll need [Node.js](https://nodejs.org) 22.12+ and [pnpm](https://pnpm.io) 10.
+You'll need [Node.js](https://nodejs.org) 22.12+ and [pnpm](https://pnpm.io) 10. The repository's `.nvmrc` names Node 22, the version CI tests, so nvm and fnm pick it when you enter the folder. Run `pnpm install` and the product under the same Node version: `better-sqlite3` is compiled for the version that installed it and refuses to load under any other.
 
 ### 1. Create your Discord app
 
