@@ -122,7 +122,7 @@ tests/
 
 ## Database doctrine
 
-The bettr-manager append-only doctrine applies unchanged: `INSERT` is the only write,
+The append-only doctrine is absolute: `INSERT` is the only write,
 identity tables + event tables are the only two kinds, no nullable columns, no `updatedAt`,
 no derived/status columns, deletion is an event, state is computed at query time.
 
@@ -539,7 +539,7 @@ authenticated. `ownerContext()` builds context from env (owner user id, guild id
 store — never the bot token, which only the transports read when they call Discord — and
 `ownerContextSchema` still carries `z.literal(true)` capability flags
 (`canReadMessages`, `canManageBookmarks`, `canSendMessages`) so every business function
-validates context exactly as in bettr-manager and the gates stay testable. The MCP layer
+validates its context and the gates stay testable. The MCP layer
 contains zero authorization — tools call business functions with the real context.
 
 ## MCP tools (v1)
@@ -993,7 +993,7 @@ is silence, and silence is exactly what the quiet derivation reads.
   request the spec can assert on — or the double refuses it with a 403 to exercise the
   failure copy.
 - **Coverage gate**: the E2E runner fails if any registered MCP tool was never called by
-  the suite, with the same pending/exemption discipline as bettr's route gate.
+  the suite.
 - **Generated types gate**: `app/db/scripts/generate.ts` builds `app/db/types.d.ts` by
   applying every migration in `app/db/migrations` to a throwaway store under
   `tests/.artifacts/` and deleting it afterwards, so the file is a pure function of the
